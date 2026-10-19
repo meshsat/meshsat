@@ -22,6 +22,11 @@ const (
 	SatMsgPosition      byte = 0x01
 	SatMsgSOS           byte = 0x02
 	SatMsgHealthSummary byte = 0x03
+	// SatMsgSOSStart and SatMsgSOSCancel are an SOS under its own identity (HeMB-NG C10,
+	// MESHSAT-1584), sent only while the Hub's hub/caps says sos_v2: the start is the 0x02
+	// body with the run's sos_id and start after it, the cancel names the same run.
+	SatMsgSOSStart  byte = 0x07
+	SatMsgSOSCancel byte = 0x08
 
 	satUplinkVersion byte = 1
 	satHeaderLen          = 4 // magic(2) + version(1) + type(1)
@@ -152,6 +157,46 @@ func EncodeSatSOS(bridgeID string, deviceID string, lat, lon float64, message st
 	return buf
 }
 
+// EncodeSatSOSStart encodes an SOS start under its own identity (C10). Layout:
+//
+//	Header(4, type 0x07) + the 0x02 body unchanged + sos_id(16) + run_start_ms(8, BE)
+//
+// The shared cases are internal/hembfixtures/testdata/v1/sos.json.
+func EncodeSatSOSStart(bridgeID, deviceID string, lat, lon float64, message string, timestamp time.Time, sosID [16]byte, runStartMs int64) []byte {
+	frame := EncodeSatSOS(bridgeID, deviceID, lat, lon, message, timestamp)
+	frame[3] = SatMsgSOSStart
+	frame = append(frame, sosID[:]...)
+	return binary.BigEndian.AppendUint64(frame, uint64(max(runStartMs, 0))) // #nosec G115 -- clamped to 0 and up
+}
+
+// SOS cancel reasons (the 0x08 frame's last byte).
+const (
+	SOSCancelOperator   byte = 0x00
+	SOSCancelTestEnded  byte = 0x01
+	satSOSCancelFixedSz      = 16 + 8 + 4 + 1
+)
+
+// EncodeSatSOSCancel encodes the cancel of an SOS run (C10). Layout:
+//
+//	Header(4, type 0x08) + bridgeID_len(1) + bridgeID + sos_id(16) + run_start_ms(8, BE) +
+//	timestamp(4, unix s) + reason(1)
+func EncodeSatSOSCancel(bridgeID string, sosID [16]byte, runStartMs int64, timestamp time.Time, reason byte) []byte {
+	if len(bridgeID) > maxBridgeIDLen {
+		bridgeID = bridgeID[:maxBridgeIDLen]
+	}
+	buf := make([]byte, satHeaderLen+1+len(bridgeID)+satSOSCancelFixedSz)
+	writeHeader(buf, SatMsgSOSCancel)
+	off := satHeaderLen
+	off += writeLenPrefixedString(buf[off:], bridgeID, maxBridgeIDLen)
+	off += copy(buf[off:], sosID[:])
+	binary.BigEndian.PutUint64(buf[off:], uint64(max(runStartMs, 0))) // #nosec G115 -- clamped to 0 and up
+	off += 8
+	binary.BigEndian.PutUint32(buf[off:], uint32(timestamp.Unix()))
+	off += 4
+	buf[off] = reason
+	return buf
+}
+
 // EncodeSatHealth encodes a health summary for satellite uplink.
 // Target size: ~60 bytes. Layout:
 //
@@ -236,12 +281,20 @@ func DecodeSatUplink(data []byte) (header SatUplinkHeader, payload []byte, err e
 	return header, data[satHeaderLen:], nil
 }
 
-// IsSatSOS reports whether data is an SOS uplink frame (EncodeSatSOS): the
-// magic, this version, type 0x02. The satellite fallback's send queues it,
-// alone of the frames, at priority 0. [MESHSAT-1430]
+// IsSatSOS reports whether data is an SOS uplink frame: the magic, this
+// version, type 0x02 (EncodeSatSOS), or a C10 start or cancel (0x07, 0x08).
+// The satellite fallback's send queues them, alone of the frames, at
+// priority 0. [MESHSAT-1430, MESHSAT-1584]
 func IsSatSOS(data []byte) bool {
 	header, _, err := DecodeSatUplink(data)
-	return err == nil && header.MsgType == SatMsgSOS
+	if err != nil {
+		return false
+	}
+	switch header.MsgType {
+	case SatMsgSOS, SatMsgSOSStart, SatMsgSOSCancel:
+		return true
+	}
+	return false
 }
 
 func readLenPrefixedString(data []byte) (string, int, error) {

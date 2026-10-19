@@ -81,6 +81,8 @@ type HubReporter struct {
 	takCotHandler func([]byte)      // callback for inbound TAK CoT events from Hub
 	msgIn         func([]byte)      // hub_msg deliveries (msg/in) [MESHSAT-1584]
 	msgStatus     func([]byte)      // hub_msg evidence and refusals (msg/status)
+	hubCaps       func(HubCaps)     // what the Hub understands (hub/caps, retained) [MESHSAT-1584]
+	sosAck        func(SOSAck)      // the Hub has an SOS start or cancel (sos/ack)
 	signingKey    *ecdsa.PrivateKey // loaded from TLS key for birth signing
 	certPEM       string            // base64 PEM for inclusion in birth
 	tlsErr        error             // set when TLS material is present but unusable [MESHSAT-1027]
@@ -219,6 +221,7 @@ func (r *HubReporter) Start(ctx context.Context) error {
 		r.subscribeCmd()
 		r.subscribeTAKCoT()
 		r.subscribeMsg()
+		r.subscribeSOS()
 
 		// Replay queued outbox messages
 		if ob != nil {

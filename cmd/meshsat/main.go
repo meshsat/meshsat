@@ -2714,6 +2714,10 @@ func main() {
 		cmdHandler.SetTrustAnchorStore(&bridgeDirectoryTrustStore{db: db})
 		cmdHandler.SetDirectoryApplier(&bridgeDirectoryApplier{dir: directory.NewSQLStore(db.DB), supported: dispatcher.StrategySupported})
 		hubReporter.SetCommandHandler(cmdHandler)
+		// An SOS under its own identity (HeMB-NG C10): the Hub's caps say whether
+		// it takes the 0x07/0x08 frames and sos/event, kept for a send without a
+		// Hub session; its acks say it has a start or a cancel. [MESHSAT-1584]
+		hubReporter.SetSOSHandlers(srv.HubCapsReceived, srv.SOSAckReceived)
 
 		// TAK CoT relay: when Hub broadcasts TAK positions from OTS,
 		// parse them and store in the bridge's position DB so they appear on the map.

@@ -18,6 +18,7 @@ import (
 
 	"meshsat/internal/database"
 	"meshsat/internal/engine"
+	"meshsat/internal/hubmsg"
 	"meshsat/internal/hubreporter"
 	"meshsat/internal/transport"
 	"meshsat/internal/types"
@@ -46,6 +47,17 @@ type SOSState struct {
 	saveMu   sync.Mutex
 	saveSeq  uint64 // the newest snapshot taken (under mu)
 	savedSeq uint64 // the newest snapshot written (under saveMu)
+
+	// C10 (MESHSAT-1584): the Hub's caps (hub/caps, also kept in the
+	// database), the hub leg's start repeats, the one cancellation loop, and
+	// a test's Hub session (nil: the reporter).
+	caps          hubreporter.HubCaps
+	capsLoaded    bool
+	hubStartFor   int64
+	hubStartNext  time.Time
+	hubStartStep  time.Duration
+	cancelLoopFor int64
+	hub           sosHub
 }
 
 // sosDefaultText is the SOS text when the caller gives none.
@@ -64,6 +76,7 @@ type sosActivateBody struct {
 // @Summary Activate SOS alert
 // @Description Starts an SOS on every route this Bridge carries that is set up, as MeshSat Android does (SosController): each route is a leg that waits while its link is down and goes out when the link is back, and keeps trying until the SOS is cancelled. The mesh leg is the text broadcast on the mesh; the satellite leg is the SOS frame to the Hub (type 0x02, the one the Hub raises an SOS from), on the modem this Bridge has (the 9704's link first, then the 9603's); the Hub leg tells the Hub over the internet once its link is up, with the id the Hub files the satellite frame under, so the Hub pages once. Every leg goes at precedence Override and priority 0: first in its queue, never evicted, never expired, past the credit budget and the routing rules.
 // @Description Without "routes" the Bridge takes every route set up: the mesh while it has a mesh radio and the mesh link is switched on, the satellite while a satellite modem runs or one was bound to a switched-on satellite link, the Hub while it is set up. "routes" (any of "mesh", "satellite", "hub") names the routes the caller's own screen promised: a named satellite leg waits for a modem that is not there yet. A named route this Bridge cannot carry is listed in "skipped" by GET /api/sos/status. SMS to the emergency contacts is the apps' own send. When the TAK gateway runs and this Bridge knows its position, the SOS also goes to TAK as a CoT emergency, once. The SOS stays on until POST /api/sos/cancel; the legs are in GET /api/sos/status.
+// @Description The SOS carries its own id (sos_id, a UUIDv7 of its start; HeMB-NG C10). While the Hub's hub/caps says sos_v2 (kept, so it holds without a Hub session) the satellite frame is the 0x07 start (the 0x02 body, then the sos_id and the start; its words cut so it fits one SMS as base64), and the Hub leg is the v2 event on the bridge's sos/event, published again until the Hub's sos/ack: the Hub pages once per sos_id whichever bearers carry it.
 // @Tags sos
 // @Accept json
 // @Produce json
@@ -200,6 +213,9 @@ func (s *Server) TriggerSOSAt(trigger, text string, pos *sosPosition, routes []s
 	if last := s.sos.run; last != nil && run.ID <= last.ID {
 		run.ID = last.ID + 1 // the legs' references stay unique, whatever the clock did
 	}
+	// Its own identity on every bearer and after a restart (C10): a UUIDv7
+	// of the run's start. [MESHSAT-1584]
+	run.SOSID = hubmsg.NewSOSID(run.ID)
 	s.sos.active = true
 	s.sos.startAt = now
 	s.sos.text = text
@@ -579,12 +595,12 @@ type sosCancelBody struct {
 }
 
 // @Summary Cancel SOS alert
-// @Description Cancels the active SOS, as MeshSat Android does: every leg that has not gone out is cancelled where it waits (and one being sent when this came in is not tried again if that send fails), and the routes that carried the SOS are told it is over: the mesh by a broadcast of the cancellation (a leg of its own, "cancel_legs"), the Hub over the internet if it had the SOS. The satellite leg gets no cancellation; the frame the Hub got stays its alert. "message" is the cancellation's words (the apps send "Alarm cancelled: <name> is safe and needs no help now."); without them the words are Android's for a person without a name. They must not contain SOS, MAYDAY or EMERGENCY: the Hub raises an alarm for any text with one of those words.
+// @Description Cancels the active SOS, as MeshSat Android does: every leg that has not gone out is cancelled where it waits (and one being sent when this came in is not tried again if that send fails), and the routes that carried the SOS are told it is over: the mesh by a broadcast of the cancellation (a leg of its own, "cancel_legs"), the Hub over the internet if it had the SOS. The satellite leg gets no cancellation when its frame was the 0x02: that frame stays the Hub's alert. When the SOS went under its own id (HeMB-NG C10), the cancel goes to the Hub as the v2 event, published again until the Hub's ack or for 24 h, and as the 0x08 frame on each frame bearer that carried the start (the satellite, and the SMS to the Hub's number for a v7 id), queued once the Hub has not acked within 30 s (at once without a Hub session) and stopped by the ack. "message" is the cancellation's words (the apps send "Alarm cancelled: <name> is safe and needs no help now."); without them the words are Android's for a person without a name. They must not contain SOS, MAYDAY or EMERGENCY: the Hub raises an alarm for any text with one of those words.
 // @Tags sos
 // @Accept json
 // @Produce json
 // @Param body body object{message=string} false "The cancellation's words"
-// @Success 200 {object} map[string]interface{} "status cancelled (with id and cancel_legs), or not_active"
+// @Success 200 {object} map[string]interface{} "status cancelled (with id, sos_id and cancel_legs), or not_active"
 // @Failure 400 {object} map[string]string "words that contain SOS, MAYDAY or EMERGENCY"
 // @Router /api/sos/cancel [post]
 func (s *Server) handleSOSCancel(w http.ResponseWriter, r *http.Request) {
@@ -631,11 +647,15 @@ func (s *Server) handleSOSCancel(w http.ResponseWriter, r *http.Request) {
 		s.signing.AuditEvent("sos_cancelled", nil, nil, nil, nil, string(detail))
 	}
 	log.Warn().Int64("sos", id).Msg("SOS CANCELLED")
-	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "cancelled", "id": id, "cancel_legs": legs})
+	sosID := ""
+	if r, _, ok := s.sosSnapshot(id); ok {
+		sosID = r.SOSID
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "cancelled", "id": id, "sos_id": sosID, "cancel_legs": legs})
 }
 
 // @Summary Get SOS status
-// @Description The SOS on now: its words, what started it, and its legs with where each stands. A leg queued is a delivery (msg_ref, delivery_id, and the delivery's own status, last_error and ack_status: GET /api/deliveries/message/{ref} follows it too); a satellite leg waiting for a modem has status "waiting" and no delivery yet; the Hub leg is "waiting" until the Hub took it over the internet, then "sent" with sent_at. "sends" counts the legs that have gone out. "skipped" says why a route is not taken. Without an SOS on: active false.
+// @Description The SOS on now: its words, what started it, and its legs with where each stands. A leg queued is a delivery (msg_ref, delivery_id, and the delivery's own status, last_error and ack_status: GET /api/deliveries/message/{ref} follows it too); a satellite leg waiting for a modem has status "waiting" and no delivery yet; the Hub leg is "waiting" until the Hub took it over the internet, then "sent" with sent_at; under C10 it is "sending" while the start is with the Hub's broker and "sent" at the Hub's ack (hub_state: the run's state there). "sos_id" is the SOS's own id. "sends" counts the legs that have gone out. "skipped" says why a route is not taken. Without an SOS on: active false.
 // @Tags sos
 // @Produce json
 // @Success 200 {object} map[string]interface{}
@@ -663,6 +683,7 @@ func (s *Server) handleSOSStatus(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		resp["id"] = run.ID
+		resp["sos_id"] = run.SOSID
 		resp["started_at"] = startAt.UTC().Format(time.RFC3339)
 		resp["sends"] = sends
 		resp["message"] = text

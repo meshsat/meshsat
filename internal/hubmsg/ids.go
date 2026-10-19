@@ -67,6 +67,11 @@ func IDValid(s, field string, c IDContext) bool {
 	}
 	switch b[6] >> 4 {
 	case 7:
+		// An SOS id names its run: its time is the run's start (C10, r4), so the same
+		// run has the same id on every bearer and after a restart.
+		if field == "sos_id" {
+			return c.RunStartMs >= 0 && TimeOfV7(b) == c.RunStartMs
+		}
 		return true
 	case 5:
 		switch {
@@ -78,6 +83,36 @@ func IDValid(s, field string, c IDContext) bool {
 	}
 	return false
 }
+
+// SOSIDValid is C10's rule for an sos_id carried with its run's start: a v7 whose first 48
+// bits are runStartMs, or the old-format run's v5 under the bridge id the ingress
+// authenticated. Anything else is refused.
+func SOSIDValid(sosID, bridgeID string, runStartMs int64) bool {
+	return IDValid(sosID, "sos_id", IDContext{BridgeID: bridgeID, RunStartMs: runStartMs})
+}
+
+// NewSOSID is the sos_id of a run that starts at runStartMs (C10): a UUIDv7 whose first 48
+// bits are that start.
+func NewSOSID(runStartMs int64) string { return NewV7(time.UnixMilli(runStartMs)) }
+
+// LegacySOSID is the sos_id of a run that started before its Bridge spoke C10 (its id is the
+// old millisecond run id): UUIDv5 of "<bridge id>:<run_start_ms>".
+func LegacySOSID(bridgeID string, runStartMs int64) string {
+	return UUIDv5(bridgeID + ":" + strconv.FormatInt(runStartMs, 10))
+}
+
+// TimeOfV7 is the Unix millisecond time in a UUIDv7's first 48 bits.
+func TimeOfV7(b [16]byte) int64 {
+	var ms [8]byte
+	copy(ms[2:8], b[0:6])
+	return int64(binary.BigEndian.Uint64(ms[:])) // #nosec G115 -- 48 bits fit
+}
+
+// UUIDBytes returns the 16 bytes of a UUID in canonical text, for a binary frame.
+func UUIDBytes(s string) ([16]byte, bool) { return parseCanonical(s) }
+
+// UUIDText is the canonical text of 16 UUID bytes, as a frame carries them.
+func UUIDText(b [16]byte) string { return format(b) }
 
 // UUIDv5 is the UUIDv5 of name under Namespace.
 func UUIDv5(name string) string {

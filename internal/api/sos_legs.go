@@ -14,6 +14,7 @@ import (
 
 	"meshsat/internal/database"
 	"meshsat/internal/engine"
+	"meshsat/internal/hubmsg"
 	"meshsat/internal/hubreporter"
 	"meshsat/internal/types"
 )
@@ -35,6 +36,15 @@ import (
 //     its link is up, with the id the Hub files the frame under, so the Hub
 //     pages once whichever arrives first.
 //
+// Under its own identity (HeMB-NG C10, MESHSAT-1584), while the Hub's
+// hub/caps says sos_v2: the run keeps its sos_id (a UUIDv7 of its start), the
+// frames are 0x07 (start) and 0x08 (cancel), the hub leg is the v2 event on
+// sos/event, repeated until the Hub's sos/ack (the Hub has it then, not at
+// the broker's PUBACK), and the cancel goes until its ack, or for 24 h, on
+// each bearer that carried the start. The Hub pages once per run whichever
+// bearers carry it, and a cancel there is final. The contract is the Hub's
+// docs/bridge-hub-protocol.md "SOS identity (C10)".
+//
 // SMS to the emergency contacts is the apps' own send (POST
 // /api/messages/send, plain), as on Android, where the contacts live.
 
@@ -42,6 +52,20 @@ const (
 	sosRouteMesh      = "mesh"
 	sosRouteSatellite = "satellite"
 	sosRouteHub       = "hub"
+	// sosRouteHubSMS is the SMS to the Hub's number (sosHubSMS); a leg of the
+	// cancellation only.
+	sosRouteHubSMS = "hubsms"
+
+	// sosFrameV2 marks a leg that carried the SOS under its own identity (C10).
+	sosFrameV2 = "v2"
+	// sosHubCapsKey is where the last hub/caps the Hub sent is kept
+	// (system_config): the Bridge may have to send by satellite with no Hub
+	// session at all. [MESHSAT-1584]
+	sosHubCapsKey = "hub_caps"
+	// sosFrameSMSMax is the most an SOS frame under its own identity may be:
+	// base64 in one SMS of 160 characters (the cellular link cuts a longer
+	// text at 160, which would break the frame).
+	sosFrameSMSMax = 120
 
 	// sosRunKey is where the SOS is kept (system_config).
 	sosRunKey = "sos_run"
@@ -62,6 +86,37 @@ const (
 // sosFollowEvery is how often the SOS looks for a modem for its satellite
 // leg and for the Hub's link for its Hub leg (a variable for the tests).
 var sosFollowEvery = 5 * time.Second
+
+// The C10 repeats (variables for the tests): the hub leg's start and its
+// cancellation are published again until the Hub's ack, from sosFollowEvery
+// doubling to sosRepeatMax; the cancellation is followed for sosCancelFor at
+// most; while the Hub's session is up, the cancel frames wait sosCancelAckGrace
+// for the Hub's ack before they spend a satellite credit or an SMS.
+var (
+	sosRepeatMax      = time.Minute
+	sosCancelFor      = 24 * time.Hour
+	sosCancelAckGrace = 30 * time.Second
+	sosPubackWait     = 5 * time.Second
+)
+
+// sosHub is what the SOS needs of the Hub session: the HubReporter, or a
+// test's.
+type sosHub interface {
+	IsConnected() bool
+	PublishSOSNow(hubreporter.SOSAlert, hubreporter.DeviceSOS) error
+	PublishSOSEvent(hubreporter.SOSEvent, time.Duration) error
+}
+
+// sosHubLink is the Hub session the SOS uses; nil without one.
+func (s *Server) sosHubLink() sosHub {
+	if s.sos.hub != nil {
+		return s.sos.hub
+	}
+	if s.hubReporter == nil {
+		return nil
+	}
+	return s.hubReporter
+}
 
 // sosSatelliteInterfaces are the satellite links an SOS frame may go on,
 // newest modem first, as the Hub uplink picks them.
@@ -92,8 +147,18 @@ type sosLeg struct {
 	Interface  string `json:"interface,omitempty"`
 	MsgRef     string `json:"msg_ref,omitempty"`
 	DeliveryID int64  `json:"delivery_id,omitempty"`
-	SentAt     string `json:"sent_at,omitempty"` // the Hub leg: when the Hub took it
+	SentAt     string `json:"sent_at,omitempty"` // the Hub leg: when the Hub took it (under C10: its ack)
 	Error      string `json:"error,omitempty"`   // why it could not be queued
+	// PublishedAt is when the Hub leg's C10 start first went to the broker;
+	// the Hub has it only at its ack (SentAt).
+	PublishedAt string `json:"published_at,omitempty"`
+	// Frame is "v2" when the leg carried the SOS under its own identity (C10).
+	Frame string `json:"frame,omitempty"`
+	// OldWay: the Hub leg's start went the old way (PublishSOSNow), so its
+	// cancellation goes the old way too.
+	OldWay bool `json:"old_way,omitempty"`
+	// HubState is the run's state in the Hub's last ack ("active", "cancelled").
+	HubState string `json:"hub_state,omitempty"`
 }
 
 // sosRun is an SOS as the Bridge keeps it (sosRunKey).
@@ -112,11 +177,25 @@ type sosRun struct {
 	Legs        []sosLeg `json:"legs,omitempty"`
 	Skipped     []string `json:"skipped,omitempty"`
 	HubSMSDone  bool     `json:"hub_sms_done,omitempty"`
+	// SOSID is the run's own identity (C10): a UUIDv7 of its start, or, for a
+	// run kept from before C10, the old-format v5 (sosEnsureID).
+	SOSID string `json:"sos_id,omitempty"`
+	// HubSMSFrame is "v2" when the SMS to the Hub's number carried the C10 start.
+	HubSMSFrame string `json:"hub_sms_frame,omitempty"`
 
-	CancelledAt     string   `json:"cancelled_at,omitempty"`
-	CancelText      string   `json:"cancel_text,omitempty"`
-	CancelLegs      []sosLeg `json:"cancel_legs,omitempty"`
-	HubCancelSentAt string   `json:"hub_cancel_sent_at,omitempty"`
+	CancelledAt string   `json:"cancelled_at,omitempty"`
+	CancelText  string   `json:"cancel_text,omitempty"`
+	CancelLegs  []sosLeg `json:"cancel_legs,omitempty"`
+	// HubCancelSentAt: the Hub took the cancellation the old way.
+	HubCancelSentAt string `json:"hub_cancel_sent_at,omitempty"`
+	// HubCancelV2: a bearer carried the C10 start, so the C10 cancel is owed;
+	// published first at HubCancelPublishedAt, acked by the Hub at
+	// HubCancelAckedAt. FrameCancelsDone: the cancel frames were queued on the
+	// bearers that carried the start (or none was owed).
+	HubCancelV2          bool   `json:"hub_cancel_v2,omitempty"`
+	HubCancelPublishedAt string `json:"hub_cancel_published_at,omitempty"`
+	HubCancelAckedAt     string `json:"hub_cancel_acked_at,omitempty"`
+	FrameCancelsDone     bool   `json:"frame_cancels_done,omitempty"`
 }
 
 func (r sosRun) copy() sosRun {
@@ -264,6 +343,7 @@ func (s *Server) sosSnapshot(id int64) (run sosRun, active, ok bool) {
 // carries it). [MESHSAT-1446]
 func (s *Server) RestoreSOS() {
 	s.sosLoad()
+	s.sosEnsureID()
 	s.sos.mu.Lock()
 	run := s.sos.run
 	if run == nil || s.sos.restored || s.sos.cancelFn != nil {
@@ -272,7 +352,7 @@ func (s *Server) RestoreSOS() {
 	}
 	s.sos.restored = true
 	id, active := run.ID, s.sos.active
-	hubCancel := !active && run.CancelledAt != "" && run.HubCancelSentAt == "" && s.sosHubHad(run)
+	hubCancel := !active && run.CancelledAt != "" && sosCancelOwed(run)
 	var ctx context.Context
 	if active {
 		var cancel context.CancelFunc
@@ -289,10 +369,83 @@ func (s *Server) RestoreSOS() {
 	}
 }
 
-// sosHubHad reports whether the Hub was told of the SOS over the internet.
-func (s *Server) sosHubHad(run *sosRun) bool {
+// sosHubHadOldWay reports whether the Hub took the SOS over the internet the
+// old way (PublishSOSNow), so its cancellation goes the old way too; a run
+// kept from before C10 says so by a sent_at alone.
+func sosHubHadOldWay(run *sosRun) bool {
 	leg := run.leg(sosRouteHub)
-	return leg != nil && leg.SentAt != ""
+	return leg != nil && (leg.OldWay || (leg.SentAt != "" && leg.Frame == ""))
+}
+
+// sosCancelOwed reports whether the Hub is still owed the cancellation of a
+// cancelled run: the old way, or under C10 until its ack (the follow loop
+// ends it at sosCancelFor).
+func sosCancelOwed(run *sosRun) bool {
+	return (run.HubCancelSentAt == "" && sosHubHadOldWay(run)) || (run.HubCancelV2 && run.HubCancelAckedAt == "")
+}
+
+// sosEnsureID gives the SOS kept its sos_id when it has none: a run started
+// before this Bridge spoke C10 takes the old-format id, UUIDv5 of
+// "<bridge id>:<start ms>", so it is the same on every bearer and after a
+// restart. It needs the bridge id; without one the run stays without (and
+// goes out the old way). [MESHSAT-1584]
+func (s *Server) sosEnsureID() {
+	bridge := s.uplinkBridgeID()
+	s.sos.mu.Lock()
+	run := s.sos.run
+	if run == nil || run.SOSID != "" || bridge == "" {
+		s.sos.mu.Unlock()
+		return
+	}
+	run.SOSID = hubmsg.LegacySOSID(bridge, run.ID)
+	raw, seq := s.sosMarshalLocked()
+	s.sos.mu.Unlock()
+	s.sosWrite(raw, seq)
+}
+
+// HubCapsReceived keeps what the Hub says it understands (hub/caps, retained),
+// in memory and in the database. [MESHSAT-1584]
+func (s *Server) HubCapsReceived(c hubreporter.HubCaps) {
+	s.sos.mu.Lock()
+	changed := !s.sos.capsLoaded || s.sos.caps.Has(hubreporter.CapSOSV2) != c.Has(hubreporter.CapSOSV2)
+	s.sos.caps, s.sos.capsLoaded = c, true
+	s.sos.mu.Unlock()
+	if s.db != nil {
+		raw, _ := json.Marshal(c)
+		if err := s.db.SetSystemConfig(sosHubCapsKey, string(raw)); err != nil {
+			log.Warn().Err(err).Msg("hub: could not keep the Hub's caps; a restart without a Hub session goes the old way")
+		}
+	}
+	if changed {
+		log.Info().Bool("sos_v2", c.Has(hubreporter.CapSOSV2)).Strs("caps", c.Caps).Msg("hub: the Hub's caps")
+	}
+}
+
+// sosV2 reports whether the last hub/caps the Hub sent says sos_v2.
+func (s *Server) sosV2() bool {
+	s.sos.mu.Lock()
+	loaded, caps := s.sos.capsLoaded, s.sos.caps
+	s.sos.mu.Unlock()
+	if !loaded {
+		var kept hubreporter.HubCaps
+		if s.db != nil {
+			if raw, err := s.db.GetSystemConfig(sosHubCapsKey); err == nil && raw != "" {
+				_ = json.Unmarshal([]byte(raw), &kept)
+			}
+		}
+		s.sos.mu.Lock()
+		if !s.sos.capsLoaded {
+			s.sos.caps, s.sos.capsLoaded = kept, true
+		}
+		caps = s.sos.caps
+		s.sos.mu.Unlock()
+	}
+	return caps.Has(hubreporter.CapSOSV2)
+}
+
+// sosUseV2 reports whether the run goes out under its own identity now.
+func (s *Server) sosUseV2(run sosRun) bool {
+	return run.SOSID != "" && s.sosV2()
 }
 
 // sosWorker carries the SOS with id: the routes worked out, the mesh leg
@@ -301,6 +454,8 @@ func (s *Server) sosHubHad(run *sosRun) bool {
 // cancelled, the satellite leg queued once a modem is there and the Hub told
 // once its link is up.
 func (s *Server) sosWorker(ctx context.Context, id int64) {
+	every := sosFollowEvery
+	s.sosEnsureID()
 	s.sosPlan(id)
 	s.sosQueueMesh(id)
 	s.sosHubSMS(id)
@@ -309,14 +464,14 @@ func (s *Server) sosWorker(ctx context.Context, id int64) {
 			return
 		}
 		satDone := s.sosTrySatellite(ctx, id)
-		hubDone := s.sosTryHub(ctx, id)
+		hubDone := s.sosTryHub(ctx, id, every)
 		if satDone && hubDone {
 			return
 		}
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(sosFollowEvery):
+		case <-time.After(every):
 		}
 	}
 }
@@ -356,7 +511,7 @@ func (s *Server) sosPlan(id int64) {
 	}
 
 	// Hub
-	hub := s.hubReporter != nil
+	hub := s.sosHubLink() != nil
 	switch {
 	case hub && (!run.Named || run.named(sosRouteHub)):
 		legs = append(legs, sosLeg{Route: sosRouteHub})
@@ -497,6 +652,11 @@ func (s *Server) sosFramePosition(run sosRun) (lat, lon float64, ok bool) {
 // ", position unknown" when the frame has no position; at most 64 bytes,
 // never a character cut in two. The position itself is in the frame.
 func sosFrameMessage(text string, hasPosition bool) string {
+	return sosFrameMessageMaxBytes(text, hasPosition, sosFrameMessageMax)
+}
+
+// sosFrameMessageMaxBytes is sosFrameMessage held to limit bytes.
+func sosFrameMessageMaxBytes(text string, hasPosition bool, limit int) string {
 	first := text
 	if i := strings.Index(text, ". "); i > 0 {
 		first = text[:i]
@@ -505,7 +665,7 @@ func sosFrameMessage(text string, hasPosition bool) string {
 	if !hasPosition && !strings.Contains(strings.ToLower(first), "position unknown") {
 		first += ", position unknown"
 	}
-	for len(first) > sosFrameMessageMax {
+	for len(first) > max(limit, 0) {
 		_, size := utf8.DecodeLastRuneInString(first)
 		first = first[:len(first)-size]
 	}
@@ -513,11 +673,54 @@ func sosFrameMessage(text string, hasPosition bool) string {
 }
 
 // sosFrame is the SOS frame for the Hub: the bridge id the Bridge names
-// itself by, where the person is, the words and the SOS's start.
-func (s *Server) sosFrame(run sosRun) []byte {
+// itself by, where the person is, the words and the SOS's start. Under C10
+// (v2 true) it is the 0x07 start with the run's sos_id and start, its words
+// cut so the frame fits one SMS as base64 (sosFrameSMSMax); else the 0x02.
+func (s *Server) sosFrame(run sosRun) (frame []byte, v2 bool) {
 	lat, lon, known := s.sosFramePosition(run)
 	started := time.UnixMilli(run.ID).UTC()
-	return hubreporter.EncodeSatSOS(s.uplinkBridgeID(), sosFrameDevice, lat, lon, sosFrameMessage(run.Text, known), started)
+	bridge := s.uplinkBridgeID()
+	if s.sosUseV2(run) {
+		if id, ok := hubmsg.UUIDBytes(run.SOSID); ok {
+			fixed := len(hubreporter.EncodeSatSOSStart(bridge, sosFrameDevice, lat, lon, "", started, id, run.ID))
+			words := sosFrameMessageMaxBytes(run.Text, known, min(sosFrameMessageMax, sosFrameSMSMax-fixed))
+			return hubreporter.EncodeSatSOSStart(bridge, sosFrameDevice, lat, lon, words, started, id, run.ID), true
+		}
+	}
+	return hubreporter.EncodeSatSOS(bridge, sosFrameDevice, lat, lon, sosFrameMessage(run.Text, known), started), false
+}
+
+// sosCancelFrame is the 0x08 cancel of the run (C10); nil without its id.
+func (s *Server) sosCancelFrame(run sosRun) []byte {
+	id, ok := hubmsg.UUIDBytes(run.SOSID)
+	if !ok {
+		return nil
+	}
+	at, err := time.Parse(time.RFC3339, run.CancelledAt)
+	if err != nil {
+		at = s.clockNow()
+	}
+	return hubreporter.EncodeSatSOSCancel(s.uplinkBridgeID(), id, run.ID, at, hubreporter.SOSCancelOperator)
+}
+
+// sosEvent is the run's start, or its cancellation, as the v2 event on
+// sos/event (C10). The device is the Bridge itself (no device id).
+func (s *Server) sosEvent(run sosRun, cancel bool) hubreporter.SOSEvent {
+	ev := hubreporter.SOSEvent{Kind: hubreporter.SOSEventStart, SOSID: run.SOSID, RunStartMs: run.ID}
+	if cancel {
+		reason := int(hubreporter.SOSCancelOperator)
+		ev.Kind, ev.Reason = hubreporter.SOSEventCancel, &reason
+		if at, err := time.Parse(time.RFC3339, run.CancelledAt); err == nil {
+			ev.Timestamp = at.Unix()
+		}
+		return ev
+	}
+	ev.Text = run.Text
+	ev.Timestamp = time.UnixMilli(run.ID).Unix()
+	if lat, lon, ok := s.sosFramePosition(run); ok {
+		ev.Lat, ev.Lon = &lat, &lon
+	}
+	return ev
 }
 
 // sosTrySatellite queues the satellite leg of the SOS with id once a modem
@@ -544,7 +747,7 @@ func (s *Server) sosTrySatellite(ctx context.Context, id int64) bool {
 		return false // no modem yet: the leg waits for one
 	}
 	ref := run.ref(sosRouteSatellite)
-	frame := s.sosFrame(run)
+	frame, v2 := s.sosFrame(run)
 	delID, _, err := s.dispatcher.QueueDirectSendTo(link, run.Text, func() engine.DirectSendOptions {
 		opts := sosLegOptions(database.DeliveryClassHubUplink, ref)
 		opts.Payload = frame
@@ -556,6 +759,9 @@ func (s *Server) sosTrySatellite(ctx context.Context, id int64) bool {
 				l.Error = "Could not be queued: " + err.Error()
 			} else {
 				l.MsgRef, l.DeliveryID, l.Interface = ref, delID, link
+				if v2 {
+					l.Frame = sosFrameV2
+				}
 			}
 		}
 		// The Hub files the frame under the satellite it came by: the Hub
@@ -568,7 +774,7 @@ func (s *Server) sosTrySatellite(ctx context.Context, id int64) bool {
 		log.Error().Err(err).Int64("sos", id).Str("interface", link).Msg("SOS: the satellite leg could not be queued")
 		return true
 	}
-	log.Warn().Int64("sos", id).Int64("delivery_id", delID).Str("interface", link).Int("bytes", len(frame)).
+	log.Warn().Int64("sos", id).Int64("delivery_id", delID).Str("interface", link).Int("bytes", len(frame)).Bool("v2", v2).
 		Msg("SOS: satellite leg queued, the SOS frame to the Hub")
 	return true
 }
@@ -595,8 +801,10 @@ func (s *Server) sosHubAlert(run sosRun, cancel bool) (hubreporter.SOSAlert, hub
 }
 
 // sosTryHub tells the Hub of the SOS with id over the internet once its
-// link is up; true when the Hub has it, or there is no Hub leg.
-func (s *Server) sosTryHub(ctx context.Context, id int64) bool {
+// link is up; true when the Hub has it, or there is no Hub leg. Under C10 the
+// Hub has it at its sos/ack (SOSAckReceived), and the start is published again
+// until then (sosTryHubV2).
+func (s *Server) sosTryHub(ctx context.Context, id int64, every time.Duration) bool {
 	run, active, ok := s.sosSnapshot(id)
 	if !ok || !active {
 		return true
@@ -605,18 +813,23 @@ func (s *Server) sosTryHub(ctx context.Context, id int64) bool {
 	if leg == nil || leg.SentAt != "" {
 		return true
 	}
-	if s.hubReporter == nil || !s.hubReporter.IsConnected() || ctx.Err() != nil {
+	hub := s.sosHubLink()
+	if hub == nil || !hub.IsConnected() || ctx.Err() != nil {
+		return false
+	}
+	if s.sosUseV2(run) {
+		s.sosTryHubV2(hub, id, run, every)
 		return false
 	}
 	alert, event := s.sosHubAlert(run, false)
-	if err := s.hubReporter.PublishSOSNow(alert, event); err != nil {
+	if err := hub.PublishSOSNow(alert, event); err != nil {
 		log.Warn().Err(err).Int64("sos", id).Msg("SOS: the Hub did not take the SOS yet, trying again")
 		return false
 	}
 	sentAt := s.clockNow().UTC().Format(time.RFC3339)
 	s.sosUpdate(id, func(r *sosRun) {
 		if l := r.leg(sosRouteHub); l != nil {
-			l.SentAt = sentAt
+			l.SentAt, l.OldWay = sentAt, true
 		}
 	})
 	log.Warn().Int64("sos", id).Str("alert", alert.ID).Msg("SOS: the Hub has the SOS over the internet")
@@ -627,6 +840,91 @@ func (s *Server) sosTryHub(ctx context.Context, id int64) bool {
 	return true
 }
 
+// sosTryHubV2 publishes the run's C10 start on sos/event, at most once per
+// backoff step (every doubling to sosRepeatMax), until the Hub's ack.
+func (s *Server) sosTryHubV2(hub sosHub, id int64, run sosRun, every time.Duration) {
+	now := s.clockNow()
+	s.sos.mu.Lock()
+	if s.sos.hubStartFor != id {
+		s.sos.hubStartFor, s.sos.hubStartNext, s.sos.hubStartStep = id, time.Time{}, every
+	}
+	if now.Before(s.sos.hubStartNext) {
+		s.sos.mu.Unlock()
+		return
+	}
+	s.sos.hubStartNext = now.Add(s.sos.hubStartStep)
+	s.sos.hubStartStep = min(2*s.sos.hubStartStep, sosRepeatMax)
+	s.sos.mu.Unlock()
+
+	if err := hub.PublishSOSEvent(s.sosEvent(run, false), sosPubackWait); err != nil {
+		log.Warn().Err(err).Int64("sos", id).Msg("SOS: the start did not reach the Hub's broker yet, trying again")
+		return
+	}
+	at := now.UTC().Format(time.RFC3339)
+	first := false
+	s.sosUpdate(id, func(r *sosRun) {
+		if l := r.leg(sosRouteHub); l != nil {
+			if l.PublishedAt == "" {
+				l.PublishedAt, first = at, true
+			}
+			l.Frame = sosFrameV2
+		}
+	})
+	if first {
+		log.Warn().Int64("sos", id).Str("sos_id", run.SOSID).Msg("SOS: the start is with the Hub's broker; it is published again until the Hub's ack")
+	}
+	// Cancelled while it was being published: the Hub is owed the cancel.
+	if _, active, ok := s.sosSnapshot(id); ok && !active {
+		s.sosUpdate(id, func(r *sosRun) { r.HubCancelV2 = true })
+		go s.sosHubCancelLoop(id)
+	}
+}
+
+// SOSAckReceived takes the Hub's ack of a start or a cancel of this Bridge's
+// SOS (sos/ack, C10): the Hub has it. A start's ack ends the hub leg; a
+// cancel's ends the cancellation's repeats and stops the cancel frames that
+// have not gone. An ack for another run changes nothing. [MESHSAT-1584]
+func (s *Server) SOSAckReceived(a hubreporter.SOSAck) {
+	s.sosLoad()
+	s.sos.mu.Lock()
+	var id int64
+	if s.sos.run != nil && s.sos.run.SOSID == a.SOSID {
+		id = s.sos.run.ID
+	}
+	s.sos.mu.Unlock()
+	if id == 0 {
+		log.Info().Str("sos_id", a.SOSID).Str("kind", a.Kind).Msg("SOS: an ack for an SOS that is not this Bridge's last, ignored")
+		return
+	}
+	at := s.clockNow().UTC().Format(time.RFC3339)
+	switch a.Kind {
+	case hubreporter.SOSEventStart:
+		first := false
+		s.sosUpdate(id, func(r *sosRun) {
+			if l := r.leg(sosRouteHub); l != nil {
+				if l.SentAt == "" {
+					l.SentAt, first = at, true
+				}
+				l.Frame, l.HubState = sosFrameV2, a.State
+			}
+		})
+		if first {
+			log.Warn().Int64("sos", id).Str("sos_id", a.SOSID).Str("state", a.State).Int("rev", a.Rev).Msg("SOS: the Hub has the SOS")
+		}
+	case hubreporter.SOSEventCancel:
+		first := false
+		s.sosUpdate(id, func(r *sosRun) {
+			if r.CancelledAt != "" && r.HubCancelAckedAt == "" {
+				r.HubCancelAckedAt, first = at, true
+			}
+		})
+		if first {
+			s.sosStopCancelFrames(id)
+			log.Warn().Int64("sos", id).Str("sos_id", a.SOSID).Str("state", a.State).Msg("SOS cancelled: the Hub has the cancellation")
+		}
+	}
+}
+
 // sosHubSMS sends the SOS frame by SMS to the Hub's number where the Hub
 // uplink's bearer choice takes SMS (the satellite being the SOS's own leg),
 // under the SOS's reference, so a cancellation stops it too. Once per SOS.
@@ -635,19 +933,64 @@ func (s *Server) sosHubSMS(id int64) {
 	if !ok || !active || run.HubSMSDone || s.satFallback == nil || s.uplinkBridgeID() == "" {
 		return
 	}
-	s.sosUpdate(id, func(r *sosRun) { r.HubSMSDone = true })
-	if err := s.satFallback.PublishSOSFrame(s.sosFrame(run), run.ref("hubsms")); err != nil {
+	frame, v2 := s.sosFrame(run)
+	s.sosUpdate(id, func(r *sosRun) {
+		r.HubSMSDone = true
+		if v2 {
+			r.HubSMSFrame = sosFrameV2
+		}
+	})
+	if err := s.satFallback.PublishSOSFrame(frame, run.ref(sosRouteHubSMS)); err != nil {
 		log.Warn().Err(err).Int64("sos", id).Msg("SOS: no SMS to the Hub's number")
 	}
+}
+
+// sosStartWent reports whether a start's delivery went out, or may have: sent,
+// delivered, being sent, or given up with its outcome unknown.
+func sosStartWent(del *database.MessageDelivery) bool {
+	if del == nil {
+		return false
+	}
+	switch del.Status {
+	case "sent", "delivered", "sending":
+		return true
+	case "dead":
+		return strings.HasPrefix(del.LastError, database.UnconfirmedPrefix)
+	}
+	return false
+}
+
+// sosStartCarried reports, for each frame bearer, whether it carried the
+// run's C10 start: the satellite leg, and the SMS to the Hub's number.
+func (s *Server) sosStartCarried(run sosRun) (satellite, hubSMS bool) {
+	if s.db == nil {
+		return false, false
+	}
+	if leg := run.leg(sosRouteSatellite); leg != nil && leg.Frame == sosFrameV2 && leg.DeliveryID != 0 {
+		del, err := s.db.GetDelivery(leg.DeliveryID)
+		satellite = err == nil && sosStartWent(del)
+	}
+	if run.HubSMSFrame == sosFrameV2 {
+		if dels, err := s.db.GetDeliveriesByMessage(run.ref(sosRouteHubSMS)); err == nil {
+			for i := range dels {
+				hubSMS = hubSMS || sosStartWent(&dels[i])
+			}
+		}
+	}
+	return satellite, hubSMS
 }
 
 // sosCancelLegs stops what of the SOS with id has not gone out, and queues
 // the cancellation on the mesh when the mesh leg went out (or was going out
 // when the SOS was cancelled), as MeshSat Android does; the Hub is told if it
-// had the SOS. The satellite leg gets no cancellation: its frame stays the
-// Hub's alert, and a second frame costs a credit. It answers the
+// had the SOS. Under C10 the Hub is owed the cancel when any bearer carried
+// the start under the run's identity: the follow loop repeats it until the
+// Hub's ack and puts the 0x08 frame on each frame bearer that carried it
+// (sosHubCancelLoop). A start that went the old way gets no frame: its frame
+// stays the Hub's alert, and a second frame costs a credit. It answers the
 // cancellation's legs.
 func (s *Server) sosCancelLegs(id int64, text string) []sosLeg {
+	s.sosEnsureID()
 	run, _, ok := s.sosSnapshot(id)
 	if !ok {
 		return nil
@@ -662,7 +1005,7 @@ func (s *Server) sosCancelLegs(id int64, text string) []sosLeg {
 			}
 		}
 		// SMS to the Hub's number, under the SOS's reference
-		if ids, err := s.db.WaitingDeliveryIDsByRef(run.ref("hubsms")); err == nil {
+		if ids, err := s.db.WaitingDeliveryIDsByRef(run.ref(sosRouteHubSMS)); err == nil {
 			for _, delID := range ids {
 				_ = s.db.CancelDelivery(delID)
 			}
@@ -682,39 +1025,163 @@ func (s *Server) sosCancelLegs(id int64, text string) []sosLeg {
 			}
 		}
 	}
-	hubHad := false
+	sat, sms := s.sosStartCarried(run)
+	hubLeg := run.leg(sosRouteHub)
+	v2 := run.SOSID != "" && (sat || sms || (hubLeg != nil && hubLeg.Frame == sosFrameV2))
+	owed := false
 	s.sosUpdate(id, func(r *sosRun) {
 		r.CancelLegs = cancelLegs
-		hubHad = s.sosHubHad(r)
+		r.HubCancelV2 = r.HubCancelV2 || v2
+		owed = sosCancelOwed(r)
 	})
-	if hubHad {
+	if owed {
 		go s.sosHubCancelLoop(id)
 	}
 	return cancelLegs
 }
 
-// sosHubCancelLoop tells the Hub the SOS with id is over, once its link is
-// up, while that SOS is still the Bridge's last.
+// sosQueueCancelFrames puts the run's 0x08 on each frame bearer that carried
+// its C10 start (sosStartCarried): the satellite link the start went on, and
+// the SMS to the Hub's number (only for a v7 id: the Hub takes no v5 cancel
+// by SMS, which anyone could work out from the bridge id and the start). The
+// queue tries each until it goes; the Hub's ack stops those still waiting.
+func (s *Server) sosQueueCancelFrames(id int64) {
+	run, active, ok := s.sosSnapshot(id)
+	if !ok || active || run.FrameCancelsDone {
+		return
+	}
+	frame := s.sosCancelFrame(run)
+	sat, sms := s.sosStartCarried(run)
+	var legs []sosLeg
+	if leg := run.leg(sosRouteSatellite); frame != nil && sat && s.dispatcher != nil {
+		ref := run.ref("cancel:" + sosRouteSatellite)
+		opts := sosLegOptions(database.DeliveryClassHubUplink, ref)
+		opts.Payload = frame
+		delID, _, err := s.dispatcher.QueueDirectSendTo(leg.Interface, run.CancelText, opts)
+		if err != nil {
+			log.Error().Err(err).Int64("sos", id).Str("interface", leg.Interface).Msg("SOS cancelled: the cancel frame could not be queued on the satellite")
+		} else {
+			legs = append(legs, sosLeg{Route: sosRouteSatellite, Interface: leg.Interface, MsgRef: ref, DeliveryID: delID, Frame: sosFrameV2})
+			log.Warn().Int64("sos", id).Int64("delivery_id", delID).Str("interface", leg.Interface).Msg("SOS cancelled: the cancel frame is queued on the satellite")
+		}
+	}
+	if frame != nil && sms && hubmsg.ValidV7(run.SOSID) && s.satFallback != nil {
+		ref := run.ref("cancel:" + sosRouteHubSMS)
+		if err := s.satFallback.PublishSOSFrame(frame, ref); err != nil {
+			log.Warn().Err(err).Int64("sos", id).Msg("SOS cancelled: no cancel frame by SMS to the Hub's number")
+		} else {
+			leg := sosLeg{Route: sosRouteHubSMS, MsgRef: ref, Frame: sosFrameV2}
+			if ids, err := s.db.WaitingDeliveryIDsByRef(ref); err == nil && len(ids) > 0 {
+				leg.DeliveryID = ids[0]
+			}
+			legs = append(legs, leg)
+		}
+	}
+	s.sosUpdate(id, func(r *sosRun) {
+		r.CancelLegs = append(r.CancelLegs, legs...)
+		r.FrameCancelsDone = true
+	})
+}
+
+// sosStopCancelFrames stops the run's cancel frames that have not gone: the
+// Hub has the cancellation, or the follow loop gave up.
+func (s *Server) sosStopCancelFrames(id int64) {
+	if s.db == nil {
+		return
+	}
+	run, _, ok := s.sosSnapshot(id)
+	if !ok {
+		return
+	}
+	for _, route := range []string{sosRouteSatellite, sosRouteHubSMS} {
+		ids, err := s.db.WaitingDeliveryIDsByRef(run.ref("cancel:" + route))
+		if err != nil {
+			continue
+		}
+		for _, delID := range ids {
+			if err := s.db.CancelDelivery(delID); err == nil {
+				log.Info().Int64("sos", id).Str("route", route).Int64("delivery_id", delID).Msg("SOS cancelled: the cancel frame is not needed, stopped")
+			}
+		}
+	}
+}
+
+// sosHubCancelLoop tells the Hub the SOS with id is over, while that SOS is
+// still the Bridge's last: the old way once its link is up, when the start
+// went the old way; under C10, the cancel event published again (backing
+// off) until the Hub's ack or for sosCancelFor, and the cancel frames queued
+// once the ack has not come within sosCancelAckGrace (at once with no Hub
+// session). At the end, the frames still waiting are stopped. One loop per
+// SOS; a restart starts it again (RestoreSOS). [MESHSAT-1446, MESHSAT-1584]
 func (s *Server) sosHubCancelLoop(id int64) {
+	s.sos.mu.Lock()
+	if s.sos.cancelLoopFor == id {
+		s.sos.mu.Unlock()
+		return
+	}
+	s.sos.cancelLoopFor = id
+	s.sos.mu.Unlock()
+	defer func() {
+		s.sos.mu.Lock()
+		if s.sos.cancelLoopFor == id {
+			s.sos.cancelLoopFor = 0
+		}
+		s.sos.mu.Unlock()
+	}()
+
+	every, repeatMax, cancelFor, grace := sosFollowEvery, sosRepeatMax, sosCancelFor, sosCancelAckGrace
+	step := every
+	var next time.Time
 	for {
 		run, active, ok := s.sosSnapshot(id)
-		if !ok || active || run.HubCancelSentAt != "" {
+		if !ok || active {
 			return
 		}
-		if s.hubReporter != nil && s.hubReporter.IsConnected() {
+		now := s.clockNow()
+		cancelledAt, err := time.Parse(time.RFC3339, run.CancelledAt)
+		if err != nil {
+			cancelledAt = now
+		}
+		oldWay := run.HubCancelSentAt == "" && sosHubHadOldWay(&run)
+		v2 := run.HubCancelV2 && run.HubCancelAckedAt == ""
+		if v2 && now.Sub(cancelledAt) >= cancelFor {
+			log.Warn().Int64("sos", id).Str("sos_id", run.SOSID).Msg("SOS cancelled: no ack from the Hub in 24 h; the cancellation is no longer repeated")
+			s.sosStopCancelFrames(id)
+			v2 = false
+		}
+		if !oldWay && !v2 {
+			return
+		}
+		hub := s.sosHubLink()
+		up := hub != nil && hub.IsConnected()
+		if oldWay && up {
 			alert, event := s.sosHubAlert(run, true)
-			err := s.hubReporter.PublishSOSNow(alert, event)
+			err := hub.PublishSOSNow(alert, event)
 			if err == nil {
-				sentAt := s.clockNow().UTC().Format(time.RFC3339)
+				sentAt := now.UTC().Format(time.RFC3339)
 				s.sosUpdate(id, func(r *sosRun) { r.HubCancelSentAt = sentAt })
 				log.Warn().Int64("sos", id).Msg("SOS cancelled: the Hub is told")
-				return
-			}
-			if !errors.Is(err, hubreporter.ErrNotConnected) {
+			} else if !errors.Is(err, hubreporter.ErrNotConnected) {
 				log.Warn().Err(err).Int64("sos", id).Msg("SOS cancelled: the Hub did not take the cancellation yet")
 			}
 		}
-		time.Sleep(sosFollowEvery)
+		if v2 && up && !now.Before(next) {
+			next, step = now.Add(step), min(2*step, repeatMax)
+			if err := hub.PublishSOSEvent(s.sosEvent(run, true), sosPubackWait); err == nil {
+				at := now.UTC().Format(time.RFC3339)
+				s.sosUpdate(id, func(r *sosRun) {
+					if r.HubCancelPublishedAt == "" {
+						r.HubCancelPublishedAt = at
+					}
+				})
+			} else if !errors.Is(err, hubreporter.ErrNotConnected) {
+				log.Warn().Err(err).Int64("sos", id).Msg("SOS cancelled: the cancellation did not reach the Hub's broker yet")
+			}
+		}
+		if v2 && !run.FrameCancelsDone && (!up || now.Sub(cancelledAt) >= grace) {
+			s.sosQueueCancelFrames(id)
+		}
+		time.Sleep(every)
 	}
 }
 
@@ -736,6 +1203,8 @@ func (s *Server) sosLegStates(run sosRun) []sosLegState {
 			st.Status = "failed"
 		case leg.Route == sosRouteHub && leg.SentAt != "":
 			st.Status = "sent"
+		case leg.Route == sosRouteHub && leg.PublishedAt != "":
+			st.Status = "sending" // with the Hub's broker, the Hub's ack not yet in
 		case leg.DeliveryID != 0 && s.db != nil:
 			if del, err := s.db.GetDelivery(leg.DeliveryID); err == nil && del != nil {
 				st.Status, st.LastError = del.Status, del.LastError

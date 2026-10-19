@@ -158,6 +158,18 @@ func (t Topics) Msg(bridgeID, kind string) string {
 	return fmt.Sprintf("%s/bridge/%s/msg/%s", t.Root(), topicSegment(bridgeID), kind)
 }
 
+// SOS is one of a bridge's C10 SOS topics, {root}/bridge/<bridge id>/sos/<kind>: "event"
+// the bridge publishes, "ack" only the Hub may (MESHSAT-1584).
+func (t Topics) SOS(bridgeID, kind string) string {
+	return fmt.Sprintf("%s/bridge/%s/sos/%s", t.Root(), topicSegment(bridgeID), kind)
+}
+
+// HubCaps is where the Hub keeps, retained, what it understands for this bridge:
+// {root}/bridge/<bridge id>/hub/caps (only the Hub may publish it).
+func (t Topics) HubCaps(bridgeID string) string {
+	return fmt.Sprintf("%s/bridge/%s/hub/caps", t.Root(), topicSegment(bridgeID))
+}
+
 func (t Topics) takCoTIn() string { return fmt.Sprintf(topicTAKCoTIn, t.Root()) }
 
 // TAKCoTInFilters are the two subscriptions that receive what the Hub
