@@ -47,6 +47,9 @@ const (
 	OutcomeFailed                  = "failed"
 	OutcomeExpired                 = "expired"
 	OutcomeCancelled               = "cancelled"
+	// OutcomeDeliveredApp: the recipient's MeshSat app stored it and said so through the
+	// Hub (hub_msg, C6a recipient_app_stored). [MESHSAT-1584]
+	OutcomeDeliveredApp = "delivered_app"
 )
 
 // Outcome classes of a transmission (r3 D18).

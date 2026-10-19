@@ -1643,6 +1643,59 @@ var migrations = []string{
 	// refused, not run. [MESHSAT-1584]
 	`ALTER TABLE hub_command_log ADD COLUMN run_id TEXT NOT NULL DEFAULT '';
 	ALTER TABLE hub_command_log ADD COLUMN args_sha256 TEXT NOT NULL DEFAULT '';`,
+
+	// v71: hub_msg, the Hub app route (HeMB-NG stage 2, contract C3-C6). The receiver's
+	// inbox: one row per committed (origin, op_id), the message stored once per
+	// (origin, mid), and a hand-off record per stored message that the hand-off worker
+	// takes to the access rules after a crash too. The sender's side: each operation it
+	// published (its op_id, mid and recipient, what an event must name) and the evidence
+	// the Hub reported about it, kept once per event id (C6's union). [MESHSAT-1584]
+	`CREATE TABLE IF NOT EXISTS hub_inbox (
+		origin         TEXT NOT NULL,
+		op_id          TEXT NOT NULL,
+		mid            TEXT NOT NULL,
+		recipient      TEXT NOT NULL,
+		content_type   TEXT NOT NULL,
+		mid_expires_at INTEGER NOT NULL,
+		expires_at     INTEGER NOT NULL,
+		content_sha256 TEXT NOT NULL,
+		message_id     INTEGER NOT NULL,
+		committed_at   INTEGER NOT NULL,
+		within_skew    INTEGER NOT NULL DEFAULT 0,
+		unjudged       INTEGER NOT NULL DEFAULT 0,
+		PRIMARY KEY (origin, op_id)
+	);
+	CREATE INDEX IF NOT EXISTS idx_hub_inbox_mid ON hub_inbox(origin, mid);
+	CREATE INDEX IF NOT EXISTS idx_hub_inbox_expires ON hub_inbox(expires_at);
+	CREATE TABLE IF NOT EXISTS hub_inbox_handoff (
+		message_id INTEGER PRIMARY KEY,
+		state      TEXT NOT NULL DEFAULT 'pending',
+		created_at INTEGER NOT NULL,
+		done_at    INTEGER
+	);
+	CREATE INDEX IF NOT EXISTS idx_hub_inbox_handoff_state ON hub_inbox_handoff(state);
+	CREATE TABLE IF NOT EXISTS hub_ops (
+		op_id      TEXT PRIMARY KEY,
+		mid        TEXT NOT NULL,
+		recipient  TEXT NOT NULL,
+		intent_id  TEXT NOT NULL,
+		expires_at INTEGER NOT NULL,
+		created_at INTEGER NOT NULL
+	);
+	CREATE INDEX IF NOT EXISTS idx_hub_ops_expires ON hub_ops(expires_at);
+	CREATE TABLE IF NOT EXISTS hub_op_events (
+		event_id    TEXT PRIMARY KEY,
+		op_id       TEXT NOT NULL,
+		rev         INTEGER NOT NULL,
+		class       TEXT NOT NULL,
+		kind        TEXT NOT NULL,
+		reason      TEXT NOT NULL,
+		authority   TEXT NOT NULL,
+		at          TEXT NOT NULL,
+		valid       INTEGER NOT NULL,
+		received_at INTEGER NOT NULL
+	);
+	CREATE INDEX IF NOT EXISTS idx_hub_op_events_op ON hub_op_events(op_id);`,
 }
 
 func (db *DB) migrate() error {

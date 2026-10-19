@@ -165,6 +165,7 @@ const tone = computed(() => {
     case 'pending': return 'text-sky-400'
     case 'delivered_handset':
     case 'delivered_device':
+    case 'delivered_app':
     case 'accepted_destination_node':
     case 'acked_station': return 'text-emerald-400'
     case 'accepted_unconfirmed': return 'text-gray-200'

@@ -49,6 +49,8 @@ func outcomeLabel(o string) string {
 		return "delivered to handset"
 	case database.OutcomeDeliveredDevice:
 		return "delivered to device"
+	case database.OutcomeDeliveredApp:
+		return "delivered to the MeshSat app"
 	case database.OutcomeAcceptedDestinationNode:
 		return "accepted by the recipient's Reticulum node (signed)"
 	case database.OutcomeAckedStation:

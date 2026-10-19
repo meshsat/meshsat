@@ -34,7 +34,8 @@ const (
 )
 
 // gatewayModes are the adapter modes a gateway carries.
-var gatewayModes = map[string]bool{modeAPRS: true, modeSMS: true, modeIMT: true, modeSBD: true, modeTETRA: true, modeCell: true, modeZB: true}
+var gatewayModes = map[string]bool{modeAPRS: true, modeSMS: true, modeIMT: true, modeSBD: true, modeTETRA: true, modeCell: true, modeZB: true,
+	modeHub: true}
 
 // billed reports whether an adapter's submissions cost money (B9).
 func billed(ad gateway.IntentAdapter) bool {
@@ -54,6 +55,9 @@ func billedBytes(ad gateway.IntentAdapter, wire []byte) int {
 // intentAdapter is the running gateway of an interface when it can carry
 // intents, else nil.
 func (d *Dispatcher) intentAdapter(ifaceID string) gateway.IntentAdapter {
+	if ifaceID == hubRouteInterface {
+		return d.hubRoute.get()
+	}
 	if d.gwProv == nil {
 		return nil
 	}
@@ -236,8 +240,12 @@ func (w *DeliveryWorker) reserveCorr(kind string, next func() (string, error)) (
 // come after it returns reach the ledger through the receipt sink.
 func (w *DeliveryWorker) sendIntentGateway(ctx context.Context, del database.MessageDelivery, ad gateway.IntentAdapter, text string, encrypted bool, corrValue string, tariff *database.Tariff) SendOutcome {
 	ad.SetIntentReceiptSink(w.intentGatewayReceipt)
-	o := ad.IntentSend(ctx, gateway.IntentSend{Destination: del.Destination, Text: text, Encrypted: encrypted,
-		PlainText: string(del.Payload), CorrValue: corrValue, MsgRef: del.MsgRef})
+	send := gateway.IntentSend{Destination: del.Destination, Text: text, Encrypted: encrypted,
+		PlainText: string(del.Payload), CorrValue: corrValue, MsgRef: del.MsgRef, MessageID: del.IntentID}
+	if in, err := w.db.GetIntent(del.IntentID); err == nil && in != nil {
+		send.MessageExpiresAt = messageDeadline(*in)
+	}
+	o := ad.IntentSend(ctx, send)
 	out := SendOutcome{Class: o.Class, AcceptedBy: o.AcceptedBy, Retryable: o.Retryable, ConsumeRetry: o.ConsumeRetry,
 		Detail: o.Detail, Reason: o.Reason}
 	if o.Charged && tariff != nil {

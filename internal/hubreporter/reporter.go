@@ -79,6 +79,8 @@ type HubReporter struct {
 	onConnect     func()            // MQTT session up [MESHSAT-963]
 	onLost        func()            // MQTT session lost
 	takCotHandler func([]byte)      // callback for inbound TAK CoT events from Hub
+	msgIn         func([]byte)      // hub_msg deliveries (msg/in) [MESHSAT-1584]
+	msgStatus     func([]byte)      // hub_msg evidence and refusals (msg/status)
 	signingKey    *ecdsa.PrivateKey // loaded from TLS key for birth signing
 	certPEM       string            // base64 PEM for inclusion in birth
 	tlsErr        error             // set when TLS material is present but unusable [MESHSAT-1027]
@@ -216,6 +218,7 @@ func (r *HubReporter) Start(ctx context.Context) error {
 		// Subscribe to command topic
 		r.subscribeCmd()
 		r.subscribeTAKCoT()
+		r.subscribeMsg()
 
 		// Replay queued outbox messages
 		if ob != nil {

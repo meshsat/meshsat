@@ -294,6 +294,9 @@ func (w *DeliveryWorker) sendIntentLXMF(ctx context.Context, del database.Messag
 
 // intentAdapterFor is this worker's gateway when it can carry intents.
 func (w *DeliveryWorker) intentAdapterFor() gateway.IntentAdapter {
+	if w.channelID == hubRouteInterface {
+		return w.hubRoute.get()
+	}
 	if w.gwProv == nil {
 		return nil
 	}

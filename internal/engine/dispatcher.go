@@ -78,7 +78,8 @@ type PacketSenderProvider interface {
 }
 
 type Dispatcher struct {
-	lxmf       LXMFSender // class lxmf deliveries [MESHSAT-1348]
+	lxmf       LXMFSender   // class lxmf deliveries [MESHSAT-1348]
+	hubRoute   *hubRouteRef // the Hub app route's adapter, shared with the workers [MESHSAT-1584]
 	db         *database.DB
 	access     *rules.AccessEvaluator // v0.3.0 access rule evaluation
 	failover   *FailoverResolver      // v0.3.0 failover group resolution
@@ -201,6 +202,7 @@ func NewDispatcher(db *database.DB, reg *channel.Registry, gwProv GatewayProvide
 		}
 	}
 	return &Dispatcher{
+		hubRoute:         &hubRouteRef{},
 		db:               db,
 		registry:         reg,
 		gwProv:           gwProv,
@@ -471,6 +473,7 @@ func (d *Dispatcher) startInterfaceWorkers(ctx context.Context) {
 			failover:        d.failover,
 			gate:            &d.gate,
 			intents:         d.escalator,
+			hubRoute:        d.hubRoute,
 			cancel:          workerCancel,
 		}
 		d.workers[iface.ID] = w
@@ -542,6 +545,7 @@ func (d *Dispatcher) StartWorker(ctx context.Context, ifaceID string, channelTyp
 		failover:        d.failover,
 		gate:            &d.gate,
 		intents:         d.escalator,
+		hubRoute:        d.hubRoute,
 		cancel:          workerCancel,
 	}
 	d.workers[ifaceID] = w
@@ -1532,6 +1536,7 @@ type DeliveryWorker struct {
 	failover        *FailoverResolver         // next group member when a bearer gets no ack [MESHSAT-1021]
 	gate            *atomic.Pointer[SendGate] // the dispatcher's send gate (nil = none) [MESHSAT-1446]
 	intents         *Escalator                // owner of delivery intents (nil = none) [MESHSAT-1581]
+	hubRoute        *hubRouteRef              // the Hub app route's adapter, the dispatcher's [MESHSAT-1584]
 	cancel          context.CancelFunc        // per-worker cancellation
 }
 

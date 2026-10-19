@@ -147,7 +147,7 @@ const recentOthers = computed(() => {
   return recent.value.filter(r => !shown.has(r.id))
 })
 function labelTone(o) {
-  if (['delivered_handset', 'delivered_device', 'accepted_destination_node', 'acked_station'].includes(o)) return 'text-emerald-400'
+  if (['delivered_handset', 'delivered_device', 'delivered_app', 'accepted_destination_node', 'acked_station'].includes(o)) return 'text-emerald-400'
   if (o === 'may_have_been_sent') return 'text-amber-400'
   if (o === 'failed' || o === 'expired') return 'text-red-400'
   if (o === 'pending') return 'text-sky-400'

@@ -183,7 +183,11 @@ func (e *Escalator) Submit(ctx context.Context, req IntentRequest) (*IntentSubmi
 	wall := e.clock.Wall().UTC().Format("2006-01-02 15:04:05")
 	in.HeartbeatWallAt = &wall
 	in.HeartbeatWallTrusted = e.clock.WallTrusted()
-	in.RoutePlan = e.routePlan(contact.Addresses, req.Body)
+	// By default an admitted Hub app route goes first (C4, your Q2 answer). An explicit
+	// strategy keeps the contact's order, and so does PRIMARY_ONLY: the contact's primary
+	// route is the one it names, never one the plan moved there. [MESHSAT-1584]
+	in.RoutePlan = e.routePlan(contact.Addresses, req.Body, req.Strategy == "" &&
+		(effective == directory.StrategyOrderedFallback || effective == directory.StrategyAllBearers))
 	if in.CapMinor != nil {
 		// A paid route whose one submission costs more than the cap is
 		// never tried (r3 D8). [MESHSAT-1584]
@@ -301,7 +305,7 @@ func (e *Escalator) resolveIntentStrategy(ctx context.Context, req IntentRequest
 
 // routePlan orders a contact's addresses by rank (kind as the tiebreak, as
 // selectAddresses does) and admits each for its route (r3 D9).
-func (e *Escalator) routePlan(addrs []directory.Address, payload []byte) []database.RoutePlanEntry {
+func (e *Escalator) routePlan(addrs []directory.Address, payload []byte, hubRouteFirst bool) []database.RoutePlanEntry {
 	sorted := append([]directory.Address(nil), addrs...)
 	sort.SliceStable(sorted, func(i, j int) bool {
 		if sorted[i].PrimaryRank != sorted[j].PrimaryRank {
@@ -309,10 +313,16 @@ func (e *Escalator) routePlan(addrs []directory.Address, payload []byte) []datab
 		}
 		return sorted[i].Kind < sorted[j].Kind
 	})
+	admitted := make([]database.RoutePlanEntry, 0, len(sorted))
+	for _, a := range sorted {
+		admitted = append(admitted, e.admit(a, payload))
+	}
+	if hubRouteFirst {
+		admitted = hubFirst(admitted)
+	}
 	seen := map[string]bool{}
 	var plan []database.RoutePlanEntry
-	for i, a := range sorted {
-		p := e.admit(a, payload)
+	for i, p := range admitted {
 		p.RouteIndex = i + 1
 		if p.Admitted && seen[p.InterfaceID] {
 			p.Admitted, p.Reason = false, reasonSameInterface
@@ -405,6 +415,15 @@ func (e *Escalator) admit(a directory.Address, payload []byte) database.RoutePla
 		p.AdapterMode = modeAPRS
 		p.CompletionRule = database.OutcomeAckedStation
 		e.admitGateway(&p, a.Kind, payload)
+		return p
+	case directory.KindMQTT:
+		// Stage 2: "bridge:<id>" through the Hub app route (C4); any other MQTT address
+		// has no route on the intent path. [MESHSAT-1584]
+		if !isHubAddress(a) {
+			p.Reason = reasonNotEnabled
+			return p
+		}
+		e.admitHub(&p, payload)
 		return p
 	case directory.KindSMS:
 		// Stage 1b, a paid route (B9): one SMS through the kit's modem;

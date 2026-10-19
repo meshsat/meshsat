@@ -37,6 +37,7 @@ import (
 	"meshsat/internal/gateway"
 	"meshsat/internal/hemb"
 	"meshsat/internal/hubreporter"
+	"meshsat/internal/hubroute"
 	"meshsat/internal/keystore"
 	"meshsat/internal/oob"
 	"meshsat/internal/relayclient"
@@ -2484,6 +2485,41 @@ func main() {
 			return health
 		}
 		hubReporter = hubreporter.NewHubReporter(reporterCfg, birthFn, healthFn)
+
+		// hub_msg, the Hub app route (HeMB-NG stage 2, MESHSAT-1584): a delivery intent to a
+		// contact's "bridge:<id>" goes through the Hub on hub_0, and what the Hub delivers here
+		// is committed in the inbox, answered, then met by the access rules as hub_0. Off
+		// until MESHSAT_HUB_MSG_ROUTE is set, on the Hub as on the bridges.
+		if hubroute.Enabled() {
+			if err := hubroute.EnsureInterface(db); err != nil {
+				log.Error().Err(err).Msg("hub_msg: the link hub_0 could not be made; the route stays off")
+			} else {
+				escCfg := engine.DefaultEscalatorConfig()
+				hubMsgRoute := hubroute.New(db, hubReporter, hubroute.Config{
+					ReceiptAllow:     time.Duration(escCfg.HubReceiptAllowS) * time.Second,
+					ClockEstablished: clockGuard.Trusted,
+				})
+				// Evidence after a restart, before this process sent anything, still
+				// reaches the ledger.
+				hubMsgRoute.SetIntentReceiptSink(intentReceipts.Record)
+				hubMsgRoute.SetHandoff(func(h database.HubHandoff) error {
+					data, _ := json.Marshal(map[string]any{"source": "hub", "iface": hubroute.InterfaceID, "from": h.From,
+						"text": h.Text, "bytes": len(h.Text), "plain": true})
+					if proc != nil {
+						proc.Emit(transport.MeshEvent{Type: "inbound", Message: fmt.Sprintf("Received from %s through the Hub", h.From),
+							Data: data, Time: time.Now().UTC().Format(time.RFC3339Nano)})
+					}
+					dispatcher.DispatchAccess(hubroute.InterfaceID, rules.RouteMessage{Text: h.Text, From: h.From, PortNum: 1, Plain: true},
+						[]byte(h.Text))
+					return nil
+				})
+				hubReporter.SetMsgHandlers(hubMsgRoute.HandleIn, hubMsgRoute.HandleStatus)
+				dispatcher.SetHubRoute(hubMsgRoute)
+				dispatcher.StartWorker(ctx, hubroute.InterfaceID, "hub")
+				go hubMsgRoute.Run(ctx, 30*time.Second)
+				log.Info().Str("bridge", hubReporter.Principal()).Msg("hub_msg: route on")
+			}
+		}
 
 		// Outbox for offline queuing
 		outbox := hubreporter.NewOutbox(db.DB.DB, 10000, 7*24*time.Hour)

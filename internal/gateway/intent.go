@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"sync/atomic"
+	"time"
 )
 
 // A gateway that can carry a delivery intent's attempt (HeMB-NG r3 D18,
@@ -58,6 +59,10 @@ type IntentSend struct {
 	PlainText   string // the text before the transforms, for a history the operator reads
 	CorrValue   string // chosen before the send, stored with the handoff
 	MsgRef      string
+	// MessageID is the intent's id, the message's logical id (C1, the mid of hub_msg), and
+	// MessageExpiresAt its deadline, the same for every attempt of the message.
+	MessageID        string
+	MessageExpiresAt time.Time
 }
 
 // Outcome classes, as database.Class* (not imported here).

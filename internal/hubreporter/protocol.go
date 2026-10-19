@@ -152,6 +152,12 @@ func (t Topics) TAKCoTOut(bridgeID string) string {
 	return fmt.Sprintf(topicTAKCoTOut, t.Root(), topicSegment(bridgeID))
 }
 
+// Msg is one of a bridge's hub_msg topics, {root}/bridge/<bridge id>/msg/<kind>: "out" and
+// "ack" the bridge publishes, "in" and "status" only the Hub may (MESHSAT-1584).
+func (t Topics) Msg(bridgeID, kind string) string {
+	return fmt.Sprintf("%s/bridge/%s/msg/%s", t.Root(), topicSegment(bridgeID), kind)
+}
+
 func (t Topics) takCoTIn() string { return fmt.Sprintf(topicTAKCoTIn, t.Root()) }
 
 // TAKCoTInFilters are the two subscriptions that receive what the Hub

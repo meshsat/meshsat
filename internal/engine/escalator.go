@@ -59,6 +59,10 @@ type EscalatorConfig struct {
 	ReceiptAllowS int           // MESHSAT_INTENT_RECEIPT_ALLOW_S, 120
 	ExpiryAllowS  int           // MESHSAT_INTENT_EXPIRY_S, 3600
 	MeshMTU       int           // MESHSAT_MESH_MTU, 100
+	// The Hub app route's own allowances (C4): MESHSAT_HUB_ROUTE_QUEUE_ALLOW_S, 30, and
+	// MESHSAT_HUB_ROUTE_RECEIPT_ALLOW_S, 120. [MESHSAT-1584]
+	HubQueueAllowS   int
+	HubReceiptAllowS int
 	// RestartSlack is what a restart adds to every active intent's
 	// elapsed time: the most a missed heartbeat can hide.
 	RestartSlack time.Duration
@@ -75,13 +79,15 @@ func DefaultEscalatorConfig() EscalatorConfig {
 	}
 	hb := time.Duration(envInt("MESHSAT_INTENT_HEARTBEAT_S", 10)) * time.Second
 	return EscalatorConfig{
-		Heartbeat:     hb,
-		QueueAllowS:   envInt("MESHSAT_INTENT_QUEUE_ALLOW_S", 120),
-		ReceiptAllowS: envInt("MESHSAT_INTENT_RECEIPT_ALLOW_S", 120),
-		ExpiryAllowS:  envInt("MESHSAT_INTENT_EXPIRY_S", 3600),
-		MeshMTU:       meshBearerMTU(),
-		RestartSlack:  hb,
-		MaxDowntime:   24 * time.Hour,
+		Heartbeat:        hb,
+		QueueAllowS:      envInt("MESHSAT_INTENT_QUEUE_ALLOW_S", 120),
+		ReceiptAllowS:    envInt("MESHSAT_INTENT_RECEIPT_ALLOW_S", 120),
+		ExpiryAllowS:     envInt("MESHSAT_INTENT_EXPIRY_S", 3600),
+		MeshMTU:          meshBearerMTU(),
+		HubQueueAllowS:   envInt("MESHSAT_HUB_ROUTE_QUEUE_ALLOW_S", 30),
+		HubReceiptAllowS: envInt("MESHSAT_HUB_ROUTE_RECEIPT_ALLOW_S", 120),
+		RestartSlack:     hb,
+		MaxDowntime:      24 * time.Hour,
 	}
 }
 
@@ -636,7 +642,8 @@ func correctsAcceptance(next, current string) bool {
 // possibly sent beats the rest.
 func outcomeStrength(o string) int {
 	switch o {
-	case database.OutcomeDeliveredHandset, database.OutcomeDeliveredDevice, database.OutcomeAcceptedDestinationNode, database.OutcomeAckedStation:
+	case database.OutcomeDeliveredHandset, database.OutcomeDeliveredDevice, database.OutcomeAcceptedDestinationNode, database.OutcomeAckedStation,
+		database.OutcomeDeliveredApp:
 		return 4
 	case database.OutcomeAcceptedUnconfirmed:
 		return 3
