@@ -23,6 +23,16 @@ import (
 // @Description radio loss: a local
 // @Description refusal never reached the air, and an unknown is not proven data
 // @Description loss. intents counts the intents made in the window by outcome.
+// @Description coverage: intents pruned by retention are counted from the facts
+// @Description the prune kept (archived_attempts, archived_intents); attempts
+// @Description whose intent was pruned before those facts were kept cannot be
+// @Description placed: they are unavailable_attempts (and unavailable_intents),
+// @Description in no stage, and complete is false. A window with nothing in it
+// @Description is complete with zero attempts. The bucket is the planned size
+// @Description (the plan's estimate at admission), not framed or billed bytes.
+// @Description since and until are answered as requested; the ledger keeps
+// @Description whole seconds, so a bound with a fraction counts from the next
+// @Description whole second, which keeps [since, until) as asked.
 // @Description Sends made with MESHSAT_DELIVERY_INTENTS off are not here
 // @Description (GET /api/deliveries/stats counts the legacy ledger).
 // @Tags deliveries

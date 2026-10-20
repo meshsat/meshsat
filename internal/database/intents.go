@@ -1724,7 +1724,9 @@ func (db *DB) CurrentTariff(ifaceID string) (*Tariff, error) {
 
 // PruneClosedIntents removes intents closed more than days ago (at least
 // one day), with their transmissions, evidence and the submissions left
-// with no intent. Attempt rows stay, as every delivery row does.
+// with no intent. Attempt rows stay, as every delivery row does. First, in
+// the same transaction, it keeps what the delivery statistics need of them
+// (delivery_attempt_facts, delivery_intent_facts: r23 R23-R1).
 func (db *DB) PruneClosedIntents(days int) (int64, error) {
 	if days < 1 {
 		days = 1
@@ -1732,6 +1734,9 @@ func (db *DB) PruneClosedIntents(days int) (int64, error) {
 	var n int64
 	err := db.withTx(func(tx *sqlx.Tx) error {
 		cutoff := "-" + strconv.Itoa(days) + " days"
+		if err := archiveIntentFacts(tx, `i.state = 'closed' AND i.closed_at < datetime('now', ?)`, cutoff); err != nil {
+			return fmt.Errorf("prune intents: %w", err)
+		}
 		if _, err := tx.Exec(`DELETE FROM delivery_evidence WHERE intent_id IN
 			(SELECT id FROM delivery_intents WHERE state = 'closed' AND closed_at < datetime('now', ?))`, cutoff); err != nil {
 			return err

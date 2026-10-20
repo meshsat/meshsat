@@ -1795,6 +1795,37 @@ var migrations = []string{
 		seen_at           TEXT NOT NULL,
 		PRIMARY KEY (contact_id, kind, value)
 	);`,
+
+	// v78: HeMB-NG stage 3 S3-3 (r23 R23-R1, R23-R3). The retention prune removes a closed
+	// intent with its plan, transmissions and evidence and keeps its attempt rows, which left
+	// the delivery statistics unable to place those attempts. Before it deletes them the prune
+	// now writes each attempt's facts as the statistics read them (bearer, interface, planned
+	// size, status, the receipt that completed it, whether it was handed off, the retries it
+	// spent) and each intent's outcome, so a pruned intent still counts. The two indexes let
+	// the statistics find an attempt's receipt and the attempts of a window without a scan.
+	// [MESHSAT-1584]
+	`CREATE TABLE IF NOT EXISTS delivery_attempt_facts (
+		attempt_id    INTEGER PRIMARY KEY,
+		intent_id     TEXT NOT NULL,
+		created_at    DATETIME NOT NULL,
+		bearer        TEXT NOT NULL DEFAULT '',
+		interface_id  TEXT NOT NULL DEFAULT '',
+		planned_bytes INTEGER NOT NULL DEFAULT 0,
+		status        TEXT NOT NULL,
+		completes     TEXT NOT NULL DEFAULT '',
+		handed_off    INTEGER NOT NULL DEFAULT 0,
+		retries       INTEGER NOT NULL DEFAULT 0
+	);
+	CREATE INDEX IF NOT EXISTS idx_delivery_attempt_facts_created ON delivery_attempt_facts(created_at);
+	CREATE TABLE IF NOT EXISTS delivery_intent_facts (
+		intent_id  TEXT PRIMARY KEY,
+		created_at DATETIME NOT NULL,
+		state      TEXT NOT NULL,
+		outcome    TEXT NOT NULL
+	);
+	CREATE INDEX IF NOT EXISTS idx_delivery_intent_facts_created ON delivery_intent_facts(created_at);
+	CREATE INDEX IF NOT EXISTS idx_delivery_evidence_attempt ON delivery_evidence(attempt_id);
+	CREATE INDEX IF NOT EXISTS idx_message_deliveries_intent_created ON message_deliveries(created_at) WHERE intent_id IS NOT NULL;`,
 }
 
 func (db *DB) migrate() error {
