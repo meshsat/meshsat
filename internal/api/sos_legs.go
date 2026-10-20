@@ -69,10 +69,10 @@ const (
 
 	// sosRunKey is where the SOS is kept (system_config).
 	sosRunKey = "sos_run"
-	// sosPrevRunsKey keeps the earlier runs whose cancellation is still owed (C10-R4), and
-	// sosPrevMax is the most kept (the oldest goes first).
+	// sosPrevRunsKey keeps the earlier runs whose cancellation is still owed (C10-R4): all of
+	// them, however many SOS follow; a run leaves only when its cancel is acked or its 24 h
+	// are over (C10-R7).
 	sosPrevRunsKey = "sos_prev_runs"
-	sosPrevMax     = 8
 	// sosMeshInterface is the mesh link the mesh leg waits on.
 	sosMeshInterface = "mesh_0"
 	// sosFrameDevice is the device an SOS frame from the Bridge itself
@@ -357,19 +357,17 @@ func (s *Server) sosFindLocked(id int64) *sosRun {
 }
 
 // sosKeepOwedLocked keeps the run about to be replaced when its cancellation is still owed
-// (a new SOS is no ack of the older one's cancel). The caller holds s.sos.mu.
+// (a new SOS is no ack of the older one's cancel). No count limit: an owed cancel is dropped
+// only by its ack or its 24 h (sosForget), never to make room (C10-R7). The caller holds
+// s.sos.mu.
 func (s *Server) sosKeepOwedLocked() {
 	old := s.sos.run
 	if old == nil || s.sos.active || old.CancelledAt == "" || !sosCancelOwed(old) {
 		return
 	}
 	s.sos.prev = append(s.sos.prev, old)
-	if len(s.sos.prev) > sosPrevMax {
-		dropped := s.sos.prev[0]
-		s.sos.prev = s.sos.prev[1:]
-		log.Warn().Int64("sos", dropped.ID).Msg("SOS: too many earlier runs owed a cancellation; the oldest is no longer followed")
-	}
-	log.Warn().Int64("sos", old.ID).Str("sos_id", old.SOSID).Msg("SOS: a new SOS starts; the last one's cancellation is still followed")
+	log.Warn().Int64("sos", old.ID).Str("sos_id", old.SOSID).Int("owed", len(s.sos.prev)).
+		Msg("SOS: a new SOS starts; the last one's cancellation is still followed")
 }
 
 // sosForget drops an earlier run whose cancellation is no longer owed.
