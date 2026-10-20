@@ -44,7 +44,8 @@ func now() string {
 const contactCols = `
 	id, tenant_id, display_name, given_name, family_name, org, role, team,
 	sidc, notes, trust_level, trust_verified_at, trust_verified_by,
-	hub_version, hub_etag, origin, legacy_contact_id, created_at, updated_at`
+	hub_version, hub_etag, origin, legacy_contact_id, created_at, updated_at,
+	local_override`
 
 func (s *SQLStore) CreateContact(ctx context.Context, c *Contact) error {
 	if c == nil {
@@ -59,6 +60,9 @@ func (s *SQLStore) CreateContact(ctx context.Context, c *Contact) error {
 	if c.Origin == "" {
 		c.Origin = OriginLocal
 	}
+	if c.LocalOverride == "" {
+		c.LocalOverride = "{}"
+	}
 	ts := now()
 	if c.CreatedAt == "" {
 		c.CreatedAt = ts
@@ -70,7 +74,7 @@ func (s *SQLStore) CreateContact(ctx context.Context, c *Contact) error {
 			:id, :tenant_id, :display_name, :given_name, :family_name, :org,
 			:role, :team, :sidc, :notes, :trust_level, :trust_verified_at,
 			:trust_verified_by, :hub_version, :hub_etag, :origin,
-			:legacy_contact_id, :created_at, :updated_at)`, c)
+			:legacy_contact_id, :created_at, :updated_at, :local_override)`, c)
 	return translateErr(err)
 }
 
@@ -242,7 +246,7 @@ func (s *SQLStore) DeleteContact(ctx context.Context, id string) error {
 
 const addrCols = `
 	id, contact_id, kind, value, subvalue, label, primary_rank, verified,
-	bearer_hint, max_cost_cents, created_at, updated_at`
+	bearer_hint, max_cost_cents, created_at, updated_at, origin`
 
 func (s *SQLStore) AddAddress(ctx context.Context, a *Address) error {
 	if a == nil {
@@ -268,10 +272,13 @@ func (s *SQLStore) AddAddress(ctx context.Context, a *Address) error {
 	if a.BearerHint == 0 {
 		a.BearerHint = 50
 	}
+	if a.Origin == "" {
+		a.Origin = string(OriginLocal)
+	}
 	_, err := s.db.NamedExecContext(ctx, `
 		INSERT INTO directory_addresses (`+addrCols+`) VALUES (
 			:id, :contact_id, :kind, :value, :subvalue, :label, :primary_rank,
-			:verified, :bearer_hint, :max_cost_cents, :created_at, :updated_at)`, a)
+			:verified, :bearer_hint, :max_cost_cents, :created_at, :updated_at, :origin)`, a)
 	return translateErr(err)
 }
 
@@ -441,7 +448,7 @@ func (s *SQLStore) setKeyStatus(ctx context.Context, id string, st KeyStatus) er
 
 const groupCols = `
 	id, tenant_id, display_name, kind, sidc, mls_group_id,
-	hub_version, hub_etag, created_at, updated_at`
+	hub_version, hub_etag, created_at, updated_at, origin`
 
 func (s *SQLStore) CreateGroup(ctx context.Context, g *Group) error {
 	if g == nil {
@@ -456,6 +463,9 @@ func (s *SQLStore) CreateGroup(ctx context.Context, g *Group) error {
 	if g.ID == "" {
 		g.ID = NewID()
 	}
+	if g.Origin == "" {
+		g.Origin = string(OriginLocal)
+	}
 	ts := now()
 	if g.CreatedAt == "" {
 		g.CreatedAt = ts
@@ -464,7 +474,7 @@ func (s *SQLStore) CreateGroup(ctx context.Context, g *Group) error {
 	_, err := s.db.NamedExecContext(ctx, `
 		INSERT INTO directory_groups (`+groupCols+`) VALUES (
 			:id, :tenant_id, :display_name, :kind, :sidc, :mls_group_id,
-			:hub_version, :hub_etag, :created_at, :updated_at)`, g)
+			:hub_version, :hub_etag, :created_at, :updated_at, :origin)`, g)
 	return translateErr(err)
 }
 
@@ -601,7 +611,7 @@ func (s *SQLStore) ListGroupMembers(ctx context.Context, groupID string) ([]Cont
 
 const policyCols = `
 	id, scope_type, scope_id, strategy, max_cost_cents, max_latency_ms,
-	allow_bearers, deny_bearers, precedence_override, seeded, created_at, updated_at`
+	allow_bearers, deny_bearers, precedence_override, seeded, created_at, updated_at, origin`
 
 func (s *SQLStore) GetPolicy(ctx context.Context, scope PolicyScope, scopeID string) (*DispatchPolicy, error) {
 	if scope == "" {
@@ -648,13 +658,15 @@ func (s *SQLStore) UpsertPolicy(ctx context.Context, p *DispatchPolicy) error {
 		p.CreatedAt = ts
 	}
 	p.UpdatedAt = ts
-	p.Seeded = false // a written row is somebody's choice, not a seed (v65)
+	p.Seeded = false               // a written row is somebody's choice, not a seed (v65)
+	p.Origin = string(OriginLocal) // and here, this bridge's operator's (v75)
 	_, err := s.db.NamedExecContext(ctx, `
 		INSERT INTO directory_dispatch_policy (`+policyCols+`) VALUES (
 			:id, :scope_type, :scope_id, :strategy, :max_cost_cents,
 			:max_latency_ms, :allow_bearers, :deny_bearers,
-			:precedence_override, :seeded, :created_at, :updated_at)
+			:precedence_override, :seeded, :created_at, :updated_at, :origin)
 		ON CONFLICT(scope_type, scope_id) DO UPDATE SET
+			origin = excluded.origin,
 			strategy = excluded.strategy,
 			max_cost_cents = excluded.max_cost_cents,
 			max_latency_ms = excluded.max_latency_ms,

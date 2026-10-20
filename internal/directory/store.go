@@ -137,6 +137,15 @@ const (
 	GroupMLS  GroupKind = "MLS_GROUP"
 )
 
+// Valid reports whether g is one of the four group kinds.
+func (g GroupKind) Valid() bool {
+	switch g {
+	case GroupTeam, GroupRole, GroupList, GroupMLS:
+		return true
+	}
+	return false
+}
+
 // Strategy is the dispatch mechanism for routing a message to a
 // recipient. See UX-AUDIT-AND-REDESIGN.md §4.2.3.
 type Strategy string
@@ -182,6 +191,10 @@ type Contact struct {
 	LegacyContactID *int64     `db:"legacy_contact_id" json:"-"`
 	CreatedAt       string     `db:"created_at"        json:"created_at"`
 	UpdatedAt       string     `db:"updated_at"        json:"updated_at"`
+	// LocalOverride is a JSON object of the fields this bridge's operator
+	// set on a Hub contact (display_name, notes); a snapshot keeps them.
+	// The display_name and notes columns hold the effective values. (v75)
+	LocalOverride string `db:"local_override" json:"local_override,omitempty"`
 
 	// Populated by Resolve and FindByAddress. Zero-length on lean
 	// Get/List queries.
@@ -239,6 +252,8 @@ type Address struct {
 	MaxCostCents *int   `db:"max_cost_cents" json:"max_cost_cents,omitempty"`
 	CreatedAt    string `db:"created_at"     json:"created_at"`
 	UpdatedAt    string `db:"updated_at"     json:"updated_at"`
+	// Origin is "local", or "hub:<tenant>" for what that tenant's Hub sent (v75).
+	Origin string `db:"origin" json:"origin"`
 }
 
 // ContactKey is a single key version attached to a contact.
@@ -269,6 +284,7 @@ type Group struct {
 	HubEtag     string    `db:"hub_etag"     json:"hub_etag,omitempty"`
 	CreatedAt   string    `db:"created_at"   json:"created_at"`
 	UpdatedAt   string    `db:"updated_at"   json:"updated_at"`
+	Origin      string    `db:"origin"       json:"origin"` // "local" or "hub:<tenant>" (v75)
 	Members     []string  `db:"-"            json:"members,omitempty"`
 }
 
@@ -292,6 +308,8 @@ type DispatchPolicy struct {
 	Seeded    bool   `db:"seeded"     json:"seeded"`
 	CreatedAt string `db:"created_at" json:"created_at"`
 	UpdatedAt string `db:"updated_at" json:"updated_at"`
+	// Origin is "local", or "hub:<tenant>" for a row a Hub snapshot set (v75).
+	Origin string `db:"origin" json:"origin"`
 }
 
 // ContactFilter is the selection criteria for ListContacts.

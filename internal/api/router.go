@@ -606,7 +606,11 @@ func (s *Server) Router() http.Handler {
 		r.Get("/directory/export/vcard", s.handleExportVCard)
 		r.Get("/directory/contacts", s.handleListDirectoryContacts) // the contacts send-to-contact resolves [MESHSAT-1584]
 		r.Get("/directory/policies", s.handleListDirectoryPolicies) // what each dispatch policy does [MESHSAT-1584]
-		r.Get("/delivery/tariffs", s.handleListTariffs)             // prices of the paid intent routes (B9) [MESHSAT-1584]
+		r.Get("/directory/groups", s.handleListDirectoryGroups)     // the Hub's teams and the bridge's own (C7) [MESHSAT-1584]
+		r.Get("/directory/state", s.handleDirectoryState)           // what the bridge applied of its Hub's directory [MESHSAT-1584]
+		r.Patch("/directory/contacts/{id}", s.handleEditDirectoryContact)
+		r.Post("/directory/contacts/{id}/addresses", s.handleAddDirectoryAddress)
+		r.Get("/delivery/tariffs", s.handleListTariffs) // prices of the paid intent routes (B9) [MESHSAT-1584]
 		r.Post("/delivery/tariffs", s.handleCreateTariff)
 
 		// Contact-aware send [MESHSAT-545 / S2-02]. Wraps

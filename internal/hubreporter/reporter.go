@@ -622,6 +622,14 @@ func (r *HubReporter) PublishTAKCoT(xml []byte) error {
 // publishBirth collects and publishes the bridge birth certificate.
 // If signing credentials are available, the birth is signed with
 // ECDSA-P256-SHA256 using the bridge's TLS private key.
+// RepublishBirth publishes the birth again while connected, for a fact in
+// it that changed (the directory key pinned after the connect).
+func (r *HubReporter) RepublishBirth() {
+	if r.IsConnected() {
+		r.publishBirth()
+	}
+}
+
 func (r *HubReporter) publishBirth() {
 	birth := r.birthData()
 	birth.Protocol = ProtocolVersion

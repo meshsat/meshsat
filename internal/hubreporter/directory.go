@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"crypto/sha256"
-	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -20,21 +19,43 @@ import (
 // so this package stays free of a hard dependency on the bridge's
 // storage layer. [MESHSAT-540]
 type DirectoryApplier interface {
-	// ApplySnapshot replaces the tenant's directory state with the
-	// given snapshot. The handler verifies the ECDSA-P256 signature
-	// before invoking this, so implementations may treat the payload
-	// as trusted. The report names the policy rows applied and those
-	// refused, and the command reply carries it.
+	// ApplySnapshot applies a full snapshot in one transaction with its
+	// version (C7.4). The handler verifies the signature before invoking
+	// this, so implementations may treat the payload as trusted. A
+	// snapshot of another tenant, or not newer than the version applied,
+	// is a report with Applied false and the reason, not an error.
 	ApplySnapshot(ctx context.Context, snap *DirectorySnapshot) (DirectoryApplyReport, error)
+	// ApplyRotation trusts newKeyPKIX from now on, with the record's
+	// version, after the handler verified the record under the key the
+	// bridge trusted (C7.6).
+	ApplyRotation(ctx context.Context, tenantID string, version int64, newKeyPKIX []byte) (DirectoryApplyReport, error)
 }
 
-// DirectoryApplyReport is what a directory_push did with the snapshot's
-// dispatch policies: each row is applied or refused by name, and the
-// supported rows of a push apply whatever the others are (HeMB-NG r3
-// D12, S2). [MESHSAT-1584]
+// DirectoryApplyReport is what a directory_push did: whether it applied,
+// and why not; each policy row applied or refused by name, the supported
+// rows of a push applying whatever the others are (HeMB-NG r3 D12, S2);
+// the rows it could not store, with their reasons. [MESHSAT-1584]
 type DirectoryApplyReport struct {
+	Applied          bool              `json:"applied"`
+	Reason           string            `json:"reason,omitempty"`
+	Detail           string            `json:"detail,omitempty"`
+	AppliedVersion   int64             `json:"applied_version"`
+	Contacts         int               `json:"contacts"`
+	ContactsRemoved  int               `json:"contacts_removed"`
+	ContactsKept     int               `json:"contacts_kept_local"`
+	Groups           int               `json:"groups"`
 	PoliciesApplied  []string          `json:"policies_applied"`
 	PoliciesRejected []PolicyRejection `json:"policies_rejected"`
+	PoliciesReverted int               `json:"policies_reverted"`
+	Skipped          []DirectorySkip   `json:"skipped"`
+}
+
+// DirectorySkip is a snapshot row the bridge did not store, and why.
+type DirectorySkip struct {
+	Kind   string `json:"kind"`
+	ID     string `json:"id"`
+	Reason string `json:"reason"`
+	Detail string `json:"detail,omitempty"`
 }
 
 // PolicyRejection is a pushed policy row the bridge did not apply.
@@ -67,6 +88,8 @@ type TrustAnchorStore interface {
 // signed by the Hub's own code; their test fails when the types drift.
 // [MESHSAT-1584]
 type DirectorySnapshot struct {
+	// Format is how the snapshot arrived, "v1" or "v2"; not on the wire.
+	Format    string             `json:"-"`
 	TenantID  string             `json:"tenant_id"`
 	Version   int64              `json:"version"`
 	Etag      string             `json:"etag,omitempty"`
@@ -158,6 +181,9 @@ type DirectoryPolicy struct {
 	RetryDelay        time.Duration `json:"retry_delay,omitempty"`
 	CreatedAt         time.Time     `json:"created_at"`
 	UpdatedAt         time.Time     `json:"updated_at"`
+	// Seeded is the Hub's mark on its own precedence defaults (v2, C7.7);
+	// absent from a v1 snapshot, so its bytes are unchanged.
+	Seeded *bool `json:"seeded,omitempty"`
 }
 
 // SetDirectoryApplier wires the concrete snapshot applier. When unset
@@ -171,12 +197,15 @@ func (ch *CommandHandler) SetDirectoryApplier(a DirectoryApplier) { ch.dirApplie
 // closed rather than trusting the snapshot payload.
 func (ch *CommandHandler) SetTrustAnchorStore(s TrustAnchorStore) { ch.trustStore = s }
 
-// handleDirectoryPush verifies the snapshot signature against the
-// pinned Hub trust anchor (PKIX-DER ECDSA-P256 pubkey) and then
-// invokes DirectoryApplier. Byte-equality with the Hub's canonical
-// form (api.CanonicalSnapshotBytes) is achieved by round-tripping
-// through encoding/json with the Signature field zeroed — the same
-// strategy the Hub uses before signing.
+// handleDirectoryPush verifies a directory_push and applies it. A v2
+// envelope ({"v":2,...}) is verified over its exact payload bytes BEFORE
+// the payload is parsed, so a field this bridge does not know is still
+// covered by the signature (C7.2). A v1 snapshot is verified as before: by
+// re-encoding what was parsed with the Signature zeroed, which matches the
+// Hub's api.CanonicalSnapshotBytes only while these types carry every
+// field the Hub sends. Either way the key is the one the bridge pinned.
+// The answer says whether it applied, the version the bridge holds after
+// it, and the key it trusts. [MESHSAT-540, MESHSAT-1584]
 func (ch *CommandHandler) handleDirectoryPush(cmd Command) (json.RawMessage, error) {
 	if ch.dirApplier == nil {
 		return nil, fmt.Errorf("directory applier not configured")
@@ -184,45 +213,39 @@ func (ch *CommandHandler) handleDirectoryPush(cmd Command) (json.RawMessage, err
 	if ch.trustStore == nil {
 		return nil, fmt.Errorf("directory trust anchor not configured")
 	}
-	var snap DirectorySnapshot
-	if err := json.Unmarshal(cmd.Payload, &snap); err != nil {
-		return nil, fmt.Errorf("parse directory_push payload: %w", err)
-	}
-	if len(snap.Signature) == 0 {
-		return nil, fmt.Errorf("directory_push: unsigned snapshot rejected")
-	}
 	pubPKIX, err := ch.trustStore.GetDirectoryTrustAnchor()
 	if err != nil || len(pubPKIX) == 0 {
 		return nil, fmt.Errorf("directory_push: no pinned trust anchor (run pairing first)")
 	}
-	pubAny, err := x509.ParsePKIXPublicKey(pubPKIX)
-	if err != nil {
-		return nil, fmt.Errorf("directory_push: parse pinned pubkey: %w", err)
+	var probe struct {
+		V int `json:"v"`
 	}
-	pub, ok := pubAny.(*ecdsa.PublicKey)
-	if !ok {
-		return nil, fmt.Errorf("directory_push: pinned pubkey is not ECDSA-P256")
-	}
-	// Recreate the signed bytes by zeroing Signature on a copy and
-	// marshalling via encoding/json — matches the Hub's
-	// api.CanonicalSnapshotBytes routine exactly.
-	toVerify := snap
-	toVerify.Signature = nil
-	canonical, err := json.Marshal(&toVerify)
-	if err != nil {
-		return nil, fmt.Errorf("directory_push: canonicalise: %w", err)
-	}
-	digest := sha256.Sum256(canonical)
-	if !ecdsa.VerifyASN1(pub, digest[:], snap.Signature) {
-		// Still refused. Say so when the cause may be a Hub field this
-		// bridge's types do not carry: dropped on decode, it changes the
-		// bytes the signature covers.
-		strict := json.NewDecoder(bytes.NewReader(cmd.Payload))
-		strict.DisallowUnknownFields()
-		if err := strict.Decode(&DirectorySnapshot{}); err != nil {
-			return nil, fmt.Errorf("directory_push: signature verification failed; the snapshot has a field this bridge does not know (%v), update the bridge", err)
+	_ = json.Unmarshal(cmd.Payload, &probe)
+	var snap DirectorySnapshot
+	if probe.V == EnvelopeVersion {
+		payload, err := OpenEnvelope(cmd.Payload, pubPKIX)
+		if err != nil {
+			return nil, fmt.Errorf("directory_push: %w", err)
 		}
-		return nil, fmt.Errorf("directory_push: signature verification failed")
+		var head struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(payload, &head); err != nil {
+			return nil, fmt.Errorf("directory_push: parse payload: %w", err)
+		}
+		if head.Type != "" && head.Type != "snapshot" {
+			return nil, fmt.Errorf("directory_push: the payload is a %q, not a snapshot", head.Type)
+		}
+		if err := json.Unmarshal(payload, &snap); err != nil {
+			return nil, fmt.Errorf("directory_push: parse payload: %w", err)
+		}
+		snap.Signature = nil
+		snap.Format = "v2"
+	} else {
+		if err := verifyV1(cmd.Payload, pubPKIX, &snap); err != nil {
+			return nil, err
+		}
+		snap.Format = "v1"
 	}
 
 	report, err := ch.dirApplier.ApplySnapshot(context.Background(), &snap)
@@ -234,67 +257,133 @@ func (ch *CommandHandler) handleDirectoryPush(cmd Command) (json.RawMessage, err
 			Str("reason", rj.Reason).Str("detail", rj.Detail).Str("request_id", cmd.RequestID).
 			Msg("commander: directory_push policy not applied")
 	}
-	log.Info().
-		Str("tenant_id", snap.TenantID).
-		Int64("version", snap.Version).
-		Int("contacts", len(snap.Contacts)).
-		Int("groups", len(snap.Groups)).
-		Int("policies", len(snap.Policies)).
-		Int("policies_applied", len(report.PoliciesApplied)).
-		Int("policies_rejected", len(report.PoliciesRejected)).
-		Str("request_id", cmd.RequestID).
-		Msg("commander: directory_push applied")
+	for _, sk := range report.Skipped {
+		log.Warn().Str("kind", sk.Kind).Str("id", sk.ID).Str("reason", sk.Reason).Str("detail", sk.Detail).
+			Str("request_id", cmd.RequestID).Msg("commander: directory_push row not stored")
+	}
+	ev := log.Info()
+	if !report.Applied {
+		ev = log.Warn().Str("reason", report.Reason).Str("detail", report.Detail)
+	}
+	ev.Str("tenant_id", snap.TenantID).Int64("version", snap.Version).Int64("applied_version", report.AppliedVersion).
+		Str("format", snap.Format).Bool("applied", report.Applied).Int("contacts", report.Contacts).
+		Int("groups", report.Groups).Int("policies", len(snap.Policies)).
+		Int("policies_applied", len(report.PoliciesApplied)).Int("policies_rejected", len(report.PoliciesRejected)).
+		Int("skipped", len(report.Skipped)).Str("request_id", cmd.RequestID).Msg("commander: directory_push")
+	return directoryAnswer(snap.TenantID, snap.Version, snap.Format, KeyID(pubPKIX), report)
+}
+
+// directoryAnswer is the result a directory command answers with (the
+// Hub's DirectoryPushAnswer).
+func directoryAnswer(tenantID string, version int64, format, keyID string, report DirectoryApplyReport) (json.RawMessage, error) {
 	if report.PoliciesApplied == nil {
 		report.PoliciesApplied = []string{}
 	}
 	if report.PoliciesRejected == nil {
 		report.PoliciesRejected = []PolicyRejection{}
 	}
-	result := struct {
+	if report.Skipped == nil {
+		report.Skipped = []DirectorySkip{}
+	}
+	return json.Marshal(struct {
 		TenantID string `json:"tenant_id"`
 		Version  int64  `json:"version"`
-		Applied  bool   `json:"applied"`
+		Format   string `json:"format,omitempty"`
+		KeyID    string `json:"key_id"`
 		DirectoryApplyReport
-	}{snap.TenantID, snap.Version, true, report}
-	out, _ := json.Marshal(result)
-	return out, nil
+	}{tenantID, version, format, keyID, report})
 }
 
-// handleDirectoryTrustAnchorRotate stores a new Hub directory-signing
-// public key, replacing the pinned anchor. Subsequent directory_push
-// snapshots are verified against the new key; snapshots signed by
-// the previous key are rejected.
-func (ch *CommandHandler) handleDirectoryTrustAnchorRotate(cmd Command) (json.RawMessage, error) {
-	if ch.trustStore == nil {
-		return nil, fmt.Errorf("directory trust anchor store not configured")
+// verifyV1 checks a v1 snapshot's signature: the snapshot re-encoded with
+// Signature zeroed, as the Hub signed it.
+func verifyV1(raw []byte, pubPKIX []byte, snap *DirectorySnapshot) error {
+	if err := json.Unmarshal(raw, snap); err != nil {
+		return fmt.Errorf("parse directory_push payload: %w", err)
 	}
-	var p struct {
-		PublicKey []byte `json:"public_key"`
-		Algorithm string `json:"algorithm"`
-		Version   int    `json:"version"`
+	if len(snap.Signature) == 0 {
+		return fmt.Errorf("directory_push: unsigned snapshot rejected")
 	}
-	if err := json.Unmarshal(cmd.Payload, &p); err != nil {
-		return nil, fmt.Errorf("parse directory_trust_anchor_rotate payload: %w", err)
-	}
-	if len(p.PublicKey) == 0 {
-		return nil, fmt.Errorf("directory_trust_anchor_rotate: public_key required")
-	}
-	if p.Algorithm != "" && p.Algorithm != "ecdsa-p256" {
-		return nil, fmt.Errorf("directory_trust_anchor_rotate: unsupported algorithm %q", p.Algorithm)
-	}
-	// Validate the PKIX-DER shape before persisting so operators see
-	// a rejection at the MQTT layer rather than a later silent
-	// failure inside directory_push.
-	parsed, err := x509.ParsePKIXPublicKey(p.PublicKey)
+	pub, err := p256Key(pubPKIX)
 	if err != nil {
-		return nil, fmt.Errorf("directory_trust_anchor_rotate: pubkey parse: %w", err)
+		return fmt.Errorf("directory_push: pinned pubkey: %w", err)
 	}
-	if _, ok := parsed.(*ecdsa.PublicKey); !ok {
-		return nil, fmt.Errorf("directory_trust_anchor_rotate: pubkey is not ECDSA")
+	toVerify := *snap
+	toVerify.Signature = nil
+	canonical, err := json.Marshal(&toVerify)
+	if err != nil {
+		return fmt.Errorf("directory_push: canonicalise: %w", err)
 	}
-	if err := ch.trustStore.SetDirectoryTrustAnchor(p.PublicKey); err != nil {
-		return nil, fmt.Errorf("directory_trust_anchor_rotate: persist: %w", err)
+	digest := sha256.Sum256(canonical)
+	if !ecdsa.VerifyASN1(pub, digest[:], snap.Signature) {
+		// Still refused. Say so when the cause may be a Hub field this
+		// bridge's types do not carry: dropped on decode, it changes the
+		// bytes the signature covers.
+		strict := json.NewDecoder(bytes.NewReader(raw))
+		strict.DisallowUnknownFields()
+		if err := strict.Decode(&DirectorySnapshot{}); err != nil {
+			return fmt.Errorf("directory_push: signature verification failed; the snapshot has a field this bridge does not know (%v), update the bridge", err)
+		}
+		return fmt.Errorf("directory_push: signature verification failed")
 	}
-	log.Info().Int("version", p.Version).Msg("commander: directory trust anchor rotated")
-	return json.RawMessage(`{"rotated":true}`), nil
+	return nil
+}
+
+// handleDirectoryRotate takes one rotation record (C7.6): signed by the key
+// the bridge trusts, it names the new key, its id and a version; the
+// bridge trusts the new key from then on, if the record is of the tenant it
+// follows and above the version it holds. [MESHSAT-1584]
+func (ch *CommandHandler) handleDirectoryRotate(cmd Command) (json.RawMessage, error) {
+	if ch.dirApplier == nil || ch.trustStore == nil {
+		return nil, fmt.Errorf("directory applier or trust anchor not configured")
+	}
+	pinned, err := ch.trustStore.GetDirectoryTrustAnchor()
+	if err != nil || len(pinned) == 0 {
+		return nil, fmt.Errorf("directory_rotate: no pinned trust anchor")
+	}
+	payload, err := OpenEnvelope(cmd.Payload, pinned)
+	if err != nil {
+		return nil, fmt.Errorf("directory_rotate: %w", err)
+	}
+	var rec struct {
+		Type       string `json:"type"`
+		TenantID   string `json:"tenant_id"`
+		Version    int64  `json:"version"`
+		NewKeyID   string `json:"new_key_id"`
+		NewKeyPKIX []byte `json:"new_key_pkix"`
+	}
+	if err := json.Unmarshal(payload, &rec); err != nil {
+		return nil, fmt.Errorf("directory_rotate: parse record: %w", err)
+	}
+	if rec.Type != "rotation" {
+		return nil, fmt.Errorf("directory_rotate: the payload is a %q, not a rotation", rec.Type)
+	}
+	if KeyID(rec.NewKeyPKIX) != rec.NewKeyID {
+		return nil, fmt.Errorf("directory_rotate: the new key does not hash to its id")
+	}
+	if _, err := p256Key(rec.NewKeyPKIX); err != nil {
+		return nil, fmt.Errorf("directory_rotate: new key: %w", err)
+	}
+	report, err := ch.dirApplier.ApplyRotation(context.Background(), rec.TenantID, rec.Version, rec.NewKeyPKIX)
+	if err != nil {
+		return nil, fmt.Errorf("directory_rotate: apply: %w", err)
+	}
+	trusted := KeyID(pinned)
+	if report.Applied {
+		trusted = rec.NewKeyID
+		log.Info().Str("tenant_id", rec.TenantID).Int64("version", rec.Version).Str("key_id", trusted).
+			Msg("commander: directory key rotated by a signed record")
+	} else {
+		log.Warn().Str("tenant_id", rec.TenantID).Int64("version", rec.Version).Str("reason", report.Reason).
+			Str("detail", report.Detail).Msg("commander: directory_rotate not applied")
+	}
+	return directoryAnswer(rec.TenantID, rec.Version, "v2", trusted, report)
+}
+
+// handleDirectoryTrustAnchorRotate refuses the unsigned rotate earlier
+// bridges took: anyone who could publish it could make the bridge trust
+// their key (C7.6). A key moves only by a directory_rotate record signed by
+// the key the bridge trusts. [MESHSAT-1584]
+func (ch *CommandHandler) handleDirectoryTrustAnchorRotate(cmd Command) (json.RawMessage, error) {
+	log.Warn().Str("request_id", cmd.RequestID).Msg("commander: unsigned directory_trust_anchor_rotate refused")
+	return nil, fmt.Errorf("directory_trust_anchor_rotate refused: the directory key moves only by a directory_rotate record signed by the key this bridge trusts")
 }

@@ -21,6 +21,10 @@ type fakeApplier struct {
 	applied    *DirectorySnapshot
 	applyError error
 	report     DirectoryApplyReport
+	rotTenant  string
+	rotVersion int64
+	rotKey     []byte
+	rotReport  *DirectoryApplyReport
 }
 
 func (f *fakeApplier) ApplySnapshot(_ context.Context, s *DirectorySnapshot) (DirectoryApplyReport, error) {
@@ -28,6 +32,18 @@ func (f *fakeApplier) ApplySnapshot(_ context.Context, s *DirectorySnapshot) (Di
 	defer f.mu.Unlock()
 	f.applied = s
 	return f.report, f.applyError
+}
+
+// ApplyRotation records the rotation and answers rotReport, applied by
+// default with the record's version.
+func (f *fakeApplier) ApplyRotation(_ context.Context, tenantID string, version int64, key []byte) (DirectoryApplyReport, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rotTenant, f.rotVersion, f.rotKey = tenantID, version, key
+	if f.rotReport != nil {
+		return *f.rotReport, nil
+	}
+	return DirectoryApplyReport{Applied: true, AppliedVersion: version}, nil
 }
 
 // memTrustAnchorStore is an in-memory TrustAnchorStore for tests.
@@ -104,7 +120,8 @@ func newHandlerWithDeps(t *testing.T) (*CommandHandler, *fakeApplier, *memTrustA
 	}
 	ch.handlers["directory_push"] = ch.handleDirectoryPush
 	ch.handlers["directory_trust_anchor_rotate"] = ch.handleDirectoryTrustAnchorRotate
-	app := &fakeApplier{}
+	ch.handlers["directory_rotate"] = ch.handleDirectoryRotate
+	app := &fakeApplier{report: DirectoryApplyReport{Applied: true}}
 	anchor := &memTrustAnchorStore{}
 	ch.SetDirectoryApplier(app)
 	ch.SetTrustAnchorStore(anchor)
@@ -223,53 +240,21 @@ func TestDirectoryPush_ApplierErrorSurfaces(t *testing.T) {
 	}
 }
 
-func TestDirectoryTrustAnchorRotate_HappyPath(t *testing.T) {
+// The unsigned rotate is refused whatever it carries: anyone who could
+// publish it could make the bridge trust their key (C7.6). [MESHSAT-1584]
+func TestDirectoryTrustAnchorRotate_Refused(t *testing.T) {
 	ch, _, anchor := newHandlerWithDeps(t)
+	pinned, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	anchor.pub, _ = x509.MarshalPKIXPublicKey(&pinned.PublicKey)
+	before := append([]byte(nil), anchor.pub...)
 	newPriv, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	newPKIX, _ := x509.MarshalPKIXPublicKey(&newPriv.PublicKey)
-
-	payload, _ := json.Marshal(map[string]any{
-		"public_key": newPKIX,
-		"algorithm":  "ecdsa-p256",
-		"version":    2,
-	})
-	_, err := ch.handleDirectoryTrustAnchorRotate(Command{Payload: payload})
-	if err != nil {
-		t.Fatalf("rotate: %v", err)
-	}
-	if len(anchor.pub) == 0 {
-		t.Error("anchor not persisted")
-	}
-	// Round-trip through store must parse back as ECDSA-P256.
-	pubAny, err := x509.ParsePKIXPublicKey(anchor.pub)
-	if err != nil {
-		t.Errorf("stored pubkey not parseable: %v", err)
-	}
-	if _, ok := pubAny.(*ecdsa.PublicKey); !ok {
-		t.Error("stored pubkey is not ECDSA")
-	}
-}
-
-func TestDirectoryTrustAnchorRotate_InvalidKeyRejected(t *testing.T) {
-	ch, _, _ := newHandlerWithDeps(t)
-	payload, _ := json.Marshal(map[string]any{
-		"public_key": []byte{0x00, 0x01, 0x02},
-	})
+	payload, _ := json.Marshal(map[string]any{"public_key": newPKIX, "algorithm": "ecdsa-p256", "version": 2})
 	if _, err := ch.handleDirectoryTrustAnchorRotate(Command{Payload: payload}); err == nil {
-		t.Fatal("expected invalid-key rejection")
+		t.Fatal("an unsigned rotate was taken")
 	}
-}
-
-func TestDirectoryTrustAnchorRotate_WrongAlgorithmRejected(t *testing.T) {
-	ch, _, _ := newHandlerWithDeps(t)
-	anyPriv, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	pkix, _ := x509.MarshalPKIXPublicKey(&anyPriv.PublicKey)
-	payload, _ := json.Marshal(map[string]any{
-		"public_key": pkix,
-		"algorithm":  "ed25519",
-	})
-	if _, err := ch.handleDirectoryTrustAnchorRotate(Command{Payload: payload}); err == nil {
-		t.Fatal("expected algorithm rejection")
+	if string(anchor.pub) != string(before) {
+		t.Error("the pinned key moved")
 	}
 }
 
@@ -280,6 +265,7 @@ func TestDirectoryPush_ReplyNamesRefusedPolicies(t *testing.T) {
 	snap, pubPKIX, _ := newSignedSnapshot(t)
 	anchor.pub = pubPKIX
 	app.report = DirectoryApplyReport{
+		Applied:         true,
 		PoliciesApplied: []string{"p-ok"},
 		PoliciesRejected: []PolicyRejection{{ID: "p-bonded", ScopeType: "precedence", ScopeID: "Flash",
 			Strategy: "HEMB_BONDED", Reason: "unsupported_strategy", Detail: "HEMB_BONDED is not implemented by this bridge"}},

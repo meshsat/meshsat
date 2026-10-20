@@ -185,6 +185,7 @@ func NewCommandHandler(reporter *HubReporter, bridgeID string, healthFn func() B
 	// silent no-op.
 	ch.handlers["directory_push"] = ch.handleDirectoryPush
 	ch.handlers["directory_trust_anchor_rotate"] = ch.handleDirectoryTrustAnchorRotate
+	ch.handlers["directory_rotate"] = ch.handleDirectoryRotate
 
 	// Host-level BT/WiFi management via Hub MQTT. [MESHSAT-632]
 	ch.registerSysMgmtHandlers()

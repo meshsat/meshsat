@@ -2388,6 +2388,7 @@ func main() {
 			if routingID != nil {
 				caps = append(caps, "reticulum")
 			}
+			caps = append(caps, hubreporter.CapDirectoryV2)
 			hostname, _ := os.Hostname()
 			if hostname == "" {
 				hostname = hubBridgeID
@@ -2407,6 +2408,15 @@ func main() {
 			}
 			if hubCallsign != "" {
 				birth.CoTCallsign = hubCallsign
+			}
+			// What the bridge holds of its Hub's directory (C7.5, C7.6).
+			if st, err := directory.NewSQLStore(db.DB).GetHubState(ctx); err == nil {
+				birth.DirectoryVersion = st.Version
+			}
+			if v, err := db.GetSystemConfig(directory.RotationKeyConfig); err == nil && v != "" {
+				if der, err := hex.DecodeString(v); err == nil {
+					birth.DirectoryKeyID = hubreporter.KeyID(der)
+				}
 			}
 			if routingID != nil {
 				birth.Reticulum = &hubreporter.ReticulumInfo{
@@ -2754,6 +2764,11 @@ func main() {
 				Float64("lat", ev.Point.Lat).Float64("lon", ev.Point.Lon).
 				Msg("tak: CoT position stored from Hub relay")
 		})
+
+		// A bridge that has pinned no Hub directory key fetches it once over
+		// HTTPS and pins it; after that only a signed rotation moves it. The
+		// birth is published again so the Hub sees the key (C7.6).
+		go pinDirectoryKey(ctx, db, hubAPIURL, hubURL, hubReporter.RepublishBirth)
 
 		if err := hubReporter.Start(ctx); err != nil {
 			// A first connect that has not succeeded yet is not a failure: the
@@ -3491,32 +3506,81 @@ func (s *bridgeDirectoryTrustStore) GetDirectoryTrustAnchor() ([]byte, error) {
 	return hex.DecodeString(v)
 }
 
-// bridgeDirectoryApplier turns a verified Hub snapshot into writes
-// against the bridge's internal/directory SQLStore. Contacts are upserted
-// by ID; any rows not in the snapshot are left in place (delta semantics —
-// Hub must emit a follow-up revoke command to clear a removed contact).
-// [MESHSAT-540] Groups are not applied. Each dispatch policy row is
-// applied when the bridge implements it as written and refused by name
-// otherwise (supported: the strategies it implements now). [MESHSAT-1584]
+// pinDirectoryKey pins the Hub's directory signing key when none is: it
+// asks GET /api/relay/directory-key over HTTPS every 5 min until it has one,
+// then calls pinned. A pinned key is never replaced here. [MESHSAT-1584]
+func pinDirectoryKey(ctx context.Context, db *database.DB, hubAPIURL, mqttURL string, pinned func()) {
+	if hubAPIURL == "" {
+		hubAPIURL = relayclient.DeriveAPIURL(mqttURL)
+	}
+	if hubAPIURL == "" {
+		return
+	}
+	for {
+		if v, err := db.GetSystemConfig(directory.RotationKeyConfig); err == nil && v != "" {
+			return
+		}
+		pkix, err := hubreporter.FetchDirectoryKey(ctx, hubAPIURL)
+		if err == nil {
+			if err := db.SetSystemConfig(directory.RotationKeyConfig, hex.EncodeToString(pkix)); err == nil {
+				log.Info().Str("hub", hubAPIURL).Str("key_id", hubreporter.KeyID(pkix)).Msg("directory: Hub directory key pinned")
+				pinned()
+				return
+			}
+		} else {
+			log.Warn().Err(err).Str("hub", hubAPIURL).Msg("directory: Hub directory key not fetched, asking again in 5 min")
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(5 * time.Minute):
+		}
+	}
+}
+
+// bridgeDirectoryApplier turns a verified Hub snapshot into the bridge's
+// directory: a full snapshot, applied in one transaction with its version
+// (internal/directory ApplyHubSnapshot: ownership by origin, local edits
+// kept, the Hub's deletions applied, refusals recorded). Each dispatch
+// policy row is applied when the bridge implements it as written and
+// refused by name otherwise (supported: the strategies it implements now);
+// a row the Hub marks seeded never replaces the bridge's own. [MESHSAT-540,
+// MESHSAT-1584]
 type bridgeDirectoryApplier struct {
 	dir       *directory.SQLStore
 	supported func(directory.Strategy) bool
 }
 
 func (a *bridgeDirectoryApplier) ApplySnapshot(ctx context.Context, snap *hubreporter.DirectorySnapshot) (hubreporter.DirectoryApplyReport, error) {
-	var report hubreporter.DirectoryApplyReport
 	if snap == nil {
-		return report, fmt.Errorf("nil snapshot")
+		return hubreporter.DirectoryApplyReport{}, fmt.Errorf("nil snapshot")
 	}
-	if err := a.applyContacts(ctx, snap); err != nil {
-		return report, err
+	in := directory.HubSnapshot{TenantID: snap.TenantID, Version: snap.Version}
+	for _, c := range snap.Contacts {
+		hc := directory.HubContact{ID: c.ID, DisplayName: c.DisplayName, GivenName: c.GivenName, FamilyName: c.FamilyName,
+			Org: c.Org, Role: c.Role, Team: c.Team, SIDC: c.SIDC, Notes: c.Notes, TrustLevel: c.TrustLevel,
+			HubVersion: c.HubVersion, HubEtag: c.HubEtag}
+		if c.TrustVerifiedAt != nil {
+			t := c.TrustVerifiedAt.UTC().Format("2006-01-02 15:04:05")
+			hc.TrustVerifiedAt = &t
+		}
+		for _, ad := range c.Addresses {
+			hc.Addresses = append(hc.Addresses, directory.HubAddress{ID: ad.ID, Kind: ad.Kind, Value: ad.Value,
+				Subvalue: ad.Subvalue, Label: ad.Label, PrimaryRank: ad.PrimaryRank, Verified: ad.Verified,
+				BearerHint: ad.BearerHint, MaxCostCents: ad.MaxCostCents})
+		}
+		in.Contacts = append(in.Contacts, hc)
 	}
-	rows := make([]directory.PushedPolicy, 0, len(snap.Policies))
+	for _, g := range snap.Groups {
+		in.Groups = append(in.Groups, directory.HubGroup{ID: g.ID, Name: g.Name, Kind: g.Kind, SIDC: g.SIDC,
+			MLSGroupID: g.MLSGroupID, HubVersion: g.HubVersion, HubEtag: g.HubEtag, MemberIDs: g.MemberIDs})
+	}
 	for _, p := range snap.Policies {
-		rows = append(rows, directory.PushedPolicy{
+		in.Policies = append(in.Policies, directory.PushedPolicy{
 			ID: p.ID, ScopeType: p.ScopeType, ScopeID: p.ScopeID, Strategy: directory.Strategy(p.Strategy),
 			Preferred: p.Preferred, Fallback: p.Fallback, RequireEncryption: p.RequireEncryption,
 			MaxRetries: p.MaxRetries, RetryDelay: p.RetryDelay, CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt,
+			Seeded: p.Seeded,
 		})
 	}
 	supported := a.supported
@@ -3526,81 +3590,35 @@ func (a *bridgeDirectoryApplier) ApplySnapshot(ctx context.Context, snap *hubrep
 			return reason == ""
 		}
 	}
-	applied, rejected, err := a.dir.ApplyPushedPolicies(ctx, rows, supported)
-	report.PoliciesApplied = applied
-	for _, rj := range rejected {
-		report.PoliciesRejected = append(report.PoliciesRejected, hubreporter.PolicyRejection{
+	rep, err := a.dir.ApplyHubSnapshot(ctx, in, supported)
+	if err != nil {
+		return hubreporter.DirectoryApplyReport{}, err
+	}
+	return directoryReport(rep), nil
+}
+
+func (a *bridgeDirectoryApplier) ApplyRotation(ctx context.Context, tenantID string, version int64, newKeyPKIX []byte) (hubreporter.DirectoryApplyReport, error) {
+	rep, err := a.dir.ApplyHubRotation(ctx, tenantID, version, newKeyPKIX)
+	if err != nil {
+		return hubreporter.DirectoryApplyReport{}, err
+	}
+	return directoryReport(rep), nil
+}
+
+func directoryReport(rep directory.HubApplyReport) hubreporter.DirectoryApplyReport {
+	out := hubreporter.DirectoryApplyReport{Applied: rep.Applied, Reason: rep.Reason, Detail: rep.Detail,
+		AppliedVersion: rep.AppliedVersion, Contacts: rep.Contacts, ContactsRemoved: rep.ContactsRemoved,
+		ContactsKept: rep.ContactsKept, Groups: rep.Groups, PoliciesApplied: rep.PoliciesApplied,
+		PoliciesReverted: rep.PoliciesReverted}
+	for _, rj := range rep.PoliciesRejected {
+		out.PoliciesRejected = append(out.PoliciesRejected, hubreporter.PolicyRejection{
 			ID: rj.ID, ScopeType: rj.ScopeType, ScopeID: rj.ScopeID, Strategy: rj.Strategy, Reason: rj.Reason, Detail: rj.Detail,
 		})
 	}
-	if err != nil {
-		return report, err
+	for _, sk := range rep.Skipped {
+		out.Skipped = append(out.Skipped, hubreporter.DirectorySkip{Kind: sk.Kind, ID: sk.ID, Reason: sk.Reason, Detail: sk.Detail})
 	}
-	return report, nil
-}
-
-func (a *bridgeDirectoryApplier) applyContacts(ctx context.Context, snap *hubreporter.DirectorySnapshot) error {
-	for i := range snap.Contacts {
-		src := &snap.Contacts[i]
-		c := &directory.Contact{
-			ID:              src.ID,
-			TenantID:        src.TenantID,
-			DisplayName:     src.DisplayName,
-			GivenName:       src.GivenName,
-			FamilyName:      src.FamilyName,
-			Org:             src.Org,
-			Role:            src.Role,
-			Team:            src.Team,
-			SIDC:            src.SIDC,
-			Notes:           src.Notes,
-			TrustLevel:      directory.TrustLevel(src.TrustLevel),
-			TrustVerifiedBy: "",
-			HubVersion:      src.HubVersion,
-			HubEtag:         src.HubEtag,
-			Origin:          directory.Origin(src.Origin),
-			CreatedAt:       src.CreatedAt.UTC().Format("2006-01-02 15:04:05"),
-			UpdatedAt:       src.UpdatedAt.UTC().Format("2006-01-02 15:04:05"),
-		}
-		if src.TrustVerifiedAt != nil {
-			t := src.TrustVerifiedAt.UTC().Format("2006-01-02 15:04:05")
-			c.TrustVerifiedAt = &t
-		}
-		if err := a.dir.CreateContact(ctx, c); err != nil {
-			// On ErrConflict the contact already exists — update instead.
-			if errors.Is(err, directory.ErrConflict) {
-				if uerr := a.dir.UpdateContact(ctx, c); uerr != nil {
-					return fmt.Errorf("update contact %s: %w", c.ID, uerr)
-				}
-			} else {
-				return fmt.Errorf("create contact %s: %w", c.ID, err)
-			}
-		}
-		// Replace addresses atomically by deleting existing and
-		// inserting the snapshot set.
-		existing, _ := a.dir.ListAddresses(ctx, c.ID)
-		for _, old := range existing {
-			_ = a.dir.DeleteAddress(ctx, old.ID)
-		}
-		for j := range src.Addresses {
-			sa := &src.Addresses[j]
-			addr := &directory.Address{
-				ID:           sa.ID,
-				ContactID:    c.ID,
-				Kind:         directory.Kind(sa.Kind),
-				Value:        sa.Value,
-				Subvalue:     sa.Subvalue,
-				Label:        sa.Label,
-				PrimaryRank:  sa.PrimaryRank,
-				Verified:     sa.Verified,
-				BearerHint:   sa.BearerHint,
-				MaxCostCents: sa.MaxCostCents,
-			}
-			if err := a.dir.AddAddress(ctx, addr); err != nil && !errors.Is(err, directory.ErrConflict) {
-				return fmt.Errorf("add address %s: %w", addr.Value, err)
-			}
-		}
-	}
-	return nil
+	return out
 }
 
 func dcf77Enabled() bool {

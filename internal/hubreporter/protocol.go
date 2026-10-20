@@ -336,7 +336,16 @@ type BridgeBirth struct {
 	Timestamp    time.Time       `json:"timestamp"`
 	Certificate  string          `json:"certificate,omitempty"` // base64 PEM of bridge TLS cert
 	Signature    string          `json:"signature,omitempty"`   // base64 ECDSA-P256-SHA256 signature
+	// DirectoryVersion is the Hub directory version the bridge applied and
+	// DirectoryKeyID the id of the Hub key it trusts (C7.5, C7.6): the Hub
+	// pushes a newer snapshot, and the rotation records before it.
+	DirectoryVersion int64  `json:"directory_version,omitempty"`
+	DirectoryKeyID   string `json:"directory_key_id,omitempty"`
 }
+
+// CapDirectoryV2 in the birth's capabilities: this bridge verifies v2
+// directory envelopes and takes signed rotations (C7.2, C7.6).
+const CapDirectoryV2 = "directory_v2"
 
 // BridgeDeath is published when the bridge disconnects (explicit or LWT).
 // Topic: meshsat/bridge/{bridge_id}/death (QoS 1)

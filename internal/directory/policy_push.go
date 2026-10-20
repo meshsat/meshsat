@@ -23,6 +23,10 @@ type PushedPolicy struct {
 	RetryDelay        time.Duration
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
+	// Seeded is the Hub's own mark (v2 snapshots, C7.7): true for a
+	// precedence default the Hub installed, nil when the snapshot cannot
+	// say (v1), which falls back to the updated_at = created_at reading.
+	Seeded *bool
 }
 
 // Reasons a pushed policy row is not applied (HeMB-NG r3 D12, S2).
@@ -58,9 +62,15 @@ var hubSeeds = map[string]Strategy{
 // (group), a strategy it does not implement, a field it does not
 // implement (preferred and fallback bearers, required encryption, retry
 // settings: applying the strategy without them would claim behaviour the
-// bridge does not have), and an unedited Hub seed of ORDERED_FALLBACK
-// (re-seeding Priority to it is the owner's call, r3 D12).
+// bridge does not have), and a Hub default: one the Hub marks seeded (v2,
+// C7.7), or, from a v1 snapshot that cannot mark it, an unedited Hub seed
+// of ORDERED_FALLBACK (re-seeding Priority to it is the owner's call, r3
+// D12).
 func CheckPushedPolicy(p PushedPolicy, supported func(Strategy) bool) (reason, detail string) {
+	if p.Seeded != nil && *p.Seeded {
+		// A Hub default carries nobody's intent: the bridge keeps its own (C7.7).
+		return PushRejectSeededDefault, "a Hub default; the bridge keeps its own for the scope"
+	}
 	switch PolicyScope(p.ScopeType) {
 	case ScopeContact:
 		if p.ScopeID == "" {
@@ -95,7 +105,7 @@ func CheckPushedPolicy(p PushedPolicy, supported func(Strategy) bool) (reason, d
 	case p.MaxRetries != 0 || p.RetryDelay != 0:
 		return PushRejectField, "retry settings are not implemented"
 	}
-	if PolicyScope(p.ScopeType) == ScopePrecedence && p.Strategy == StrategyOrderedFallback &&
+	if p.Seeded == nil && PolicyScope(p.ScopeType) == ScopePrecedence && p.Strategy == StrategyOrderedFallback &&
 		hubSeeds[p.ScopeID] == p.Strategy && p.UpdatedAt.Equal(p.CreatedAt) {
 		return PushRejectSeededDefault, "unedited Hub default; re-seeding Priority to ORDERED_FALLBACK is the owner's call"
 	}

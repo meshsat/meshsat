@@ -1745,6 +1745,32 @@ var migrations = []string{
 	);
 	INSERT OR IGNORE INTO hub_op_missing (op_id, event_id, since)
 		SELECT op_id, '', replay_at FROM hub_ops WHERE replay_at IS NOT NULL;`,
+
+	// v75: HeMB-NG stage 2 C7, the directory from the Hub. Ownership by origin: what a
+	// tenant's Hub sent is 'hub:<tenant>', anything else 'local' (the contact column keeps
+	// its older values local, imported, qr, and 'hub' from a v1 apply, whose addresses are
+	// marked 'hub' here so they are the Hub's to replace). A full snapshot replaces only its
+	// own Hub's rows. local_override holds a local edit of a Hub contact (display name,
+	// notes) and survives every snapshot. directory_hub_state is one row: the tenant the
+	// bridge follows, the version it applied, and the last refusal with its reason.
+	// [MESHSAT-1584]
+	`ALTER TABLE directory_contacts ADD COLUMN local_override TEXT NOT NULL DEFAULT '{}';
+	ALTER TABLE directory_addresses ADD COLUMN origin TEXT NOT NULL DEFAULT 'local';
+	ALTER TABLE directory_groups ADD COLUMN origin TEXT NOT NULL DEFAULT 'local';
+	ALTER TABLE directory_group_members ADD COLUMN origin TEXT NOT NULL DEFAULT 'local';
+	ALTER TABLE directory_dispatch_policy ADD COLUMN origin TEXT NOT NULL DEFAULT 'local';
+	UPDATE directory_addresses SET origin = 'hub'
+		WHERE contact_id IN (SELECT id FROM directory_contacts WHERE origin = 'hub');
+	CREATE TABLE IF NOT EXISTS directory_hub_state (
+		id             INTEGER PRIMARY KEY CHECK (id = 1),
+		tenant_id      TEXT NOT NULL DEFAULT '',
+		version        INTEGER NOT NULL DEFAULT 0,
+		applied_at     TEXT NOT NULL DEFAULT '',
+		refused_reason TEXT NOT NULL DEFAULT '',
+		refused_detail TEXT NOT NULL DEFAULT '',
+		refused_at     TEXT NOT NULL DEFAULT ''
+	);
+	INSERT OR IGNORE INTO directory_hub_state (id) VALUES (1);`,
 }
 
 func (db *DB) migrate() error {
