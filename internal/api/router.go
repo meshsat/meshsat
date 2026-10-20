@@ -614,6 +614,8 @@ func (s *Server) Router() http.Handler {
 		r.Delete("/directory/contacts/{id}/addresses/{address_id}", s.handleDeleteDirectoryAddress)
 		r.Get("/delivery/tariffs", s.handleListTariffs) // prices of the paid intent routes (B9) [MESHSAT-1584]
 		r.Post("/delivery/tariffs", s.handleCreateTariff)
+		// What became of each intent attempt (stage 3, S3-3) [MESHSAT-1584]
+		r.Get("/delivery/stats", s.handleDeliveryOutcomeStats)
 
 		// Contact-aware send [MESHSAT-545 / S2-02]. Wraps
 		// Dispatcher.SendToRecipient — resolves the contact to its
