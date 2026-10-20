@@ -37,6 +37,8 @@ type NoRouteError struct {
 	Plan     []database.RoutePlanEntry
 	Oversize bool
 	Detail   string
+
+	requested, effective string // the strategies the plan was made for
 }
 
 func (e *NoRouteError) Error() string {
@@ -78,6 +80,7 @@ type IntentRequest struct {
 	Source         string // spa, api, hub
 	IdempotencyKey string
 	ContactID      string
+	GroupID        string // a team send (C8): the TEAM group, no contact
 	Body           []byte
 	Precedence     types.Precedence
 	Strategy       directory.Strategy // explicit; empty = the policy's
@@ -100,10 +103,14 @@ func (r IntentRequest) fingerprint() string {
 	if r.MaxCostCents != nil {
 		cost = *r.MaxCostCents
 	}
-	b, _ := json.Marshal(map[string]any{
+	canon := map[string]any{
 		"contact_id": r.ContactID, "payload_sha256": hex.EncodeToString(sum[:]),
 		"precedence": string(r.Precedence), "strategy": string(r.Strategy), "max_cost_cents": cost,
-	})
+	}
+	if r.GroupID != "" {
+		canon["group_id"] = r.GroupID // only then, so a contact send's hash is what it was
+	}
+	b, _ := json.Marshal(canon)
 	h := sha256.Sum256(b)
 	return hex.EncodeToString(h[:])
 }
@@ -133,33 +140,104 @@ func (e *Escalator) Submit(ctx context.Context, req IntentRequest) (*IntentSubmi
 			return e.loadSubmission(prev)
 		}
 	}
-	if e.d == nil || e.d.recipientResolver == nil {
-		return nil, errors.New("delivery intents: no recipient resolver")
-	}
-	contact, err := e.d.recipientResolver.Resolve(ctx, req.ContactID)
-	if err != nil {
-		return nil, fmt.Errorf("resolve contact %s: %w", req.ContactID, err)
-	}
-	if contact == nil || len(contact.Addresses) == 0 {
-		return nil, fmt.Errorf("contact %s has no addresses", req.ContactID)
-	}
-	requested, effective, reason, policyVersion, capCents, err := e.resolveIntentStrategy(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-
-	intentUUID, err := uuid.NewV7()
-	if err != nil {
-		return nil, err
-	}
 	subUUID, err := uuid.NewV7()
 	if err != nil {
 		return nil, err
 	}
+	ni, nre, err := e.prepareIntent(ctx, req, subUUID.String())
+	if err != nil {
+		return nil, err
+	}
+	if nre != nil {
+		return nil, nre
+	}
+	sub := database.DeliverySubmission{ID: subUUID.String(), Source: req.Source, IdempotencyKey: req.IdempotencyKey,
+		RequestSHA256: fp, IntentIDs: []string{ni.Intent.ID}}
+	return e.create(sub, []database.NewIntent{ni})
+}
+
+// create writes a submission and its intents in one transaction, then
+// starts the active ones.
+func (e *Escalator) create(sub database.DeliverySubmission, intents []database.NewIntent) (*IntentSubmission, error) {
+	existing, rowIDs, err := e.db.CreateSubmission(sub, intents)
+	if err != nil {
+		return nil, err
+	}
+	if existing != nil {
+		// A concurrent duplicate won the key: answer with it.
+		return e.loadSubmission(existing)
+	}
+	out := &IntentSubmission{Submission: sub, RowIDs: rowIDs}
+	for _, ni := range intents {
+		stored, err := e.db.GetIntent(ni.Intent.ID)
+		if err != nil {
+			return nil, err
+		}
+		out.Intents = append(out.Intents, *stored)
+		if stored.State != database.IntentActive {
+			continue
+		}
+		e.mu.Lock()
+		e.bases[stored.ID] = clockBase{ms: 0, at: e.clock.Now()}
+		e.mu.Unlock()
+		e.Notify(stored.ID)
+	}
+	return out, nil
+}
+
+// firstRound is round 1 of a plan (r3 section 3a), a copy: PRIMARY_ONLY
+// the primary route, which must admit; ORDERED_FALLBACK the first route
+// that admits; ALL_BEARERS every route that admits.
+func firstRound(plan []database.RoutePlanEntry, effective directory.Strategy) []database.RoutePlanEntry {
+	var first []database.RoutePlanEntry
+	switch effective {
+	case directory.StrategyPrimaryOnly:
+		if len(plan) > 0 && plan[0].Admitted {
+			first = append(first, plan[0])
+		}
+	case directory.StrategyOrderedFallback:
+		for _, p := range plan {
+			if p.Admitted {
+				return append(first, p)
+			}
+		}
+	default:
+		for _, p := range plan {
+			if p.Admitted {
+				first = append(first, p)
+			}
+		}
+	}
+	return first
+}
+
+// prepareIntent builds one recipient's intent and its round-1 attempts, or
+// says why no route admits (nre). An error is anything else; nothing is
+// written either way.
+func (e *Escalator) prepareIntent(ctx context.Context, req IntentRequest, subID string) (database.NewIntent, *NoRouteError, error) {
+	if e.d == nil || e.d.recipientResolver == nil {
+		return database.NewIntent{}, nil, errors.New("delivery intents: no recipient resolver")
+	}
+	contact, err := e.d.recipientResolver.Resolve(ctx, req.ContactID)
+	if err != nil {
+		return database.NewIntent{}, nil, fmt.Errorf("resolve contact %s: %w", req.ContactID, err)
+	}
+	if contact == nil || len(contact.Addresses) == 0 {
+		return database.NewIntent{}, nil, fmt.Errorf("contact %s has %w", req.ContactID, errNoAddresses)
+	}
+	requested, effective, reason, policyVersion, capCents, err := e.resolveIntentStrategy(ctx, req)
+	if err != nil {
+		return database.NewIntent{}, nil, err
+	}
+
+	intentUUID, err := uuid.NewV7()
+	if err != nil {
+		return database.NewIntent{}, nil, err
+	}
 	sum := sha256.Sum256(req.Body)
 	in := database.DeliveryIntent{
 		ID:                intentUUID.String(),
-		SubmissionID:      subUUID.String(),
+		SubmissionID:      subID,
 		ContactID:         req.ContactID,
 		Precedence:        string(req.Precedence),
 		Class:             database.DeliveryClassMessage,
@@ -197,40 +275,8 @@ func (e *Escalator) Submit(ctx context.Context, req IntentRequest) (*IntentSubmi
 			}
 		}
 	}
-	for i := range in.RoutePlan {
-		if in.RoutePlan[i].Admitted && in.RoutePlan[i].AdapterMode == modeLXMF {
-			ts, err := e.db.AllocateWireTimestampMs(e.clock.Wall().UnixMilli())
-			if err != nil {
-				return nil, err
-			}
-			in.RoutePlan[i].WireTimestampMs = ts
-		}
-	}
 
-	// Round 1 (r3 section 3a): PRIMARY_ONLY the primary route, which
-	// must admit; ORDERED_FALLBACK the first route that admits;
-	// ALL_BEARERS every route that admits.
-	var first []database.RoutePlanEntry
-	switch effective {
-	case directory.StrategyPrimaryOnly:
-		if len(in.RoutePlan) > 0 && in.RoutePlan[0].Admitted {
-			first = in.RoutePlan[:1]
-		}
-	case directory.StrategyOrderedFallback:
-		for _, p := range in.RoutePlan {
-			if p.Admitted {
-				first = []database.RoutePlanEntry{p}
-				break
-			}
-		}
-	default:
-		for _, p := range in.RoutePlan {
-			if p.Admitted {
-				first = append(first, p)
-			}
-		}
-	}
-	if len(first) == 0 {
+	if len(firstRound(in.RoutePlan, effective)) == 0 {
 		nre := &NoRouteError{Plan: in.RoutePlan, Oversize: true}
 		for _, p := range in.RoutePlan {
 			if p.Reason != reasonOversize {
@@ -240,31 +286,24 @@ func (e *Escalator) Submit(ctx context.Context, req IntentRequest) (*IntentSubmi
 		if effective == directory.StrategyPrimaryOnly {
 			nre.Detail = "PRIMARY_ONLY sends on the contact's primary route only"
 		}
-		return nil, nre
+		nre.requested, nre.effective = in.RequestedStrategy, in.EffectiveStrategy
+		return database.NewIntent{Intent: in}, nre, nil
 	}
+	for i := range in.RoutePlan {
+		if in.RoutePlan[i].Admitted && in.RoutePlan[i].AdapterMode == modeLXMF {
+			ts, err := e.db.AllocateWireTimestampMs(e.clock.Wall().UnixMilli())
+			if err != nil {
+				return database.NewIntent{}, nil, err
+			}
+			in.RoutePlan[i].WireTimestampMs = ts
+		}
+	}
+	first := firstRound(in.RoutePlan, effective)
 	var rows []database.MessageDelivery
 	for i, p := range first {
 		rows = append(rows, e.buildRow(in, p, 1, i+1))
 	}
-	sub := database.DeliverySubmission{ID: subUUID.String(), Source: req.Source, IdempotencyKey: req.IdempotencyKey,
-		RequestSHA256: fp, IntentIDs: []string{in.ID}}
-	existing, rowIDs, err := e.db.CreateSubmission(sub, []database.NewIntent{{Intent: in, FirstRows: rows}})
-	if err != nil {
-		return nil, err
-	}
-	if existing != nil {
-		// A concurrent duplicate won the key: answer with it.
-		return e.loadSubmission(existing)
-	}
-	e.mu.Lock()
-	e.bases[in.ID] = clockBase{ms: 0, at: e.clock.Now()}
-	e.mu.Unlock()
-	stored, err := e.db.GetIntent(in.ID)
-	if err != nil {
-		return nil, err
-	}
-	e.Notify(in.ID)
-	return &IntentSubmission{Submission: sub, Intents: []database.DeliveryIntent{*stored}, RowIDs: rowIDs}, nil
+	return database.NewIntent{Intent: in, FirstRows: rows}, nil, nil
 }
 
 func (e *Escalator) loadSubmission(s *database.DeliverySubmission) (*IntentSubmission, error) {

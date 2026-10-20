@@ -228,6 +228,14 @@ func (d *Dispatcher) SendToRecipient(ctx context.Context, rcpt RecipientRef, bod
 		return res, nil
 	}
 
+	if rcpt.ContactID == "" && rcpt.GroupID != "" {
+		// A team send exists on the delivery-intent path only (C8).
+		// [MESHSAT-1584]
+		if d.recipientResolver == nil || !d.escalator.Accepting() {
+			return res, ErrTeamNeedsIntents
+		}
+		return d.sendViaIntent(ctx, rcpt, body, opts, res)
+	}
 	if rcpt.ContactID == "" {
 		return res, fmt.Errorf("SendToRecipient requires ContactID or Raw")
 	}
@@ -297,15 +305,29 @@ func (d *Dispatcher) SendToRecipient(ctx context.Context, rcpt RecipientRef, bod
 // sendViaIntent is SendToRecipient on the delivery-intent path: one
 // submission, one intent, its round-1 attempts. [MESHSAT-1581]
 func (d *Dispatcher) sendViaIntent(ctx context.Context, rcpt RecipientRef, body []byte, opts SendOptions, res SendResult) (SendResult, error) {
-	sub, err := d.escalator.Submit(ctx, IntentRequest{
+	req := IntentRequest{
 		Source: opts.Source, IdempotencyKey: opts.IdempotencyKey, ContactID: rcpt.ContactID, Body: body,
 		Precedence: res.Precedence, Strategy: opts.Strategy, MaxCostCents: opts.MaxCostCents,
-	})
+	}
+	var sub *IntentSubmission
+	var err error
+	if rcpt.ContactID == "" && rcpt.GroupID != "" {
+		req.GroupID = rcpt.GroupID
+		sub, err = d.escalator.SubmitTeam(ctx, req)
+	} else {
+		sub, err = d.escalator.Submit(ctx, req)
+	}
 	if err != nil {
 		return res, err
 	}
 	res.Intent = sub
 	if len(sub.Intents) == 0 {
+		return res, nil
+	}
+	if req.GroupID != "" {
+		// A team's members each have their own intent; the API reads them
+		// from res.Intent. The strategy is the first member's.
+		res.Strategy = directory.Strategy(sub.Intents[0].EffectiveStrategy)
 		return res, nil
 	}
 	in := sub.Intents[0]

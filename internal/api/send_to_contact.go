@@ -20,9 +20,8 @@ import (
 
 type sendToContactRequest struct {
 	ContactID string `json:"contact_id,omitempty"`
-	// GroupID is not supported: the dispatcher sends to one contact (or a
-	// raw address) and has no team fan-out, so a request with only a
-	// group_id is 400. [MESHSAT-1584]
+	// GroupID without ContactID is a team send (C8): a group of kind TEAM,
+	// one intent per member, delivery intents only. [MESHSAT-1584]
 	GroupID    string `json:"group_id,omitempty"`
 	Text       string `json:"text"`
 	Precedence string `json:"precedence,omitempty"` // Override|Flash|Immediate|Priority|Routine|Deferred, or ACP-127 prosign
@@ -61,6 +60,19 @@ type sendToContactResponse struct {
 	SubmissionID string   `json:"submission_id,omitempty"`
 	IntentIDs    []string `json:"intent_ids,omitempty"`
 	Existing     bool     `json:"existing,omitempty"`
+
+	// A team send: each member, its intent and, for a member no route
+	// admits, the reasons (its intent closed failed). [MESHSAT-1584]
+	Members []teamMemberStatus `json:"members,omitempty"`
+}
+
+type teamMemberStatus struct {
+	ContactID   string   `json:"contact_id"`
+	IntentID    string   `json:"intent_id,omitempty"`
+	State       string   `json:"state,omitempty"`
+	Outcome     string   `json:"outcome,omitempty"`
+	DeliveryIDs []int64  `json:"delivery_ids,omitempty"`
+	Reasons     []string `json:"reasons,omitempty"`
 }
 
 // @Summary Send a message to a contact
@@ -90,7 +102,12 @@ type sendToContactResponse struct {
 // @Description retried request sends again. 413: no
 // @Description route can carry a message that long; 422: no route of the
 // @Description contact can be used (per_bearer says why). A team send
-// @Description (group_id without contact_id) is not supported: 400.
+// @Description (group_id without contact_id, a group of kind TEAM) needs
+// @Description delivery intents (400 without): its members are resolved
+// @Description once and each gets an intent (members lists them); 200 when
+// @Description every member has a route, 207 when some have none (their
+// @Description intents close failed with the reasons), 422 when none has
+// @Description one (nothing written), 404 no such group, 400 not a TEAM.
 // @Tags messages
 // @Accept json
 // @Produce json
@@ -120,14 +137,8 @@ func (s *Server) handleSendToContact(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "text is required")
 		return
 	}
-	if req.ContactID == "" && req.RawInterfaceID == "" {
-		if req.GroupID != "" {
-			// The dispatcher has no team fan-out: this used to reach it and
-			// come back 503, which reads as a passing outage. [MESHSAT-1584]
-			writeError(w, http.StatusBadRequest, "sending to a team (group_id) is not supported; send to each contact")
-			return
-		}
-		writeError(w, http.StatusBadRequest, "contact_id or raw_interface_id is required")
+	if req.ContactID == "" && req.RawInterfaceID == "" && req.GroupID == "" {
+		writeError(w, http.StatusBadRequest, "contact_id, group_id or raw_interface_id is required")
 		return
 	}
 
@@ -168,9 +179,24 @@ func (s *Server) handleSendToContact(w http.ResponseWriter, r *http.Request) {
 
 	// The delivery-intent path's refusals: nothing was written. [MESHSAT-1581]
 	var noRoute *engine.NoRouteError
+	var teamNoRoute *engine.TeamNoRouteError
 	switch {
-	case errors.Is(err, engine.ErrUnsupportedStrategy):
+	case errors.Is(err, engine.ErrUnsupportedStrategy), errors.Is(err, engine.ErrTeamNeedsIntents),
+		errors.Is(err, directory.ErrNotATeam):
 		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	case errors.Is(err, directory.ErrNotFound) && req.ContactID == "" && req.GroupID != "":
+		writeError(w, http.StatusNotFound, "no such group")
+		return
+	case errors.Is(err, engine.ErrEmptyTeam):
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	case errors.As(err, &teamNoRoute):
+		resp.Queued = false
+		for _, m := range teamNoRoute.Members {
+			resp.Members = append(resp.Members, teamMemberStatus{ContactID: m.ContactID, Reasons: planReasons(m.Plan, m.Detail)})
+		}
+		writeJSON(w, http.StatusUnprocessableEntity, resp)
 		return
 	case errors.Is(err, database.ErrIdempotencyConflict):
 		writeError(w, http.StatusConflict, err.Error())
@@ -185,6 +211,27 @@ func (s *Server) handleSendToContact(w http.ResponseWriter, r *http.Request) {
 			code = http.StatusRequestEntityTooLarge
 		}
 		writeJSON(w, code, resp)
+		return
+	}
+
+	if err == nil && req.ContactID == "" && req.GroupID != "" && res.Intent != nil {
+		// A team send: 200 when every member has a route, 207 when some
+		// members' intents closed failed at once. [MESHSAT-1584]
+		status := http.StatusOK
+		for i, in := range res.Intent.Intents {
+			m := teamMemberStatus{ContactID: in.ContactID, IntentID: in.ID, State: in.State, Outcome: in.Outcome}
+			if i < len(res.Intent.RowIDs) {
+				m.DeliveryIDs = res.Intent.RowIDs[i]
+			}
+			if in.State == database.IntentClosed && in.Outcome == database.OutcomeFailed && in.LastTransition == "T2" {
+				m.Reasons = planReasons(in.RoutePlan, "")
+				status = http.StatusMultiStatus
+			} else {
+				resp.Queued = true
+			}
+			resp.Members = append(resp.Members, m)
+		}
+		writeJSON(w, status, resp)
 		return
 	}
 
@@ -223,6 +270,25 @@ func (s *Server) handleSendToContact(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, status, resp)
+}
+
+// planReasons lists why a team member's routes were not used.
+func planReasons(plan []database.RoutePlanEntry, detail string) []string {
+	var out []string
+	for _, p := range plan {
+		if p.Admitted {
+			continue
+		}
+		if p.Kind == "" {
+			out = append(out, p.Reason)
+		} else {
+			out = append(out, p.Kind+": "+p.Reason)
+		}
+	}
+	if detail != "" {
+		out = append(out, detail)
+	}
+	return out
 }
 
 // sendToContactResponseFrom normalises a SendResult into the wire

@@ -632,3 +632,26 @@ func (s *SQLStore) ApplyHubRotation(ctx context.Context, tenantID string, versio
 	rep.Applied, rep.TenantID, rep.AppliedVersion = true, tenantID, version
 	return rep, nil
 }
+
+// ErrNotATeam: the group exists and is not of kind TEAM.
+var ErrNotATeam = errors.New("directory: the group is not a team")
+
+// TeamMembers returns the contact ids of a TEAM group, in the order they
+// joined, for a team send (C8). ErrNotFound when there is no such group,
+// ErrNotATeam when it is another kind.
+func (s *SQLStore) TeamMembers(ctx context.Context, groupID string) ([]string, error) {
+	if groupID == "" {
+		return nil, fmt.Errorf("%w: empty id", ErrInvalid)
+	}
+	var kind string
+	if err := s.db.GetContext(ctx, &kind, `SELECT kind FROM directory_groups WHERE id = ?`, groupID); err != nil {
+		return nil, translateErr(err)
+	}
+	if GroupKind(kind) != GroupTeam {
+		return nil, fmt.Errorf("%w: %s is a %s", ErrNotATeam, groupID, kind)
+	}
+	var ids []string
+	err := s.db.SelectContext(ctx, &ids, `SELECT contact_id FROM directory_group_members WHERE group_id = ?
+		ORDER BY added_at ASC, contact_id ASC`, groupID)
+	return ids, translateErr(err)
+}

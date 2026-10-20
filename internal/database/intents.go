@@ -462,14 +462,23 @@ func (db *DB) CreateSubmission(sub DeliverySubmission, intents []NewIntent) (exi
 		for _, ni := range intents {
 			in := ni.Intent
 			plan, _ := json.Marshal(in.RoutePlan)
+			// An intent is written active and pending (T1); a team member
+			// no route admits is written closed and failed at once (T2,
+			// C8), with its route plan as the reasons. [MESHSAT-1584]
+			state, outcome, transition := IntentActive, OutcomePending, "T1"
+			var closedAt any
+			if in.State == IntentClosed {
+				state, outcome, transition, closedAt = IntentClosed, in.Outcome, "T2", in.ClosedAt
+			}
 			if _, err := tx.Exec(`INSERT INTO delivery_intents (id, submission_id, contact_id, precedence, class, payload, payload_sha256,
 				requested_strategy, effective_strategy, strategy_reason, policy_version, route_plan,
 				state, outcome, version, active_round, round_started_ms, cap_minor, currency, elapsed_ms,
-				heartbeat_wall_at, heartbeat_wall_trusted, expiry_allow_s, expires_at, last_transition)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', 'pending', 1, 1, 0, ?, ?, 0, ?, ?, ?, ?, 'T1')`,
+				heartbeat_wall_at, heartbeat_wall_trusted, expiry_allow_s, expires_at, last_transition, closed_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, 0, ?, ?, 0, ?, ?, ?, ?, ?, ?)`,
 				in.ID, sub.ID, in.ContactID, in.Precedence, in.Class, in.Payload, in.PayloadSHA256,
 				in.RequestedStrategy, in.EffectiveStrategy, in.StrategyReason, in.PolicyVersion, string(plan),
-				in.CapMinor, in.Currency, in.HeartbeatWallAt, boolInt(in.HeartbeatWallTrusted), in.ExpiryAllowS, in.ExpiresAt); err != nil {
+				state, outcome, in.CapMinor, in.Currency, in.HeartbeatWallAt, boolInt(in.HeartbeatWallTrusted), in.ExpiryAllowS,
+				in.ExpiresAt, transition, closedAt); err != nil {
 				return fmt.Errorf("insert intent: %w", err)
 			}
 			var rids []int64

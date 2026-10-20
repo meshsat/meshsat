@@ -47,8 +47,12 @@ func sendSource(opts SendOptions) string {
 // modes), for a raw send its interface, address, payload and options.
 func (d *Dispatcher) sendFingerprint(rcpt RecipientRef, body []byte, opts SendOptions, precedence types.Precedence) string {
 	if rcpt.Raw == nil {
-		return IntentRequest{ContactID: rcpt.ContactID, Body: body, Precedence: precedence,
-			Strategy: opts.Strategy, MaxCostCents: opts.MaxCostCents}.fingerprint()
+		r := IntentRequest{ContactID: rcpt.ContactID, Body: body, Precedence: precedence,
+			Strategy: opts.Strategy, MaxCostCents: opts.MaxCostCents}
+		if rcpt.ContactID == "" {
+			r.GroupID = rcpt.GroupID // a team send (C8)
+		}
+		return r.fingerprint()
 	}
 	sum := sha256.Sum256(body)
 	b, _ := json.Marshal(map[string]any{

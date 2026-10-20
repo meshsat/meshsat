@@ -72,7 +72,9 @@ func TestListDirectoryContacts(t *testing.T) {
 
 // A team send is refused as unsupported, not answered 503 as if a bearer
 // were down: the dispatcher has no team fan-out (review B10-R3).
-func TestSendToContact_TeamIsNotSupported(t *testing.T) {
+// Without delivery intents a team send is refused (C8 is intents only),
+// as is a request that names no recipient; nothing is queued. [MESHSAT-1584]
+func TestSendToContact_TeamNeedsDeliveryIntents(t *testing.T) {
 	s, store := testServerWithDispatcher(t, directory.KindSMS)
 	router := s.Router()
 	c := &directory.Contact{DisplayName: "Ann", Team: "red"}
