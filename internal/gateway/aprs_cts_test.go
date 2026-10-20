@@ -227,7 +227,9 @@ func TestAPRSCTS_BusyChannelIsCapped(t *testing.T) {
 	if waited < 280*time.Millisecond {
 		t.Errorf("released after %v on a busy channel; the cap is 300 ms", waited)
 	}
-	if waited > 700*time.Millisecond {
+	// Well under the production cap (3 s), so a gate that ignored the 300 ms cap still fails;
+	// the rest is slack for a loaded CI runner, which once held it 1.1 s (20 Oct 2026).
+	if waited > 2*time.Second {
 		t.Errorf("held for %v; the cap is 300 ms", waited)
 	}
 }
