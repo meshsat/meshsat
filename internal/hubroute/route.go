@@ -142,7 +142,8 @@ func (r *Route) IntentAdmit(dest string, wire []byte, encrypted bool) (string, s
 		return "skipped_bad_address", fmt.Sprintf("%q is not a bridge:<id> address", dest)
 	}
 	if dest == r.pub.Principal() {
-		return "skipped_bad_address", "the address is this bridge"
+		// Its own reason, so a team member that is this bridge says so (r20).
+		return "skipped_self_address", "the address is this bridge"
 	}
 	if encrypted || !utf8.Valid(wire) {
 		return "skipped_encoding", "the Hub route carries text as it is; this interface's chain makes bytes"

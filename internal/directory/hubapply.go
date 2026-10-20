@@ -282,6 +282,10 @@ func (a *hubApply) contacts(in []HubContact) error {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM directory_addresses WHERE origin IN (?, ?)`, a.origin, legacyHubOrigin); err != nil {
 		return fmt.Errorf("clear hub addresses: %w", err)
 	}
+	// The conflicts of the last snapshot go with it; this one records its own.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM directory_address_conflicts WHERE origin IN (?, ?)`, a.origin, legacyHubOrigin); err != nil {
+		return fmt.Errorf("clear address conflicts: %w", err)
+	}
 	a.applied = map[string]bool{}
 	for _, c := range in {
 		if c.ID == "" {
@@ -367,7 +371,23 @@ func (a *hubApply) address(contactID string, ad HubAddress) error {
 		return fmt.Errorf("store address %s: %w", ad.Value, err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
-		a.skip("address", id, SkipAddressTaken, ad.Kind+" "+ad.Value)
+		// Held by a contact of this bridge: say which, and keep it, so a
+		// send to the Hub contact names the holder (r20 F1).
+		var holder string
+		if err := a.tx.GetContext(a.ctx, &holder, `SELECT contact_id FROM directory_addresses WHERE kind = ? AND value = ?`,
+			ad.Kind, ad.Value); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("find the holder of %s: %w", ad.Value, err)
+		}
+		detail := ad.Kind + " " + ad.Value
+		if holder != "" {
+			detail += ", held by contact " + holder
+			if _, err := a.tx.ExecContext(a.ctx, `INSERT OR REPLACE INTO directory_address_conflicts
+				(contact_id, kind, value, holder_contact_id, origin, seen_at) VALUES (?, ?, ?, ?, ?, ?)`,
+				contactID, ad.Kind, ad.Value, holder, a.origin, a.ts); err != nil {
+				return fmt.Errorf("record the conflict on %s: %w", ad.Value, err)
+			}
+		}
+		a.skip("address", id, SkipAddressTaken, detail)
 	}
 	return nil
 }
@@ -677,6 +697,75 @@ func (s *SQLStore) ApplyHubRotation(ctx context.Context, tenantID string, versio
 	}
 	rep.Applied, rep.TenantID, rep.AppliedVersion, rep.KeyVersion = true, tenantID, st.Version, version
 	return rep, nil
+}
+
+// AddressConflict is an address the Hub sent for one of its contacts that
+// another contact of this bridge holds: the Hub contact goes without it
+// until the holder lets it go and the Hub sends a newer snapshot (r20 F1).
+type AddressConflict struct {
+	ContactID       string `db:"contact_id"        json:"contact_id"`
+	Kind            string `db:"kind"              json:"kind"`
+	Value           string `db:"value"             json:"value"`
+	HolderContactID string `db:"holder_contact_id" json:"holder_contact_id"`
+	SeenAt          string `db:"seen_at"           json:"seen_at"`
+}
+
+// AddressConflicts lists the conflicts of the last snapshot, for one Hub
+// contact or (contactID "") all of them.
+func (s *SQLStore) AddressConflicts(ctx context.Context, contactID string) ([]AddressConflict, error) {
+	q := `SELECT contact_id, kind, value, holder_contact_id, seen_at FROM directory_address_conflicts`
+	var args []any
+	if contactID != "" {
+		q += ` WHERE contact_id = ?`
+		args = append(args, contactID)
+	}
+	out := []AddressConflict{}
+	err := s.db.SelectContext(ctx, &out, q+` ORDER BY contact_id, kind, value`, args...)
+	return out, translateErr(err)
+}
+
+// ErrHubManaged: the row came from the Hub's signed snapshot, which alone
+// changes it.
+var ErrHubManaged = errors.New("directory: the Hub's signed snapshot manages this row")
+
+// DeleteLocalAddress removes an address this bridge's operator made (origin
+// local) from contactID: the operator's way out of an address conflict (r20
+// F1). The contact, its other addresses, notes, groups and history stay. An
+// address the Hub sent is ErrHubManaged. It returns the Hub contacts the
+// snapshot refused this address: they get it at the next snapshot.
+func (s *SQLStore) DeleteLocalAddress(ctx context.Context, contactID, addressID string) ([]AddressConflict, error) {
+	if contactID == "" || addressID == "" {
+		return nil, fmt.Errorf("%w: empty id", ErrInvalid)
+	}
+	tx, err := s.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var row struct {
+		ContactID string `db:"contact_id"`
+		Kind      string `db:"kind"`
+		Value     string `db:"value"`
+		Origin    string `db:"origin"`
+	}
+	if err := tx.GetContext(ctx, &row, `SELECT contact_id, kind, value, origin FROM directory_addresses WHERE id = ?`, addressID); err != nil {
+		return nil, translateErr(err)
+	}
+	if row.ContactID != contactID {
+		return nil, fmt.Errorf("%w: address %s is not on contact %s", ErrNotFound, addressID, contactID)
+	}
+	if IsHubOrigin(row.Origin) {
+		return nil, fmt.Errorf("%w: address %s (%s)", ErrHubManaged, addressID, row.Origin)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM directory_addresses WHERE id = ?`, addressID); err != nil {
+		return nil, translateErr(err)
+	}
+	waiting := []AddressConflict{}
+	if err := tx.SelectContext(ctx, &waiting, `SELECT contact_id, kind, value, holder_contact_id, seen_at
+		FROM directory_address_conflicts WHERE kind = ? AND value = ? ORDER BY contact_id`, row.Kind, row.Value); err != nil {
+		return nil, err
+	}
+	return waiting, tx.Commit()
 }
 
 // ErrNotATeam: the group exists and is not of kind TEAM.

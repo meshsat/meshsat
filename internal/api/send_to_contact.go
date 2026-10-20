@@ -279,9 +279,12 @@ func planReasons(plan []database.RoutePlanEntry, detail string) []string {
 		if p.Admitted {
 			continue
 		}
-		if p.Kind == "" {
+		switch {
+		case p.Kind == "":
 			out = append(out, p.Reason)
-		} else {
+		case p.HeldBy != "":
+			out = append(out, p.Kind+": "+p.Reason+" ("+p.Destination+", held by contact "+p.HeldBy+")")
+		default:
 			out = append(out, p.Kind+": "+p.Reason)
 		}
 	}

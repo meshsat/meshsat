@@ -67,6 +67,7 @@ const (
 	reasonNotEnabled    = "skipped_route_not_enabled" // stage 1a carries Meshtastic unicast and LXMF only
 	reasonSameInterface = "skipped_same_interface"    // a plan never names one interface twice (r3 D3)
 	reasonBadAddress    = "skipped_bad_address"
+	reasonAddressHeld   = "skipped_address_held_locally" // the Hub sent it, another contact holds it (r20 F1)
 	reasonUnsupported   = "skipped_unsupported"
 	reasonOffline       = "skipped_offline"
 	reasonOversize      = "skipped_oversize"

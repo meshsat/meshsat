@@ -28,6 +28,12 @@ type TeamResolver interface {
 	TeamMembers(ctx context.Context, groupID string) ([]string, error)
 }
 
+// conflictResolver names the contact that holds an address the Hub sent for
+// a member (directory.SQLStore.AddressConflicts).
+type conflictResolver interface {
+	AddressConflicts(ctx context.Context, contactID string) ([]directory.AddressConflict, error)
+}
+
 var (
 	// ErrTeamNeedsIntents: a team send exists on the delivery-intent path
 	// only, and MESHSAT_DELIVERY_INTENTS is off.
@@ -124,8 +130,12 @@ func (e *Escalator) SubmitTeam(ctx context.Context, req IntentRequest) (*IntentS
 		ni, nre, err := e.prepareIntent(ctx, mreq, subID)
 		switch {
 		case errors.Is(err, errNoAddresses) || errors.Is(err, directory.ErrNotFound):
-			ni = e.failedMemberIntent(mreq, subID, []database.RoutePlanEntry{{Reason: reasonNoAddress}})
-			refused = append(refused, MemberRefusal{ContactID: cid, Plan: ni.Intent.RoutePlan, Detail: "no address"})
+			plan, detail, cerr := e.noAddressPlan(ctx, cid)
+			if cerr != nil {
+				return nil, cerr
+			}
+			ni = e.failedMemberIntent(mreq, subID, plan)
+			refused = append(refused, MemberRefusal{ContactID: cid, Plan: plan, Detail: detail})
 		case err != nil:
 			return nil, err
 		case nre != nil:
@@ -145,6 +155,28 @@ func (e *Escalator) SubmitTeam(ctx context.Context, req IntentRequest) (*IntentS
 	sub := database.DeliverySubmission{ID: subID, Source: req.Source, IdempotencyKey: req.IdempotencyKey,
 		RequestSHA256: fp, IntentIDs: ids}
 	return e.create(sub, intents)
+}
+
+// noAddressPlan is the plan of a member with no address: the addresses the
+// Hub sent for it that another contact holds, each naming the holder (r20
+// F1: a generic "no address" hid the remedy), or just no address.
+func (e *Escalator) noAddressPlan(ctx context.Context, contactID string) ([]database.RoutePlanEntry, string, error) {
+	if cr, ok := e.d.recipientResolver.(conflictResolver); ok {
+		conflicts, err := cr.AddressConflicts(ctx, contactID)
+		if err != nil {
+			return nil, "", err
+		}
+		if len(conflicts) > 0 {
+			plan := make([]database.RoutePlanEntry, 0, len(conflicts))
+			for i, c := range conflicts {
+				plan = append(plan, database.RoutePlanEntry{RouteIndex: i, Kind: c.Kind, Destination: c.Value,
+					Reason: reasonAddressHeld, HeldBy: c.HolderContactID})
+			}
+			return plan, "the Hub sent this contact's address but another contact holds it: remove it there " +
+				"(DELETE /api/directory/contacts/{id}/addresses/{address_id}) and the Hub's next snapshot gives it here", nil
+		}
+	}
+	return []database.RoutePlanEntry{{Reason: reasonNoAddress}}, "no address", nil
 }
 
 // failedMemberIntent is a member's intent that closes failed at submission,

@@ -127,6 +127,10 @@ type RoutePlanEntry struct {
 	Admitted            bool `json:"admitted"`
 	// Reason says why a route was not admitted (skipped_*).
 	Reason string `json:"reason,omitempty"`
+	// HeldBy names the contact that holds this address when the Hub sent it
+	// for the recipient and the bridge kept the holder's (reason
+	// skipped_address_held_locally, r20 F1). [MESHSAT-1584]
+	HeldBy string `json:"held_by,omitempty"`
 }
 
 // DeliverySubmission is one send request (r3 D2).

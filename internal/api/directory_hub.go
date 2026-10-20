@@ -54,6 +54,10 @@ func (s *Server) handleListDirectoryGroups(w http.ResponseWriter, r *http.Reques
 type directoryState struct {
 	directory.HubState
 	KeyID string `json:"key_id"` // the Hub directory key the bridge trusts; empty: none pinned
+	// AddressConflicts: addresses the last snapshot sent for Hub contacts
+	// that a contact of this bridge holds, so those Hub contacts go
+	// without them (r20 F1).
+	AddressConflicts []directory.AddressConflict `json:"address_conflicts"`
 }
 
 // @Summary Directory sync state
@@ -61,8 +65,14 @@ type directoryState struct {
 // @Description it follows, the version of the last snapshot applied and
 // @Description when, apart from it the version of the last key rotation
 // @Description applied (key_version), the last refusal and why
-// @Description (other_tenant, not_newer), and the id of the Hub key it
-// @Description trusts (SHA-256 of the PKIX key, hex).
+// @Description (other_tenant, not_newer), the id of the Hub key it
+// @Description trusts (SHA-256 of the PKIX key, hex), and the address
+// @Description conflicts of the last snapshot: each address the Hub sent for
+// @Description one of its contacts that a contact of this bridge holds
+// @Description (holder_contact_id), which the Hub contact goes without until
+// @Description the holder lets it go (DELETE
+// @Description /api/directory/contacts/{id}/addresses/{address_id}) and the Hub
+// @Description sends a newer snapshot.
 // @Tags directory
 // @Produce json
 // @Success 200 {object} directoryState
@@ -74,7 +84,12 @@ func (s *Server) handleDirectoryState(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	out := directoryState{HubState: st}
+	conflicts, err := directory.NewSQLStore(s.db.DB).AddressConflicts(r.Context(), "")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	out := directoryState{HubState: st, AddressConflicts: conflicts}
 	if v, err := s.db.GetSystemConfig(directory.RotationKeyConfig); err == nil && v != "" {
 		if der, err := hex.DecodeString(v); err == nil {
 			out.KeyID = hubreporter.KeyID(der)
@@ -157,13 +172,51 @@ func (s *Server) handleAddDirectoryAddress(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusCreated, a)
 }
 
+// deletedAddress is what DELETE /api/directory/contacts/{id}/addresses/{address_id}
+// answers.
+type deletedAddress struct {
+	Deleted string `json:"deleted"` // the address id
+	// WaitingHubContacts are the Hub contacts the last snapshot refused this
+	// address; each gets it at the Hub's next snapshot (an edit on the Hub
+	// sends one).
+	WaitingHubContacts []directory.AddressConflict `json:"waiting_hub_contacts"`
+}
+
+// @Summary Remove a local address from a directory contact
+// @Description Removes an address this bridge's operator made (origin
+// @Description local), for instance one that keeps the Hub's contact for the
+// @Description same peer from its address (an address belongs to one contact,
+// @Description and a local one wins over the Hub's). The contact, its other
+// @Description addresses, notes, groups and history stay. An address the Hub
+// @Description sent is refused with 409: its signed snapshot manages it.
+// @Description waiting_hub_contacts lists the Hub contacts the last snapshot
+// @Description refused this address; they get it at the Hub's next snapshot.
+// @Tags directory
+// @Produce json
+// @Param id path string true "Contact id"
+// @Param address_id path string true "Address id"
+// @Success 200 {object} deletedAddress
+// @Failure 400 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Failure 409 {object} map[string]string "The Hub manages this address"
+// @Router /api/directory/contacts/{id}/addresses/{address_id} [delete]
+func (s *Server) handleDeleteDirectoryAddress(w http.ResponseWriter, r *http.Request) {
+	addressID := chi.URLParam(r, "address_id")
+	waiting, err := directory.NewSQLStore(s.db.DB).DeleteLocalAddress(r.Context(), chi.URLParam(r, "id"), addressID)
+	if err != nil {
+		writeDirectoryStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, deletedAddress{Deleted: addressID, WaitingHubContacts: waiting})
+}
+
 func writeDirectoryStoreError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, directory.ErrNotFound):
 		writeError(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, directory.ErrInvalid):
 		writeError(w, http.StatusBadRequest, err.Error())
-	case errors.Is(err, directory.ErrConflict):
+	case errors.Is(err, directory.ErrConflict), errors.Is(err, directory.ErrHubManaged):
 		writeError(w, http.StatusConflict, err.Error())
 	default:
 		writeError(w, http.StatusInternalServerError, err.Error())

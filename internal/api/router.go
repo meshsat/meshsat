@@ -610,6 +610,8 @@ func (s *Server) Router() http.Handler {
 		r.Get("/directory/state", s.handleDirectoryState)           // what the bridge applied of its Hub's directory [MESHSAT-1584]
 		r.Patch("/directory/contacts/{id}", s.handleEditDirectoryContact)
 		r.Post("/directory/contacts/{id}/addresses", s.handleAddDirectoryAddress)
+		// A local address only; the Hub's are its snapshot's [MESHSAT-1584]
+		r.Delete("/directory/contacts/{id}/addresses/{address_id}", s.handleDeleteDirectoryAddress)
 		r.Get("/delivery/tariffs", s.handleListTariffs) // prices of the paid intent routes (B9) [MESHSAT-1584]
 		r.Post("/delivery/tariffs", s.handleCreateTariff)
 

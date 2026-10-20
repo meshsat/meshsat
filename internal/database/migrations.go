@@ -1779,6 +1779,22 @@ var migrations = []string{
 	// before it reloaded the new key). key_version is the version of the last rotation
 	// applied; version stays the version of the last snapshot applied. [MESHSAT-1584]
 	`ALTER TABLE directory_hub_state ADD COLUMN key_version INTEGER NOT NULL DEFAULT 0;`,
+
+	// v77: HeMB-NG stage 2 C7/C8 (r20 F1): an address the Hub sent for one of its contacts
+	// that another contact of this bridge holds is not stored (the local one wins, C7.3), and
+	// the Hub contact goes without it. Each snapshot rewrites this Hub's rows here: which Hub
+	// contact was refused which address, and which contact holds it, so a team send can name
+	// the holder and the operator can let the address go
+	// (DELETE /api/directory/contacts/{id}/addresses/{address_id}). [MESHSAT-1584]
+	`CREATE TABLE IF NOT EXISTS directory_address_conflicts (
+		contact_id        TEXT NOT NULL,
+		kind              TEXT NOT NULL,
+		value             TEXT NOT NULL,
+		holder_contact_id TEXT NOT NULL,
+		origin            TEXT NOT NULL,
+		seen_at           TEXT NOT NULL,
+		PRIMARY KEY (contact_id, kind, value)
+	);`,
 }
 
 func (db *DB) migrate() error {

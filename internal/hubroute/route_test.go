@@ -177,7 +177,7 @@ func TestTheRouteAdmitsOnlyWhatTheHubTakes(t *testing.T) {
 	}{
 		{"bridge:kit-b", "", []byte("ok"), false},
 		{"kit-b", "skipped_bad_address", []byte("ok"), false},
-		{"bridge:kit-a", "skipped_bad_address", []byte("ok"), false},
+		{"bridge:kit-a", "skipped_self_address", []byte("ok"), false},
 		{"bridge:kit-b", "skipped_encoding", []byte{0xff, 0xfe}, false},
 		{"bridge:kit-b", "skipped_encoding", []byte("ok"), true},
 		{"bridge:kit-b", "skipped_oversize", make([]byte, hubmsg.MaxBody+1), false},
