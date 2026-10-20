@@ -20,8 +20,11 @@ type policyView struct {
 	StrategyReason string `json:"strategy_reason,omitempty"`
 	Supported      bool   `json:"supported"`
 	Seeded         bool   `json:"seeded"`
-	MaxCostCents   *int   `json:"max_cost_cents,omitempty"`
-	UpdatedAt      string `json:"updated_at"`
+	// Origin is "local", or "hub:<tenant>" for a scope the Hub manages:
+	// its row wins at every snapshot (r19 Q4).
+	Origin       string `json:"origin"`
+	MaxCostCents *int   `json:"max_cost_cents,omitempty"`
+	UpdatedAt    string `json:"updated_at"`
 }
 
 type policiesResponse struct {
@@ -42,6 +45,12 @@ type policiesResponse struct {
 // @Description implemented. seeded: the row still holds the value the bridge's
 // @Description migrations wrote. supported_strategies depends on
 // @Description MESHSAT_DELIVERY_INTENTS (ORDERED_FALLBACK only with it on).
+// @Description origin "hub:<tenant>": the Hub manages the scope. Its row
+// @Description wins at every snapshot, so a change made on the bridge holds
+// @Description only until the next one; when the Hub stops sending the
+// @Description scope, a precedence or default scope returns to the bridge's
+// @Description own default and a contact scope goes. A seeded Hub row never
+// @Description replaces the bridge's own.
 // @Tags directory
 // @Produce json
 // @Param unsupported query string false "1 = only the rows that need attention (strategy not implemented)"
@@ -68,7 +77,7 @@ func (s *Server) handleListDirectoryPolicies(w http.ResponseWriter, r *http.Requ
 		out.Policies = append(out.Policies, policyView{
 			ID: p.ID, ScopeType: string(p.ScopeType), ScopeID: p.ScopeID,
 			RequestedStrategy: string(p.Strategy), EffectiveStrategy: string(eff), StrategyReason: reason,
-			Supported: reason == "", Seeded: p.Seeded, MaxCostCents: p.MaxCostCents, UpdatedAt: p.UpdatedAt,
+			Supported: reason == "", Seeded: p.Seeded, Origin: p.Origin, MaxCostCents: p.MaxCostCents, UpdatedAt: p.UpdatedAt,
 		})
 	}
 	writeJSON(w, http.StatusOK, out)

@@ -6,6 +6,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -27,9 +28,26 @@ type DirectoryApplier interface {
 	ApplySnapshot(ctx context.Context, snap *DirectorySnapshot) (DirectoryApplyReport, error)
 	// ApplyRotation trusts newKeyPKIX from now on, with the record's
 	// version, after the handler verified the record under the key the
-	// bridge trusted (C7.6).
+	// bridge trusted (C7.6). The record's version is checked against the
+	// last rotation's, never against the snapshot the bridge holds.
 	ApplyRotation(ctx context.Context, tenantID string, version int64, newKeyPKIX []byte) (DirectoryApplyReport, error)
+	// State is what the bridge holds: the tenant it follows, the version of
+	// the last snapshot applied and of the last rotation applied.
+	State(ctx context.Context) (DirectoryState, error)
 }
+
+// DirectoryState is what the bridge holds of its Hub's directory.
+type DirectoryState struct {
+	TenantID   string
+	Version    int64 // the last snapshot applied
+	KeyVersion int64 // the last key rotation applied
+}
+
+// RefuseUnknownKey: the envelope is signed by a key the bridge does not
+// trust (any more). The answer names the key it does trust, so a Hub that
+// lost the answer to a rotation, or a replica that signed before it
+// reloaded the new key, learns where the bridge stands (r19 C7-R1).
+const RefuseUnknownKey = "unknown_key"
 
 // DirectoryApplyReport is what a directory_push did: whether it applied,
 // and why not; each policy row applied or refused by name, the supported
@@ -39,7 +57,8 @@ type DirectoryApplyReport struct {
 	Applied          bool              `json:"applied"`
 	Reason           string            `json:"reason,omitempty"`
 	Detail           string            `json:"detail,omitempty"`
-	AppliedVersion   int64             `json:"applied_version"`
+	AppliedVersion   int64             `json:"applied_version"` // the snapshot version held after the command
+	KeyVersion       int64             `json:"key_version"`     // the version of the rotation the trusted key is from
 	Contacts         int               `json:"contacts"`
 	ContactsRemoved  int               `json:"contacts_removed"`
 	ContactsKept     int               `json:"contacts_kept_local"`
@@ -224,6 +243,9 @@ func (ch *CommandHandler) handleDirectoryPush(cmd Command) (json.RawMessage, err
 	var snap DirectorySnapshot
 	if probe.V == EnvelopeVersion {
 		payload, err := OpenEnvelope(cmd.Payload, pubPKIX)
+		if errors.Is(err, ErrUnknownKey) {
+			return ch.unknownKeyAnswer(cmd, "directory_push", pubPKIX, err)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("directory_push: %w", err)
 		}
@@ -266,6 +288,7 @@ func (ch *CommandHandler) handleDirectoryPush(cmd Command) (json.RawMessage, err
 		ev = log.Warn().Str("reason", report.Reason).Str("detail", report.Detail)
 	}
 	ev.Str("tenant_id", snap.TenantID).Int64("version", snap.Version).Int64("applied_version", report.AppliedVersion).
+		Int64("key_version", report.KeyVersion).
 		Str("format", snap.Format).Bool("applied", report.Applied).Int("contacts", report.Contacts).
 		Int("groups", report.Groups).Int("policies", len(snap.Policies)).
 		Int("policies_applied", len(report.PoliciesApplied)).Int("policies_rejected", len(report.PoliciesRejected)).
@@ -292,6 +315,22 @@ func directoryAnswer(tenantID string, version int64, format, keyID string, repor
 		KeyID    string `json:"key_id"`
 		DirectoryApplyReport
 	}{tenantID, version, format, keyID, report})
+}
+
+// unknownKeyAnswer answers an envelope signed by a key the bridge does not
+// trust: not applied, reason unknown_key, with what the bridge holds and the
+// id of the key it trusts. Nothing of the payload is read. The key id is
+// public (the Hub serves the key), so naming it gives nothing away.
+func (ch *CommandHandler) unknownKeyAnswer(cmd Command, what string, trusted []byte, cause error) (json.RawMessage, error) {
+	st, err := ch.dirApplier.State(context.Background())
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w (and the directory state: %v)", what, cause, err)
+	}
+	log.Warn().Str("command", what).Err(cause).Str("key_id", KeyID(trusted)).Int64("applied_version", st.Version).
+		Int64("key_version", st.KeyVersion).Str("request_id", cmd.RequestID).
+		Msg("commander: directory envelope signed by a key this bridge does not trust")
+	return directoryAnswer(st.TenantID, 0, "v2", KeyID(trusted), DirectoryApplyReport{Reason: RefuseUnknownKey,
+		Detail: cause.Error(), AppliedVersion: st.Version, KeyVersion: st.KeyVersion})
 }
 
 // verifyV1 checks a v1 snapshot's signature: the snapshot re-encoded with
@@ -331,7 +370,9 @@ func verifyV1(raw []byte, pubPKIX []byte, snap *DirectorySnapshot) error {
 // handleDirectoryRotate takes one rotation record (C7.6): signed by the key
 // the bridge trusts, it names the new key, its id and a version; the
 // bridge trusts the new key from then on, if the record is of the tenant it
-// follows and above the version it holds. [MESHSAT-1584]
+// follows and above the last rotation it applied. A record signed by a key
+// the bridge no longer trusts (one it already followed, sent again because
+// the answer was lost) is answered with the key it trusts. [MESHSAT-1584]
 func (ch *CommandHandler) handleDirectoryRotate(cmd Command) (json.RawMessage, error) {
 	if ch.dirApplier == nil || ch.trustStore == nil {
 		return nil, fmt.Errorf("directory applier or trust anchor not configured")
@@ -341,6 +382,9 @@ func (ch *CommandHandler) handleDirectoryRotate(cmd Command) (json.RawMessage, e
 		return nil, fmt.Errorf("directory_rotate: no pinned trust anchor")
 	}
 	payload, err := OpenEnvelope(cmd.Payload, pinned)
+	if errors.Is(err, ErrUnknownKey) {
+		return ch.unknownKeyAnswer(cmd, "directory_rotate", pinned, err)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("directory_rotate: %w", err)
 	}
@@ -371,7 +415,7 @@ func (ch *CommandHandler) handleDirectoryRotate(cmd Command) (json.RawMessage, e
 	if report.Applied {
 		trusted = rec.NewKeyID
 		log.Info().Str("tenant_id", rec.TenantID).Int64("version", rec.Version).Str("key_id", trusted).
-			Msg("commander: directory key rotated by a signed record")
+			Int64("applied_version", report.AppliedVersion).Msg("commander: directory key rotated by a signed record")
 	} else {
 		log.Warn().Str("tenant_id", rec.TenantID).Int64("version", rec.Version).Str("reason", report.Reason).
 			Str("detail", report.Detail).Msg("commander: directory_rotate not applied")

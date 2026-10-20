@@ -58,7 +58,9 @@ type directoryState struct {
 
 // @Summary Directory sync state
 // @Description What the bridge applied of its Hub's directory: the tenant
-// @Description it follows, the version, when, the last refusal and why
+// @Description it follows, the version of the last snapshot applied and
+// @Description when, apart from it the version of the last key rotation
+// @Description applied (key_version), the last refusal and why
 // @Description (other_tenant, not_newer), and the id of the Hub key it
 // @Description trusts (SHA-256 of the PKIX key, hex).
 // @Tags directory

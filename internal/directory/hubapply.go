@@ -29,10 +29,16 @@ import (
 //   - a policy the Hub marks seeded is a Hub default, never applied over
 //     the bridge's own (C7.7).
 // A snapshot of another tenant than the one the bridge follows, or one not
-// newer than the version applied, is refused and the reason recorded.
-// A row that cannot be stored as sent (an unknown kind, an address another
-// contact holds, an id a local row has) is skipped with its reason; the
-// rest of the snapshot applies. [MESHSAT-1584]
+// newer than the version applied, is refused and the reason recorded. A key
+// rotation has its own counter (key_version): the Hub's rotation records and
+// snapshots share one version sequence, and neither may stand in for the
+// other (r19 C7-R1).
+// A row that cannot be stored as sent (an unknown kind, an address a local
+// row holds, an id a local row has) is skipped with its reason; the rest of
+// the snapshot applies. Every address this Hub sent before is taken away
+// before the snapshot's are written, so an address that moved from one Hub
+// contact to another lands whatever order the contacts come in (r19 C7-R2).
+// [MESHSAT-1584]
 
 // HubSnapshot is a verified full snapshot in the bridge's terms.
 type HubSnapshot struct {
@@ -95,7 +101,8 @@ type HubApplyReport struct {
 	Reason           string            `json:"reason,omitempty"`
 	Detail           string            `json:"detail,omitempty"`
 	TenantID         string            `json:"tenant_id"`
-	AppliedVersion   int64             `json:"applied_version"`
+	AppliedVersion   int64             `json:"applied_version"` // the snapshot version held after it
+	KeyVersion       int64             `json:"key_version"`     // the version of the rotation the key is from
 	Contacts         int               `json:"contacts"`
 	ContactsRemoved  int               `json:"contacts_removed"`
 	ContactsKept     int               `json:"contacts_kept_local"`
@@ -106,10 +113,13 @@ type HubApplyReport struct {
 	Skipped          []HubSkip         `json:"skipped"`
 }
 
-// HubState is what the bridge has applied of its Hub's directory.
+// HubState is what the bridge has applied of its Hub's directory: the
+// version of the last snapshot, and apart from it the version of the last
+// key rotation.
 type HubState struct {
 	TenantID      string `db:"tenant_id"      json:"tenant_id"`
 	Version       int64  `db:"version"        json:"version"`
+	KeyVersion    int64  `db:"key_version"    json:"key_version"`
 	AppliedAt     string `db:"applied_at"     json:"applied_at"`
 	RefusedReason string `db:"refused_reason" json:"refused_reason,omitempty"`
 	RefusedDetail string `db:"refused_detail" json:"refused_detail,omitempty"`
@@ -140,7 +150,7 @@ var bridgeDefaults = map[string]Strategy{
 // GetHubState reads what the bridge has applied.
 func (s *SQLStore) GetHubState(ctx context.Context) (HubState, error) {
 	var st HubState
-	err := s.db.GetContext(ctx, &st, `SELECT tenant_id, version, applied_at, refused_reason, refused_detail, refused_at
+	err := s.db.GetContext(ctx, &st, `SELECT tenant_id, version, key_version, applied_at, refused_reason, refused_detail, refused_at
 		FROM directory_hub_state WHERE id = 1`)
 	if errors.Is(err, sql.ErrNoRows) {
 		return HubState{}, nil
@@ -156,16 +166,18 @@ func refuse(ctx context.Context, tx *sqlx.Tx, reason, detail string) error {
 }
 
 // checkHubVersion refuses another tenant than the one followed, or a
-// version not above the one applied, and records it; ok when it may apply.
-func checkHubVersion(ctx context.Context, tx *sqlx.Tx, st HubState, tenantID string, version int64, rep *HubApplyReport) (bool, error) {
-	rep.TenantID, rep.AppliedVersion = st.TenantID, st.Version
+// version not above held (the snapshot's or the key's own counter), and
+// records it; ok when it may apply. what names the record: snapshot or
+// rotation.
+func checkHubVersion(ctx context.Context, tx *sqlx.Tx, st HubState, what, tenantID string, version, held int64, rep *HubApplyReport) (bool, error) {
+	rep.TenantID, rep.AppliedVersion, rep.KeyVersion = st.TenantID, st.Version, st.KeyVersion
 	switch {
 	case tenantID == "":
-		rep.Reason, rep.Detail = RefuseOtherTenant, "the snapshot names no tenant"
+		rep.Reason, rep.Detail = RefuseOtherTenant, "the "+what+" names no tenant"
 	case st.TenantID != "" && st.TenantID != tenantID:
-		rep.Reason, rep.Detail = RefuseOtherTenant, fmt.Sprintf("the bridge follows tenant %q, the snapshot is %q", st.TenantID, tenantID)
-	case version <= st.Version:
-		rep.Reason, rep.Detail = RefuseNotNewer, fmt.Sprintf("version %d, the bridge holds %d", version, st.Version)
+		rep.Reason, rep.Detail = RefuseOtherTenant, fmt.Sprintf("the bridge follows tenant %q, the %s is %q", st.TenantID, what, tenantID)
+	case version <= held:
+		rep.Reason, rep.Detail = RefuseNotNewer, fmt.Sprintf("%s version %d, the bridge holds %d", what, version, held)
 	default:
 		return true, nil
 	}
@@ -184,11 +196,11 @@ func (s *SQLStore) ApplyHubSnapshot(ctx context.Context, snap HubSnapshot, suppo
 	}
 	defer func() { _ = tx.Rollback() }()
 	var st HubState
-	if err := tx.GetContext(ctx, &st, `SELECT tenant_id, version, applied_at, refused_reason, refused_detail, refused_at
+	if err := tx.GetContext(ctx, &st, `SELECT tenant_id, version, key_version, applied_at, refused_reason, refused_detail, refused_at
 		FROM directory_hub_state WHERE id = 1`); err != nil {
 		return rep, fmt.Errorf("read directory state: %w", err)
 	}
-	ok, err := checkHubVersion(ctx, tx, st, snap.TenantID, snap.Version, &rep)
+	ok, err := checkHubVersion(ctx, tx, st, "snapshot", snap.TenantID, snap.Version, st.Version, &rep)
 	if err != nil {
 		return rep, err
 	}
@@ -212,7 +224,7 @@ func (s *SQLStore) ApplyHubSnapshot(ctx context.Context, snap HubSnapshot, suppo
 	if err := tx.Commit(); err != nil {
 		return HubApplyReport{}, err
 	}
-	rep.Applied, rep.TenantID, rep.AppliedVersion = true, snap.TenantID, snap.Version
+	rep.Applied, rep.TenantID, rep.AppliedVersion, rep.KeyVersion = true, snap.TenantID, snap.Version, st.KeyVersion
 	return rep, nil
 }
 
@@ -263,6 +275,13 @@ func (a *hubApply) contacts(in []HubContact) error {
 	for _, r := range existing {
 		have[r.ID] = r
 	}
+	// Every address this Hub sent goes first, on every contact: the
+	// snapshot is the whole set, and an address that moved between two of
+	// its contacts must not meet its old row (r19 C7-R2). What the
+	// operator added stays, and still wins over the Hub's.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM directory_addresses WHERE origin IN (?, ?)`, a.origin, legacyHubOrigin); err != nil {
+		return fmt.Errorf("clear hub addresses: %w", err)
+	}
 	a.applied = map[string]bool{}
 	for _, c := range in {
 		if c.ID == "" {
@@ -299,10 +318,6 @@ func (a *hubApply) contacts(in []HubContact) error {
 			c.ID, a.tenant, name, c.GivenName, c.FamilyName, c.Org, c.Role, c.Team, c.SIDC, notes,
 			c.TrustLevel, c.TrustVerifiedAt, c.HubVersion, c.HubEtag, a.origin, a.ts, a.ts); err != nil {
 			return fmt.Errorf("store contact %s: %w", c.ID, err)
-		}
-		if _, err := tx.ExecContext(ctx, `DELETE FROM directory_addresses WHERE contact_id = ? AND origin IN (?, ?)`,
-			c.ID, a.origin, legacyHubOrigin); err != nil {
-			return fmt.Errorf("clear addresses of %s: %w", c.ID, err)
 		}
 		for _, ad := range c.Addresses {
 			if err := a.address(c.ID, ad); err != nil {
@@ -358,8 +373,10 @@ func (a *hubApply) address(contactID string, ad HubAddress) error {
 }
 
 // dropContact removes what the Hub owned of a contact it no longer sends:
-// its addresses and memberships; what the operator added keeps the contact
-// as a local one, without the Hub's trust or version.
+// its addresses and memberships. What the operator added (an address, a
+// name, notes) keeps the contact as a local one, rebuilt from those alone:
+// no field the Hub wrote survives, nor its trust or version (r19 C7-R6).
+// Without a local name it is called by its first local address.
 func (a *hubApply) dropContact(id, overrideRaw string) error {
 	ctx, tx := a.ctx, a.tx
 	for _, q := range []string{
@@ -370,14 +387,29 @@ func (a *hubApply) dropContact(id, overrideRaw string) error {
 			return fmt.Errorf("drop hub rows of %s: %w", id, err)
 		}
 	}
-	var local int
-	if err := tx.GetContext(ctx, &local, `SELECT COUNT(*) FROM directory_addresses WHERE contact_id = ?`, id); err != nil {
+	var local []struct {
+		Kind  string `db:"kind"`
+		Value string `db:"value"`
+	}
+	if err := tx.SelectContext(ctx, &local, `SELECT kind, value FROM directory_addresses WHERE contact_id = ?
+		ORDER BY primary_rank ASC, created_at ASC, id ASC`, id); err != nil {
 		return err
 	}
-	if local > 0 || !parseOverride(overrideRaw).empty() {
-		if _, err := tx.ExecContext(ctx, `UPDATE directory_contacts SET origin = ?, tenant_id = '', trust_level = 0,
-			trust_verified_at = NULL, trust_verified_by = '', hub_version = 0, hub_etag = '', updated_at = ?
-			WHERE id = ?`, string(OriginLocal), a.ts, id); err != nil {
+	ov := parseOverride(overrideRaw)
+	if len(local) > 0 || !ov.empty() {
+		name, notes := LocalStubName, ""
+		if ov.DisplayName != nil {
+			name = *ov.DisplayName
+		} else if len(local) > 0 {
+			name = local[0].Kind + " " + local[0].Value
+		}
+		if ov.Notes != nil {
+			notes = *ov.Notes
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE directory_contacts SET origin = ?, tenant_id = '', display_name = ?,
+			given_name = '', family_name = '', org = '', role = '', team = '', sidc = '', notes = ?,
+			trust_level = 0, trust_verified_at = NULL, trust_verified_by = '', hub_version = 0, hub_etag = '',
+			local_override = '{}', updated_at = ? WHERE id = ?`, string(OriginLocal), name, notes, a.ts, id); err != nil {
 			return fmt.Errorf("keep %s local: %w", id, err)
 		}
 		a.rep.ContactsKept++
@@ -395,6 +427,14 @@ func (a *hubApply) dropContact(id, overrideRaw string) error {
 	a.rep.ContactsRemoved++
 	return nil
 }
+
+// LocalStubName names a contact the Hub no longer sends, kept for what the
+// operator added, when the operator gave it no name and no address.
+const LocalStubName = "Local contact"
+
+// LocalGroupName names a group the Hub no longer sends, kept for the
+// members the operator added.
+const LocalGroupName = "Local group"
 
 func (a *hubApply) groups(in []HubGroup) error {
 	ctx, tx := a.ctx, a.tx
@@ -472,8 +512,11 @@ func (a *hubApply) groups(in []HubGroup) error {
 			return err
 		}
 		if local > 0 {
-			if _, err := tx.ExecContext(ctx, `UPDATE directory_groups SET origin = ?, tenant_id = '', hub_version = 0,
-				hub_etag = '', updated_at = ? WHERE id = ?`, string(OriginLocal), a.ts, r.ID); err != nil {
+			// Kept for the operator's members; nothing the Hub wrote
+			// stays but its kind, which the members were added to.
+			if _, err := tx.ExecContext(ctx, `UPDATE directory_groups SET origin = ?, tenant_id = '', display_name = ?,
+				sidc = '', mls_group_id = '', hub_version = 0, hub_etag = '', updated_at = ? WHERE id = ?`,
+				string(OriginLocal), LocalGroupName, a.ts, r.ID); err != nil {
 				return err
 			}
 			continue
@@ -591,9 +634,12 @@ const RotationKeyConfig = "hub_directory_signing_pubkey"
 
 // ApplyHubRotation trusts newKeyPKIX from now on: a rotation record the
 // caller verified under the key the bridge trusted. Like a snapshot it
-// names the tenant the bridge follows and a version above the one applied,
-// and it moves the key and the version in one transaction. A refusal is a
-// report with Applied false and the reason.
+// names the tenant the bridge follows; its version must be above the last
+// rotation's (key_version), whatever snapshot the bridge holds, and it moves
+// the key and key_version in one transaction. It leaves the snapshot
+// version alone: the record carries no directory rows, so a snapshot of the
+// same version still applies after it (r19 C7-R1). A refusal is a report
+// with Applied false and the reason.
 func (s *SQLStore) ApplyHubRotation(ctx context.Context, tenantID string, version int64, newKeyPKIX []byte) (HubApplyReport, error) {
 	rep := HubApplyReport{PoliciesApplied: []string{}, PoliciesRejected: []PolicyRejection{}, Skipped: []HubSkip{}}
 	if len(newKeyPKIX) == 0 {
@@ -605,11 +651,11 @@ func (s *SQLStore) ApplyHubRotation(ctx context.Context, tenantID string, versio
 	}
 	defer func() { _ = tx.Rollback() }()
 	var st HubState
-	if err := tx.GetContext(ctx, &st, `SELECT tenant_id, version, applied_at, refused_reason, refused_detail, refused_at
+	if err := tx.GetContext(ctx, &st, `SELECT tenant_id, version, key_version, applied_at, refused_reason, refused_detail, refused_at
 		FROM directory_hub_state WHERE id = 1`); err != nil {
 		return rep, fmt.Errorf("read directory state: %w", err)
 	}
-	ok, err := checkHubVersion(ctx, tx, st, tenantID, version, &rep)
+	ok, err := checkHubVersion(ctx, tx, st, "rotation", tenantID, version, st.KeyVersion, &rep)
 	if err != nil {
 		return rep, err
 	}
@@ -622,14 +668,14 @@ func (s *SQLStore) ApplyHubRotation(ctx context.Context, tenantID string, versio
 		RotationKeyConfig, fmt.Sprintf("%x", newKeyPKIX), ts); err != nil {
 		return rep, fmt.Errorf("pin the new key: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE directory_hub_state SET tenant_id = ?, version = ?, applied_at = ?,
-		refused_reason = '', refused_detail = '', refused_at = '' WHERE id = 1`, tenantID, version, ts); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE directory_hub_state SET tenant_id = ?, key_version = ? WHERE id = 1`,
+		tenantID, version); err != nil {
 		return rep, fmt.Errorf("write directory state: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return rep, err
 	}
-	rep.Applied, rep.TenantID, rep.AppliedVersion = true, tenantID, version
+	rep.Applied, rep.TenantID, rep.AppliedVersion, rep.KeyVersion = true, tenantID, st.Version, version
 	return rep, nil
 }
 

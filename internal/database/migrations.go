@@ -1771,6 +1771,14 @@ var migrations = []string{
 		refused_at     TEXT NOT NULL DEFAULT ''
 	);
 	INSERT OR IGNORE INTO directory_hub_state (id) VALUES (1);`,
+
+	// v76: HeMB-NG stage 2 C7 (r19 C7-R1): the Hub's key moves on its own counter. The Hub's
+	// rotation records and its snapshots take slots in one version sequence per tenant, so
+	// a rotation applied at version 7 must not make the snapshot at version 7 look applied,
+	// and a snapshot applied at 8 must not refuse the rotation at 7 (a replica that signed
+	// before it reloaded the new key). key_version is the version of the last rotation
+	// applied; version stays the version of the last snapshot applied. [MESHSAT-1584]
+	`ALTER TABLE directory_hub_state ADD COLUMN key_version INTEGER NOT NULL DEFAULT 0;`,
 }
 
 func (db *DB) migrate() error {

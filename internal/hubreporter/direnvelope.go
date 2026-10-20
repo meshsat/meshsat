@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -79,29 +80,42 @@ func OpenEnvelope(raw []byte, trusted []byte) ([]byte, error) {
 }
 
 // directoryKeyClient is the HTTP client of FetchDirectoryKey (system
-// roots); a test swaps in its server's client.
+// roots); a test swaps in its server's client. FetchDirectoryKey never lets
+// it follow a redirect, whatever its own policy.
 var directoryKeyClient = http.DefaultClient
 
 // FetchDirectoryKey asks the Hub for its directory signing key, for a
 // bridge that has pinned none (GET /api/relay/directory-key, public). Only
-// an https URL is used (web PKI vouches for the Hub), and the key must hash
-// to the id the Hub names. This is the one time a key is taken without a
-// signature; after it, only a signed rotation moves it. [MESHSAT-1584 C7]
+// an https URL with a host is used (web PKI vouches for the Hub), no
+// redirect is followed (an https answer that points elsewhere, plain http
+// included, is refused: r19 C7-R4), and the key must hash to the id the Hub
+// names. This is the one time a key is taken without a signature; after it,
+// only a signed rotation moves it, and a key already pinned is never
+// fetched again (pinDirectoryKey). [MESHSAT-1584 C7]
 func FetchDirectoryKey(ctx context.Context, hubAPIURL string) ([]byte, error) {
-	if !strings.HasPrefix(hubAPIURL, "https://") {
-		return nil, fmt.Errorf("directory key: the Hub API URL %q is not https", hubAPIURL)
+	base, err := url.Parse(strings.TrimSuffix(hubAPIURL, "/"))
+	if err != nil || base.Scheme != "https" || base.Host == "" || base.User != nil {
+		return nil, fmt.Errorf("directory key: the Hub API URL %q is not an https URL", hubAPIURL)
 	}
+	endpoint := base.JoinPath("api", "relay", "directory-key")
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimSuffix(hubAPIURL, "/")+"/api/relay/directory-key", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := directoryKeyClient.Do(req)
+	client := *directoryKeyClient
+	client.CheckRedirect = func(next *http.Request, _ []*http.Request) error {
+		return fmt.Errorf("directory key: redirect to %s refused", next.URL.Redacted())
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if final := resp.Request.URL; final.Scheme != "https" || final.Host != endpoint.Host {
+		return nil, fmt.Errorf("directory key: answered from %s, not %s", final.Redacted(), endpoint.Redacted())
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("directory key: HTTP %d", resp.StatusCode)
 	}

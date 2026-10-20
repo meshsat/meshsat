@@ -309,13 +309,19 @@ func TestLegacyHubRowsAreTheNextHubs(t *testing.T) {
 	}
 }
 
-func TestHubRotationMovesTheKeyAndTheVersionTogether(t *testing.T) {
+// TestHubRotationMovesTheKeyNotTheSnapshot: a rotation moves the key and
+// its own counter in one transaction and leaves the snapshot version alone;
+// a refused one moves nothing.
+func TestHubRotationMovesTheKeyNotTheSnapshot(t *testing.T) {
 	s, db := newHubStore(t)
 	ctx := context.Background()
 	apply(t, s, base()) // t-1 at 5
 	rep, err := s.ApplyHubRotation(ctx, "t-1", 6, []byte{0x30, 0x59})
-	if err != nil || !rep.Applied || rep.AppliedVersion != 6 {
+	if err != nil || !rep.Applied || rep.AppliedVersion != 5 || rep.KeyVersion != 6 {
 		t.Fatalf("%+v %v", rep, err)
+	}
+	if st, _ := s.GetHubState(ctx); st.Version != 5 || st.KeyVersion != 6 {
+		t.Errorf("state %+v", st)
 	}
 	if v := one(t, db, `SELECT value FROM system_config WHERE key = ?`, directory.RotationKeyConfig); v != "3059" {
 		t.Errorf("pinned %s", v)
@@ -332,5 +338,8 @@ func TestHubRotationMovesTheKeyAndTheVersionTogether(t *testing.T) {
 	}
 	if v := one(t, db, `SELECT value FROM system_config WHERE key = ?`, directory.RotationKeyConfig); v != "3059" {
 		t.Errorf("a refused rotation moved the key to %s", v)
+	}
+	if st, _ := s.GetHubState(ctx); st.Version != 5 || st.KeyVersion != 6 {
+		t.Errorf("a refused rotation moved the state to %+v", st)
 	}
 }

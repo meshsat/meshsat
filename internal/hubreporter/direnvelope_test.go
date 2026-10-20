@@ -126,13 +126,30 @@ func TestDirectoryPushV2(t *testing.T) {
 	tampered, _ = json.Marshal(env)
 	for name, payload := range map[string][]byte{
 		"a payload changed after signing": tampered,
-		"signed by another key":           other.seal(t, []byte(v2Snapshot)),
 		"a rotation record":               k.seal(t, []byte(`{"type":"rotation","tenant_id":"t-1","version":13}`)),
 	} {
 		app.applied = nil
 		if _, err := ch.handleDirectoryPush(Command{Cmd: "directory_push", Payload: payload}); err == nil || app.applied != nil {
 			t.Errorf("%s: err=%v applied=%v", name, err, app.applied != nil)
 		}
+	}
+	// Signed by a key the bridge does not trust (a replica that had not
+	// reloaded the new key): not applied, and the answer names the key the
+	// bridge trusts and what it holds (r19 C7-R1).
+	app.applied = nil
+	resp, err = ch.handleDirectoryPush(Command{Cmd: "directory_push", Payload: other.seal(t, []byte(v2Snapshot))})
+	if err != nil || app.applied != nil {
+		t.Fatalf("signed by another key: err=%v applied=%v", err, app.applied != nil)
+	}
+	var unknown struct {
+		Applied        bool   `json:"applied"`
+		Reason         string `json:"reason"`
+		KeyID          string `json:"key_id"`
+		AppliedVersion int64  `json:"applied_version"`
+	}
+	_ = json.Unmarshal(resp, &unknown)
+	if unknown.Applied || unknown.Reason != RefuseUnknownKey || unknown.KeyID != KeyID(k.pkix) {
+		t.Errorf("signed by another key: answer %+v", unknown)
 	}
 	// A refusal is an answer, not an error, and says what the bridge holds.
 	app.report = DirectoryApplyReport{Applied: false, Reason: "not_newer", AppliedVersion: 20}
@@ -184,12 +201,33 @@ func TestDirectoryRotateTakesOnlyARecordSignedByTheTrustedKey(t *testing.T) {
 		"signed by the new key only":          rotation(t, k2, "t-1", 9, k2, ""),
 		"a new key that misses its id":        rotation(t, k1, "t-1", 9, k2, KeyID(k1.pkix)),
 		"a snapshot sent as a rotation":       k1.seal(t, []byte(v2Snapshot)),
-		"signed by a key nobody trusts":       rotation(t, newTestKey(t), "t-1", 9, k2, ""),
 		"not an envelope (the old command)":   []byte(`{"public_key":"AAAA","algorithm":"ecdsa-p256"}`),
 	} {
+		if name == "signed by the new key only" {
+			continue // below: a key the bridge does not trust
+		}
 		app.rotKey = nil
 		if _, err := ch.handleDirectoryRotate(Command{Cmd: "directory_rotate", Payload: payload}); err == nil || app.rotKey != nil {
 			t.Errorf("%s: err=%v applied=%v", name, err, app.rotKey != nil)
+		}
+	}
+	// Signed by a key the bridge does not trust: never applied; the answer
+	// names the key it trusts, so a Hub that lost the answer to the record
+	// before learns the bridge already moved (r19 C7-R1).
+	for name, payload := range map[string][]byte{
+		"signed by the new key only":    rotation(t, k2, "t-1", 9, k2, ""),
+		"signed by a key nobody trusts": rotation(t, newTestKey(t), "t-1", 9, k2, ""),
+	} {
+		app.rotKey = nil
+		resp, err := ch.handleDirectoryRotate(Command{Cmd: "directory_rotate", Payload: payload})
+		var ans struct {
+			Applied bool   `json:"applied"`
+			Reason  string `json:"reason"`
+			KeyID   string `json:"key_id"`
+		}
+		_ = json.Unmarshal(resp, &ans)
+		if err != nil || app.rotKey != nil || ans.Applied || ans.Reason != RefuseUnknownKey || ans.KeyID != KeyID(k1.pkix) {
+			t.Errorf("%s: err=%v applied=%v answer %+v", name, err, app.rotKey != nil, ans)
 		}
 	}
 	// The store's refusal (not newer) is an answer that keeps the old key.

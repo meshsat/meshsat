@@ -46,6 +46,18 @@ func (f *fakeApplier) ApplyRotation(_ context.Context, tenantID string, version 
 	return DirectoryApplyReport{Applied: true, AppliedVersion: version}, nil
 }
 
+// State answers what the fake holds: the last snapshot and rotation
+// versions it was given.
+func (f *fakeApplier) State(context.Context) (DirectoryState, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	st := DirectoryState{KeyVersion: f.rotVersion}
+	if f.applied != nil {
+		st.TenantID, st.Version = f.applied.TenantID, f.applied.Version
+	}
+	return st, nil
+}
+
 // memTrustAnchorStore is an in-memory TrustAnchorStore for tests.
 type memTrustAnchorStore struct {
 	pub []byte

@@ -2409,7 +2409,9 @@ func main() {
 			if hubCallsign != "" {
 				birth.CoTCallsign = hubCallsign
 			}
-			// What the bridge holds of its Hub's directory (C7.5, C7.6).
+			// What the bridge holds of its Hub's directory (C7.5, C7.6): the
+			// last snapshot it applied (a key rotation does not move it) and
+			// the key it trusts.
 			if st, err := directory.NewSQLStore(db.DB).GetHubState(ctx); err == nil {
 				birth.DirectoryVersion = st.Version
 			}
@@ -3506,9 +3508,13 @@ func (s *bridgeDirectoryTrustStore) GetDirectoryTrustAnchor() ([]byte, error) {
 	return hex.DecodeString(v)
 }
 
+// fetchDirectoryKey is how pinDirectoryKey asks the Hub (a test swaps it).
+var fetchDirectoryKey = hubreporter.FetchDirectoryKey
+
 // pinDirectoryKey pins the Hub's directory signing key when none is: it
 // asks GET /api/relay/directory-key over HTTPS every 5 min until it has one,
-// then calls pinned. A pinned key is never replaced here. [MESHSAT-1584]
+// then calls pinned. A pinned key is never fetched again nor replaced here,
+// and a failed fetch stores nothing. [MESHSAT-1584]
 func pinDirectoryKey(ctx context.Context, db *database.DB, hubAPIURL, mqttURL string, pinned func()) {
 	if hubAPIURL == "" {
 		hubAPIURL = relayclient.DeriveAPIURL(mqttURL)
@@ -3520,7 +3526,7 @@ func pinDirectoryKey(ctx context.Context, db *database.DB, hubAPIURL, mqttURL st
 		if v, err := db.GetSystemConfig(directory.RotationKeyConfig); err == nil && v != "" {
 			return
 		}
-		pkix, err := hubreporter.FetchDirectoryKey(ctx, hubAPIURL)
+		pkix, err := fetchDirectoryKey(ctx, hubAPIURL)
 		if err == nil {
 			if err := db.SetSystemConfig(directory.RotationKeyConfig, hex.EncodeToString(pkix)); err == nil {
 				log.Info().Str("hub", hubAPIURL).Str("key_id", hubreporter.KeyID(pkix)).Msg("directory: Hub directory key pinned")
@@ -3605,9 +3611,17 @@ func (a *bridgeDirectoryApplier) ApplyRotation(ctx context.Context, tenantID str
 	return directoryReport(rep), nil
 }
 
+func (a *bridgeDirectoryApplier) State(ctx context.Context) (hubreporter.DirectoryState, error) {
+	st, err := a.dir.GetHubState(ctx)
+	if err != nil {
+		return hubreporter.DirectoryState{}, err
+	}
+	return hubreporter.DirectoryState{TenantID: st.TenantID, Version: st.Version, KeyVersion: st.KeyVersion}, nil
+}
+
 func directoryReport(rep directory.HubApplyReport) hubreporter.DirectoryApplyReport {
 	out := hubreporter.DirectoryApplyReport{Applied: rep.Applied, Reason: rep.Reason, Detail: rep.Detail,
-		AppliedVersion: rep.AppliedVersion, Contacts: rep.Contacts, ContactsRemoved: rep.ContactsRemoved,
+		AppliedVersion: rep.AppliedVersion, KeyVersion: rep.KeyVersion, Contacts: rep.Contacts, ContactsRemoved: rep.ContactsRemoved,
 		ContactsKept: rep.ContactsKept, Groups: rep.Groups, PoliciesApplied: rep.PoliciesApplied,
 		PoliciesReverted: rep.PoliciesReverted}
 	for _, rj := range rep.PoliciesRejected {
