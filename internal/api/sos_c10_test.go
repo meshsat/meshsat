@@ -307,9 +307,7 @@ func TestSOSC10_TheCancelRepeatsUntilItsAckAndTheFrameWaitsForIt(t *testing.T) {
 		t.Fatalf("the waiting cancel frame after the ack: %s %q", status, lastErr)
 	}
 	eventually(t, "the follow loop ended", func() bool {
-		s.sos.mu.Lock()
-		defer s.sos.mu.Unlock()
-		return s.sos.cancelLoopFor == 0
+		return !s.sosCancelLoopRunning(run.ID)
 	})
 	n, _ = hub.count(hubreporter.SOSEventCancel)
 	clk.add(time.Hour)
@@ -336,9 +334,7 @@ func TestSOSC10_WithoutAHubSessionTheFrameGoesAtOnceForADayAtMost(t *testing.T) 
 	clk.add(sosCancelFor + time.Minute)
 	eventually(t, "the frame stopped after a day", func() bool { st, _ := rowStatus(t, s, row.ID); return st == "dead" })
 	eventually(t, "the follow loop ended", func() bool {
-		s.sos.mu.Lock()
-		defer s.sos.mu.Unlock()
-		return s.sos.cancelLoopFor == 0
+		return !s.sosCancelLoopRunning(run.ID)
 	})
 	hub.setUp(true)
 	time.Sleep(60 * time.Millisecond)
@@ -400,9 +396,7 @@ func TestSOSC10_ARestartCarriesOnTheCancel(t *testing.T) {
 	}
 	after.SOSAckReceived(hubreporter.SOSAck{V: 2, SOSID: run.SOSID, Kind: hubreporter.SOSEventCancel, State: "cancelled", Rev: 2})
 	eventually(t, "the follow loop ended", func() bool {
-		after.sos.mu.Lock()
-		defer after.sos.mu.Unlock()
-		return after.sos.cancelLoopFor == 0
+		return !after.sosCancelLoopRunning(run.ID)
 	})
 }
 
@@ -567,3 +561,10 @@ func TestSOSC10_NoCancelBySMSForAnOldFormatID(t *testing.T) {
 }
 
 func base64Std(b []byte) string { return base64.StdEncoding.EncodeToString(b) }
+
+// sosCancelLoopRunning reports whether a loop follows the run's cancellation.
+func (s *Server) sosCancelLoopRunning(id int64) bool {
+	s.sos.mu.Lock()
+	defer s.sos.mu.Unlock()
+	return s.sos.cancelLoops[id]
+}

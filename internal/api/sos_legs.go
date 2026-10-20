@@ -69,6 +69,10 @@ const (
 
 	// sosRunKey is where the SOS is kept (system_config).
 	sosRunKey = "sos_run"
+	// sosPrevRunsKey keeps the earlier runs whose cancellation is still owed (C10-R4), and
+	// sosPrevMax is the most kept (the oldest goes first).
+	sosPrevRunsKey = "sos_prev_runs"
+	sosPrevMax     = 8
 	// sosMeshInterface is the mesh link the mesh leg waits on.
 	sosMeshInterface = "mesh_0"
 	// sosFrameDevice is the device an SOS frame from the Bridge itself
@@ -196,6 +200,8 @@ type sosRun struct {
 	HubCancelPublishedAt string `json:"hub_cancel_published_at,omitempty"`
 	HubCancelAckedAt     string `json:"hub_cancel_acked_at,omitempty"`
 	FrameCancelsDone     bool   `json:"frame_cancels_done,omitempty"`
+	// HubCancelGaveUp: 24 h passed without the cancel's ack; it is no longer followed.
+	HubCancelGaveUp bool `json:"hub_cancel_gave_up,omitempty"`
 }
 
 func (r sosRun) copy() sosRun {
@@ -253,6 +259,18 @@ func (s *Server) sosLoad() {
 		if s.db == nil {
 			return
 		}
+		var prev []*sosRun
+		if raw, err := s.db.GetSystemConfig(sosPrevRunsKey); err == nil && raw != "" {
+			if err := json.Unmarshal([]byte(raw), &prev); err != nil {
+				log.Warn().Err(err).Msg("SOS: the earlier runs kept in the database do not read, ignoring them")
+				prev = nil
+			}
+		}
+		s.sos.mu.Lock()
+		if s.sos.prev == nil {
+			s.sos.prev = prev
+		}
+		s.sos.mu.Unlock()
 		raw, err := s.db.GetSystemConfig(sosRunKey)
 		if err != nil || raw == "" {
 			return
@@ -277,24 +295,35 @@ func (s *Server) sosLoad() {
 	})
 }
 
+// sosSaved is a snapshot of the SOS and of the earlier runs still owed a cancellation.
+type sosSaved struct{ run, prev []byte }
+
 // sosMarshalLocked takes a numbered snapshot of the SOS for the database
 // (sosWrite). The caller holds s.sos.mu.
-func (s *Server) sosMarshalLocked() ([]byte, uint64) {
+func (s *Server) sosMarshalLocked() (sosSaved, uint64) {
 	if s.db == nil || s.sos.run == nil {
-		return nil, 0
+		return sosSaved{}, 0
 	}
 	raw, err := json.Marshal(s.sos.run)
 	if err != nil {
-		return nil, 0
+		return sosSaved{}, 0
+	}
+	prev := s.sos.prev
+	if prev == nil {
+		prev = []*sosRun{}
+	}
+	rawPrev, err := json.Marshal(prev)
+	if err != nil {
+		return sosSaved{}, 0
 	}
 	s.sos.saveSeq++
-	return raw, s.sos.saveSeq
+	return sosSaved{run: raw, prev: rawPrev}, s.sos.saveSeq
 }
 
 // sosWrite keeps a snapshot of the SOS in the database, outside s.sos.mu,
 // unless a newer one is already written.
-func (s *Server) sosWrite(raw []byte, seq uint64) {
-	if raw == nil || s.db == nil {
+func (s *Server) sosWrite(saved sosSaved, seq uint64) {
+	if saved.run == nil || s.db == nil {
 		return
 	}
 	s.sos.saveMu.Lock()
@@ -302,37 +331,95 @@ func (s *Server) sosWrite(raw []byte, seq uint64) {
 	if seq <= s.sos.savedSeq {
 		return
 	}
-	if err := s.db.SetSystemConfig(sosRunKey, string(raw)); err != nil {
+	if err := s.db.SetSystemConfig(sosPrevRunsKey, string(saved.prev)); err != nil {
+		log.Error().Err(err).Msg("SOS: could not keep the earlier runs' owed cancellations; a restart would lose them")
+		return
+	}
+	if err := s.db.SetSystemConfig(sosRunKey, string(saved.run)); err != nil {
 		log.Error().Err(err).Msg("SOS: could not keep the SOS in the database; a restart would lose it")
 		return
 	}
 	s.sos.savedSeq = seq
 }
 
-// sosUpdate changes the SOS with id under the lock and keeps it; false when
-// that SOS is no longer the Bridge's.
+// sosFindLocked is the run with id: the SOS on now or the last, or an earlier run still owed
+// its cancellation; nil when the Bridge no longer keeps it. The caller holds s.sos.mu.
+func (s *Server) sosFindLocked(id int64) *sosRun {
+	if s.sos.run != nil && s.sos.run.ID == id {
+		return s.sos.run
+	}
+	for _, p := range s.sos.prev {
+		if p.ID == id {
+			return p
+		}
+	}
+	return nil
+}
+
+// sosKeepOwedLocked keeps the run about to be replaced when its cancellation is still owed
+// (a new SOS is no ack of the older one's cancel). The caller holds s.sos.mu.
+func (s *Server) sosKeepOwedLocked() {
+	old := s.sos.run
+	if old == nil || s.sos.active || old.CancelledAt == "" || !sosCancelOwed(old) {
+		return
+	}
+	s.sos.prev = append(s.sos.prev, old)
+	if len(s.sos.prev) > sosPrevMax {
+		dropped := s.sos.prev[0]
+		s.sos.prev = s.sos.prev[1:]
+		log.Warn().Int64("sos", dropped.ID).Msg("SOS: too many earlier runs owed a cancellation; the oldest is no longer followed")
+	}
+	log.Warn().Int64("sos", old.ID).Str("sos_id", old.SOSID).Msg("SOS: a new SOS starts; the last one's cancellation is still followed")
+}
+
+// sosForget drops an earlier run whose cancellation is no longer owed.
+func (s *Server) sosForget(id int64) {
+	s.sos.mu.Lock()
+	kept := s.sos.prev[:0]
+	dropped := false
+	for _, p := range s.sos.prev {
+		if p.ID == id && !sosCancelOwed(p) {
+			dropped = true
+			continue
+		}
+		kept = append(kept, p)
+	}
+	s.sos.prev = kept
+	if !dropped {
+		s.sos.mu.Unlock()
+		return
+	}
+	raw, seq := s.sosMarshalLocked()
+	s.sos.mu.Unlock()
+	s.sosWrite(raw, seq)
+}
+
+// sosUpdate changes the run with id under the lock and keeps it; false when
+// the Bridge no longer keeps that run.
 func (s *Server) sosUpdate(id int64, fn func(run *sosRun)) bool {
 	s.sos.mu.Lock()
-	if s.sos.run == nil || s.sos.run.ID != id {
+	r := s.sosFindLocked(id)
+	if r == nil {
 		s.sos.mu.Unlock()
 		return false
 	}
-	fn(s.sos.run)
+	fn(r)
 	raw, seq := s.sosMarshalLocked()
 	s.sos.mu.Unlock()
 	s.sosWrite(raw, seq)
 	return true
 }
 
-// sosSnapshot is a copy of the SOS with id and whether it is on; ok false
-// when it is no longer the Bridge's.
+// sosSnapshot is a copy of the run with id and whether it is on (an earlier
+// run never is); ok false when the Bridge no longer keeps it.
 func (s *Server) sosSnapshot(id int64) (run sosRun, active, ok bool) {
 	s.sos.mu.Lock()
 	defer s.sos.mu.Unlock()
-	if s.sos.run == nil || s.sos.run.ID != id {
+	r := s.sosFindLocked(id)
+	if r == nil {
 		return sosRun{}, false, false
 	}
-	return s.sos.run.copy(), s.sos.active, true
+	return r.copy(), s.sos.active && r == s.sos.run, true
 }
 
 // RestoreSOS picks up the SOS kept in the database after a restart: one
@@ -345,6 +432,15 @@ func (s *Server) RestoreSOS() {
 	s.sosLoad()
 	s.sosEnsureID()
 	s.sos.mu.Lock()
+	// The earlier runs still owed a cancellation are followed again (C10-R4), once.
+	if !s.sos.prevRestored {
+		s.sos.prevRestored = true
+		for _, p := range s.sos.prev {
+			if sosCancelOwed(p) {
+				go s.sosHubCancelLoop(p.ID)
+			}
+		}
+	}
 	run := s.sos.run
 	if run == nil || s.sos.restored || s.sos.cancelFn != nil {
 		s.sos.mu.Unlock()
@@ -381,7 +477,12 @@ func sosHubHadOldWay(run *sosRun) bool {
 // cancelled run: the old way, or under C10 until its ack (the follow loop
 // ends it at sosCancelFor).
 func sosCancelOwed(run *sosRun) bool {
-	return (run.HubCancelSentAt == "" && sosHubHadOldWay(run)) || (run.HubCancelV2 && run.HubCancelAckedAt == "")
+	return (run.HubCancelSentAt == "" && sosHubHadOldWay(run)) || sosV2CancelOwed(run)
+}
+
+// sosV2CancelOwed reports whether the C10 cancel is still owed: not acked, not given up.
+func sosV2CancelOwed(run *sosRun) bool {
+	return run.HubCancelV2 && run.HubCancelAckedAt == "" && !run.HubCancelGaveUp
 }
 
 // sosEnsureID gives the SOS kept its sos_id when it has none: a run started
@@ -856,6 +957,14 @@ func (s *Server) sosTryHubV2(hub sosHub, id int64, run sosRun, every time.Durati
 	s.sos.hubStartStep = min(2*s.sos.hubStartStep, sosRepeatMax)
 	s.sos.mu.Unlock()
 
+	// Kept before the publish: once it is under way the start may reach the Hub whatever the
+	// answer, so a cancel from now on owes the Hub the C10 cancel, also after a restart in
+	// between (r16 review C10-R5).
+	s.sosUpdate(id, func(r *sosRun) {
+		if l := r.leg(sosRouteHub); l != nil {
+			l.Frame = sosFrameV2
+		}
+	})
 	if err := hub.PublishSOSEvent(s.sosEvent(run, false), sosPubackWait); err != nil {
 		log.Warn().Err(err).Int64("sos", id).Msg("SOS: the start did not reach the Hub's broker yet, trying again")
 		return
@@ -891,9 +1000,14 @@ func (s *Server) SOSAckReceived(a hubreporter.SOSAck) {
 	if s.sos.run != nil && s.sos.run.SOSID == a.SOSID {
 		id = s.sos.run.ID
 	}
+	for _, p := range s.sos.prev {
+		if id == 0 && p.SOSID == a.SOSID {
+			id = p.ID // an earlier run still owed its cancellation (C10-R4)
+		}
+	}
 	s.sos.mu.Unlock()
 	if id == 0 {
-		log.Info().Str("sos_id", a.SOSID).Str("kind", a.Kind).Msg("SOS: an ack for an SOS that is not this Bridge's last, ignored")
+		log.Info().Str("sos_id", a.SOSID).Str("kind", a.Kind).Msg("SOS: an ack for an SOS this Bridge no longer follows, ignored")
 		return
 	}
 	at := s.clockNow().UTC().Format(time.RFC3339)
@@ -911,6 +1025,17 @@ func (s *Server) SOSAckReceived(a hubreporter.SOSAck) {
 		if first {
 			log.Warn().Int64("sos", id).Str("sos_id", a.SOSID).Str("state", a.State).Int("rev", a.Rev).Msg("SOS: the Hub has the SOS")
 		}
+		// The Hub has the start of a run cancelled here: it is owed the cancel, even when the
+		// cancel was made before anything said the start had left (C10-R5).
+		owe := false
+		s.sosUpdate(id, func(r *sosRun) {
+			if r.CancelledAt != "" && r.SOSID != "" && r.HubCancelAckedAt == "" && !r.HubCancelGaveUp && !r.HubCancelV2 {
+				r.HubCancelV2, owe = true, true
+			}
+		})
+		if owe {
+			go s.sosHubCancelLoop(id)
+		}
 	case hubreporter.SOSEventCancel:
 		first := false
 		s.sosUpdate(id, func(r *sosRun) {
@@ -921,6 +1046,7 @@ func (s *Server) SOSAckReceived(a hubreporter.SOSAck) {
 		if first {
 			s.sosStopCancelFrames(id)
 			log.Warn().Int64("sos", id).Str("sos_id", a.SOSID).Str("state", a.State).Msg("SOS cancelled: the Hub has the cancellation")
+			s.sosForget(id)
 		}
 	}
 }
@@ -1043,8 +1169,13 @@ func (s *Server) sosCancelLegs(id int64, text string) []sosLeg {
 // sosQueueCancelFrames puts the run's 0x08 on each frame bearer that carried
 // its C10 start (sosStartCarried): the satellite link the start went on, and
 // the SMS to the Hub's number (only for a v7 id: the Hub takes no v5 cancel
-// by SMS, which anyone could work out from the bridge id and the start). The
-// queue tries each until it goes; the Hub's ack stops those still waiting.
+// by SMS, which anyone could work out from the bridge id and the start).
+// Each bearer is owed its frame until a delivery row for it exists: a failed
+// enqueue is tried again on the next round, and a row already under the
+// frame's reference (a crash between the enqueue and the run's update)
+// counts as queued, so no bearer gets two. FrameCancelsDone only once every
+// owed bearer has its row (r16 review C10-R3). The queue tries each row until
+// it goes; the Hub's ack stops those still waiting.
 func (s *Server) sosQueueCancelFrames(id int64) {
 	run, active, ok := s.sosSnapshot(id)
 	if !ok || active || run.FrameCancelsDone {
@@ -1052,35 +1183,64 @@ func (s *Server) sosQueueCancelFrames(id int64) {
 	}
 	frame := s.sosCancelFrame(run)
 	sat, sms := s.sosStartCarried(run)
+	owed, queued := 0, 0
 	var legs []sosLeg
-	if leg := run.leg(sosRouteSatellite); frame != nil && sat && s.dispatcher != nil {
+	if leg := run.leg(sosRouteSatellite); sat {
+		owed++
 		ref := run.ref("cancel:" + sosRouteSatellite)
-		opts := sosLegOptions(database.DeliveryClassHubUplink, ref)
-		opts.Payload = frame
-		delID, _, err := s.dispatcher.QueueDirectSendTo(leg.Interface, run.CancelText, opts)
-		if err != nil {
-			log.Error().Err(err).Int64("sos", id).Str("interface", leg.Interface).Msg("SOS cancelled: the cancel frame could not be queued on the satellite")
-		} else {
+		if delID := s.sosRowFor(ref); delID != 0 {
+			queued++
 			legs = append(legs, sosLeg{Route: sosRouteSatellite, Interface: leg.Interface, MsgRef: ref, DeliveryID: delID, Frame: sosFrameV2})
-			log.Warn().Int64("sos", id).Int64("delivery_id", delID).Str("interface", leg.Interface).Msg("SOS cancelled: the cancel frame is queued on the satellite")
+		} else if frame != nil && s.dispatcher != nil {
+			opts := sosLegOptions(database.DeliveryClassHubUplink, ref)
+			opts.Payload = frame
+			delID, _, err := s.dispatcher.QueueDirectSendTo(leg.Interface, run.CancelText, opts)
+			if err != nil {
+				log.Error().Err(err).Int64("sos", id).Str("interface", leg.Interface).Msg("SOS cancelled: the cancel frame could not be queued on the satellite; tried again")
+			} else {
+				queued++
+				legs = append(legs, sosLeg{Route: sosRouteSatellite, Interface: leg.Interface, MsgRef: ref, DeliveryID: delID, Frame: sosFrameV2})
+				log.Warn().Int64("sos", id).Int64("delivery_id", delID).Str("interface", leg.Interface).Msg("SOS cancelled: the cancel frame is queued on the satellite")
+			}
 		}
 	}
-	if frame != nil && sms && hubmsg.ValidV7(run.SOSID) && s.satFallback != nil {
+	if sms && hubmsg.ValidV7(run.SOSID) {
+		owed++
 		ref := run.ref("cancel:" + sosRouteHubSMS)
-		if err := s.satFallback.PublishSOSFrame(frame, ref); err != nil {
-			log.Warn().Err(err).Int64("sos", id).Msg("SOS cancelled: no cancel frame by SMS to the Hub's number")
-		} else {
-			leg := sosLeg{Route: sosRouteHubSMS, MsgRef: ref, Frame: sosFrameV2}
-			if ids, err := s.db.WaitingDeliveryIDsByRef(ref); err == nil && len(ids) > 0 {
-				leg.DeliveryID = ids[0]
+		if s.sosRowFor(ref) == 0 && frame != nil && s.satFallback != nil {
+			if err := s.satFallback.PublishSOSFrame(frame, ref); err != nil {
+				log.Warn().Err(err).Int64("sos", id).Msg("SOS cancelled: no cancel frame by SMS to the Hub's number yet; tried again")
 			}
-			legs = append(legs, leg)
+		}
+		if delID := s.sosRowFor(ref); delID != 0 {
+			queued++
+			legs = append(legs, sosLeg{Route: sosRouteHubSMS, MsgRef: ref, DeliveryID: delID, Frame: sosFrameV2})
 		}
 	}
 	s.sosUpdate(id, func(r *sosRun) {
-		r.CancelLegs = append(r.CancelLegs, legs...)
-		r.FrameCancelsDone = true
+		for _, l := range legs {
+			known := false
+			for _, c := range r.CancelLegs {
+				known = known || c.MsgRef == l.MsgRef
+			}
+			if !known {
+				r.CancelLegs = append(r.CancelLegs, l)
+			}
+		}
+		r.FrameCancelsDone = queued == owed
 	})
+}
+
+// sosRowFor is the first delivery under ref, whatever its state; 0 without one.
+func (s *Server) sosRowFor(ref string) int64 {
+	if s.db == nil {
+		return 0
+	}
+	dels, err := s.db.GetDeliveriesByMessage(ref)
+	if err != nil || len(dels) == 0 {
+		return 0
+	}
+	return dels[0].ID
 }
 
 // sosStopCancelFrames stops the run's cancel frames that have not gone: the
@@ -1115,18 +1275,20 @@ func (s *Server) sosStopCancelFrames(id int64) {
 // SOS; a restart starts it again (RestoreSOS). [MESHSAT-1446, MESHSAT-1584]
 func (s *Server) sosHubCancelLoop(id int64) {
 	s.sos.mu.Lock()
-	if s.sos.cancelLoopFor == id {
+	if s.sos.cancelLoops[id] {
 		s.sos.mu.Unlock()
 		return
 	}
-	s.sos.cancelLoopFor = id
+	if s.sos.cancelLoops == nil {
+		s.sos.cancelLoops = map[int64]bool{}
+	}
+	s.sos.cancelLoops[id] = true
 	s.sos.mu.Unlock()
 	defer func() {
 		s.sos.mu.Lock()
-		if s.sos.cancelLoopFor == id {
-			s.sos.cancelLoopFor = 0
-		}
+		delete(s.sos.cancelLoops, id)
 		s.sos.mu.Unlock()
+		s.sosForget(id) // an earlier run whose cancellation is done
 	}()
 
 	every, repeatMax, cancelFor, grace := sosFollowEvery, sosRepeatMax, sosCancelFor, sosCancelAckGrace
@@ -1143,10 +1305,11 @@ func (s *Server) sosHubCancelLoop(id int64) {
 			cancelledAt = now
 		}
 		oldWay := run.HubCancelSentAt == "" && sosHubHadOldWay(&run)
-		v2 := run.HubCancelV2 && run.HubCancelAckedAt == ""
+		v2 := sosV2CancelOwed(&run)
 		if v2 && now.Sub(cancelledAt) >= cancelFor {
 			log.Warn().Int64("sos", id).Str("sos_id", run.SOSID).Msg("SOS cancelled: no ack from the Hub in 24 h; the cancellation is no longer repeated")
 			s.sosStopCancelFrames(id)
+			s.sosUpdate(id, func(r *sosRun) { r.HubCancelGaveUp = true })
 			v2 = false
 		}
 		if !oldWay && !v2 {

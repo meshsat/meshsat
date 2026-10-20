@@ -51,13 +51,17 @@ type SOSState struct {
 	// C10 (MESHSAT-1584): the Hub's caps (hub/caps, also kept in the
 	// database), the hub leg's start repeats, the one cancellation loop, and
 	// a test's Hub session (nil: the reporter).
-	caps          hubreporter.HubCaps
-	capsLoaded    bool
-	hubStartFor   int64
-	hubStartNext  time.Time
-	hubStartStep  time.Duration
-	cancelLoopFor int64
-	hub           sosHub
+	caps         hubreporter.HubCaps
+	capsLoaded   bool
+	hubStartFor  int64
+	hubStartNext time.Time
+	hubStartStep time.Duration
+	cancelLoops  map[int64]bool // the runs whose cancellation a loop follows
+	prevRestored bool           // RestoreSOS picked up the earlier runs
+	// prev are earlier runs whose cancellation is still owed (r16 review C10-R4): a new
+	// SOS does not end the older one's obligation. Kept in the database (sosPrevRunsKey).
+	prev []*sosRun
+	hub  sosHub
 }
 
 // sosDefaultText is the SOS text when the caller gives none.
@@ -213,6 +217,13 @@ func (s *Server) TriggerSOSAt(trigger, text string, pos *sosPosition, routes []s
 	if last := s.sos.run; last != nil && run.ID <= last.ID {
 		run.ID = last.ID + 1 // the legs' references stay unique, whatever the clock did
 	}
+	for _, p := range s.sos.prev {
+		if run.ID <= p.ID {
+			run.ID = p.ID + 1
+		}
+	}
+	// The run this one replaces keeps its owed cancellation (r16 review C10-R4).
+	s.sosKeepOwedLocked()
 	// Its own identity on every bearer and after a restart (C10): a UUIDv7
 	// of the run's start. [MESHSAT-1584]
 	run.SOSID = hubmsg.NewSOSID(run.ID)
@@ -595,7 +606,7 @@ type sosCancelBody struct {
 }
 
 // @Summary Cancel SOS alert
-// @Description Cancels the active SOS, as MeshSat Android does: every leg that has not gone out is cancelled where it waits (and one being sent when this came in is not tried again if that send fails), and the routes that carried the SOS are told it is over: the mesh by a broadcast of the cancellation (a leg of its own, "cancel_legs"), the Hub over the internet if it had the SOS. The satellite leg gets no cancellation when its frame was the 0x02: that frame stays the Hub's alert. When the SOS went under its own id (HeMB-NG C10), the cancel goes to the Hub as the v2 event, published again until the Hub's ack or for 24 h, and as the 0x08 frame on each frame bearer that carried the start (the satellite, and the SMS to the Hub's number for a v7 id), queued once the Hub has not acked within 30 s (at once without a Hub session) and stopped by the ack. "message" is the cancellation's words (the apps send "Alarm cancelled: <name> is safe and needs no help now."); without them the words are Android's for a person without a name. They must not contain SOS, MAYDAY or EMERGENCY: the Hub raises an alarm for any text with one of those words.
+// @Description Cancels the active SOS, as MeshSat Android does: every leg that has not gone out is cancelled where it waits (and one being sent when this came in is not tried again if that send fails), and the routes that carried the SOS are told it is over: the mesh by a broadcast of the cancellation (a leg of its own, "cancel_legs"), the Hub over the internet if it had the SOS. The satellite leg gets no cancellation when its frame was the 0x02: that frame stays the Hub's alert. When the SOS went under its own id (HeMB-NG C10), the cancel goes to the Hub as the v2 event, published again until the Hub's ack or for 24 h, and as the 0x08 frame on each frame bearer that carried the start (the satellite, and the SMS to the Hub's number for a v7 id), queued once the Hub has not acked within 30 s (at once without a Hub session) and stopped by the ack. Each bearer's frame is owed until it is in the queue (a failed enqueue is tried again, never queued twice), and a new SOS does not end this one's owed cancellation, which is followed until its own ack or 24 h, across a restart. "message" is the cancellation's words (the apps send "Alarm cancelled: <name> is safe and needs no help now."); without them the words are Android's for a person without a name. They must not contain SOS, MAYDAY or EMERGENCY: the Hub raises an alarm for any text with one of those words.
 // @Tags sos
 // @Accept json
 // @Produce json

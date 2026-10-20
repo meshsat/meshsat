@@ -79,3 +79,41 @@ func TestCancelRunawayDeliveries_NoSOSKept(t *testing.T) {
 		}
 	}
 }
+
+// An earlier run still owed its cancellation (sos_prev_runs, r16 review C10-R4) keeps its
+// cancel frames through the cleanup too; a run no longer kept does not.
+func TestCancelRunawayDeliveries_KeepsAnEarlierRunsOwedCancel(t *testing.T) {
+	db := testDB(t)
+	if err := db.SetSystemConfig("sos_run", `{"id":1760000000000,"text":"SOS"}`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetSystemConfig("sos_prev_runs", `[{"id":1759000000000,"text":"SOS","cancelled_at":"2026-10-16T01:00:00Z"}]`); err != nil {
+		t.Fatal(err)
+	}
+	insert := func(ref string) int64 {
+		t.Helper()
+		id, err := db.InsertDelivery(MessageDelivery{MsgRef: ref, Channel: "iridium_imt_0", Status: "retry", Priority: 0,
+			TextPreview: "x", MaxRetries: 0, Visited: "[]", QoSLevel: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`UPDATE message_deliveries SET retries = 40 WHERE id = ?`, id); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	prevCancel := insert("sos-1759000000000-cancel:satellite")
+	current := insert("sos-1760000000000-cancel:satellite")
+	gone := insert("sos-1758000000000-cancel:satellite")
+	if _, err := db.CancelRunawayDeliveries(15); err != nil {
+		t.Fatal(err)
+	}
+	for name, c := range map[string]struct {
+		id   int64
+		want string
+	}{"the earlier run's owed cancel": {prevCancel, "retry"}, "the current run's": {current, "retry"}, "a run no longer kept": {gone, "dead"}} {
+		if d, err := db.GetDelivery(c.id); err != nil || d.Status != c.want {
+			t.Errorf("%s: %q, %v; want %s", name, d.Status, err, c.want)
+		}
+	}
+}
