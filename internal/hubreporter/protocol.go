@@ -278,6 +278,11 @@ type InterfaceInfo struct {
 	// never guesses text in it (HeMB-NG S3-2); without the declaration it
 	// reads it as before.
 	EgressSealed bool `json:"egress_sealed,omitempty"`
+	// EgressFormat: "sealed" or "plain", the explicit form of the declaration,
+	// so a chain changed to plain is a declaration and not the absence of
+	// one. The Hub keeps the last one per modem; an entry without the IMEI
+	// changes nothing there.
+	EgressFormat string `json:"egress_format,omitempty"`
 }
 
 // InterfaceHealth reports live metrics for a transport interface.

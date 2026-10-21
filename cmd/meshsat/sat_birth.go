@@ -28,13 +28,18 @@ func satModem(m *gateway.Manager, gwType string) (imei, ifaceID string) {
 }
 
 // satBirthEntry is a satellite gateway's birth entry: the modem's IMEI, which
-// lets the Hub find the bridge that owns it, and whether the interface's send
-// chain seals every payload. The Hub keeps such a modem's versioned payloads
-// opaque instead of guessing text in them (HeMB-NG S3-2), and reads the
-// payloads of a modem without the declaration as before.
+// lets the Hub find the bridge that owns it, and the format of the
+// interface's payloads: "sealed" when its send chain encrypts, else "plain".
+// The Hub keeps a sealed modem's versioned payloads opaque instead of
+// guessing text in them (HeMB-NG S3-2), and reads a plain one's as text.
+// egress_sealed stays for a Hub that knows only that flag.
 func satBirthEntry(info hubreporter.InterfaceInfo, imei, egressChain string) hubreporter.InterfaceInfo {
 	info.IMEI = imei
 	info.EgressSealed = engine.ChainEncrypts(egressChain)
+	info.EgressFormat = "plain"
+	if info.EgressSealed {
+		info.EgressFormat = "sealed"
+	}
 	return info
 }
 

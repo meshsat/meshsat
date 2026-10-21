@@ -11,9 +11,10 @@ import (
 	"meshsat/internal/hubreporter"
 )
 
-// A satellite gateway's birth entry carries its modem and declares a sealing
-// send chain, so the Hub keeps that modem's ciphertext opaque; a chain
-// without encryption, or none, declares nothing and the Hub reads as before.
+// A satellite gateway's birth entry carries its modem and declares its
+// format: sealed for an encrypting chain, so the Hub keeps that modem's
+// ciphertext opaque; plain otherwise, explicitly, so a chain changed to plain
+// replaces an earlier sealed on the Hub.
 func TestSatBirthEntryDeclaresASealingChain(t *testing.T) {
 	base := hubreporter.InterfaceInfo{Name: "iridium_imt", Type: "iridium_imt", Status: "online"}
 	cases := []struct {
@@ -29,11 +30,15 @@ func TestSatBirthEntryDeclaresASealingChain(t *testing.T) {
 	}
 	for _, c := range cases {
 		got := satBirthEntry(base, "300434060000001", c.chain)
-		if got.IMEI != "300434060000001" || got.EgressSealed != c.sealed || got.Name != "iridium_imt" || got.Status != "online" {
+		want := "plain"
+		if c.sealed {
+			want = "sealed"
+		}
+		if got.IMEI != "300434060000001" || got.EgressSealed != c.sealed || got.EgressFormat != want || got.Name != "iridium_imt" || got.Status != "online" {
 			t.Fatalf("chain %q: %+v, want sealed=%v", c.chain, got, c.sealed)
 		}
 		b, _ := json.Marshal(got)
-		if strings.Contains(string(b), `"egress_sealed"`) != c.sealed {
+		if strings.Contains(string(b), `"egress_sealed"`) != c.sealed || !strings.Contains(string(b), `"egress_format":"`+want+`"`) {
 			t.Fatalf("chain %q: birth JSON %s", c.chain, b)
 		}
 	}
