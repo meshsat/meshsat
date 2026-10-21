@@ -41,6 +41,9 @@ type dictDump struct {
 
 type smaz2Vector struct {
 	Name, Dict, Text, TextHex, CompressedHex string
+	// DecompressedHex is what this Bridge's Decompress makes of CompressedHex. It is the
+	// text, except where the default table (lib-x smaz2) does not round trip: bytes 0x01-0x08.
+	DecompressedHex string
 }
 
 type smaz2gVector struct {
@@ -71,7 +74,7 @@ type rejectVector struct {
 }
 
 func (v smaz2Vector) MarshalJSON() ([]byte, error) {
-	return json.Marshal(map[string]string{"name": v.Name, "dict": v.Dict, "text": v.Text, "text_hex": v.TextHex, "compressed_hex": v.CompressedHex})
+	return json.Marshal(map[string]string{"name": v.Name, "dict": v.Dict, "text": v.Text, "text_hex": v.TextHex, "compressed_hex": v.CompressedHex, "decompressed_hex": v.DecompressedHex})
 }
 
 func dictOf(name string) compress.Dictionary {
@@ -146,21 +149,29 @@ func buildHChainVectors(t *testing.T) hChainVectors {
 		Version:     1,
 		GeneratedBy: "meshsat internal/engine/h_chain_vectors_test.go (MESHSAT_WRITE_VECTORS=1)",
 		Spec: map[string]string{
-			"envelope":         "protocol version 0x01 || 12-byte nonce || AES-256-GCM ciphertext of the smaz2g frame || 16-byte tag; no AAD, no base64",
-			"smaz2g":           "mode byte 0x00 = the text's UTF-8 bytes as they are, 0x01 = its SMAZ2, taken only when strictly shorter (a tie stays raw)",
-			"dictionary":       "a configured agreement (step param dict: meshtastic or default); nothing on the wire names it",
-			"wire_len":         "30 + min(n, z) for n UTF-8 bytes and SMAZ2 output z",
-			"rejects":          "every smaz2g_reject frame and envelope_reject wire must fail without a crash and without showing text",
-			"h_chain_egress":   `[{"type":"smaz2g","params":{"dict":"meshtastic"}},{"type":"encrypt","params":{"key_ref":"..."}}]`,
-			"rollback_egress":  `[{"type":"smaz2","params":{"dict":"meshtastic"}},{"type":"encrypt"},{"type":"base64"}]`,
-			"protocol_version": "01",
+			"envelope":           "protocol version 0x01 || 12-byte nonce || AES-256-GCM ciphertext of the smaz2g frame || 16-byte tag; no AAD, no base64",
+			"smaz2g":             "mode byte 0x00 = the text's UTF-8 bytes as they are, 0x01 = its SMAZ2, taken only when strictly shorter (a tie stays raw)",
+			"dictionary":         "a configured agreement (step param dict: meshtastic or default); nothing on the wire names it",
+			"wire_len":           "30 + min(n, z) for n UTF-8 bytes and SMAZ2 output z",
+			"rejects":            "every smaz2g_reject frame and envelope_reject wire must fail without a crash and without showing text",
+			"h_chain_egress":     `[{"type":"smaz2g","params":{"dict":"meshtastic"}},{"type":"encrypt","params":{"key_ref":"..."}}]`,
+			"rollback_egress":    `[{"type":"smaz2","params":{"dict":"meshtastic"}},{"type":"encrypt"},{"type":"base64"}]`,
+			"protocol_version":   "01",
+			"smaz2_decompressed": "decompressed_hex is what the Bridge's Decompress returns for compressed_hex; the default table (lib-x smaz2) does not round trip bytes 0x01-0x08 (control_bytes), the meshtastic table does",
 		},
 		Dicts: map[string]dictDump{"meshtastic": {Words: words, Bigrams: bigrams}},
 	}
 	for _, dict := range []string{"default", "meshtastic"} {
 		for _, c := range hChainTexts {
 			z := compress.Compress([]byte(c.text), dictOf(dict))
-			v.Smaz2 = append(v.Smaz2, smaz2Vector{Name: c.name, Dict: dict, Text: c.text, TextHex: hex.EncodeToString([]byte(c.text)), CompressedHex: hex.EncodeToString(z)})
+			back, err := compress.Decompress(z, dictOf(dict))
+			if err != nil {
+				t.Fatalf("smaz2 %s (%s): %v", c.name, dict, err)
+			}
+			if !bytes.Equal(back, []byte(c.text)) && (dict != "default" || c.name != "control_bytes") {
+				t.Fatalf("smaz2 %s (%s) does not round trip", c.name, dict)
+			}
+			v.Smaz2 = append(v.Smaz2, smaz2Vector{Name: c.name, Dict: dict, Text: c.text, TextHex: hex.EncodeToString([]byte(c.text)), CompressedHex: hex.EncodeToString(z), DecompressedHex: hex.EncodeToString(back)})
 			frame, err := tp.ApplyEgress([]byte(c.text), smaz2gChain(dict))
 			if err != nil {
 				t.Fatal(err)
