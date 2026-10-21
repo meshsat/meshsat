@@ -2384,11 +2384,7 @@ func main() {
 				}
 				info := hubreporter.InterfaceInfo{Name: gs.Type, Type: gs.Type, Status: status}
 				if imei, ifaceID := satModem(gwMgr, gs.Type); ifaceID != "" {
-					chain := ""
-					if iface, err := db.GetInterface(ifaceID); err == nil {
-						chain = iface.EgressTransforms
-					}
-					info = satBirthEntry(info, imei, chain)
+					info = satBirthEntry(info, imei, satFormat(db, ifaceID))
 				}
 				ifaces = append(ifaces, info)
 				caps = append(caps, gs.Type)
@@ -2522,7 +2518,7 @@ func main() {
 				reporterForChains.RepublishBirth()
 			}
 		})
-		go watchSatModems(ctx, 30*time.Second, func() string { return satModemsKey(gwMgr) }, reporterForChains.RepublishBirth)
+		go watchSatModems(ctx, 30*time.Second, func() string { return satModemsKey(gwMgr, db) }, reporterForChains.RepublishBirth)
 
 		// hub_msg, the Hub app route (HeMB-NG stage 2, MESHSAT-1584): a delivery intent to a
 		// contact's "bridge:<id>" goes through the Hub on hub_0, and what the Hub delivers here

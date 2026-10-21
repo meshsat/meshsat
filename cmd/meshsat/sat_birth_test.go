@@ -2,45 +2,92 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"meshsat/internal/database"
 	"meshsat/internal/hubreporter"
 )
 
-// A satellite gateway's birth entry carries its modem and declares its
-// format: sealed for an encrypting chain, so the Hub keeps that modem's
-// ciphertext opaque; plain otherwise, explicitly, so a chain changed to plain
-// replaces an earlier sealed on the Hub.
-func TestSatBirthEntryDeclaresASealingChain(t *testing.T) {
-	base := hubreporter.InterfaceInfo{Name: "iridium_imt", Type: "iridium_imt", Status: "online"}
-	cases := []struct {
-		chain  string
-		sealed bool
-	}{
-		{`[{"type":"smaz2g","params":{"dict":"meshtastic"}},{"type":"encrypt","params":{"key_ref":"iridium:shared"}}]`, true},
-		{`[{"type":"smaz2"},{"type":"encrypt","params":{"key_ref":"iridium:shared"}},{"type":"base64"}]`, true},
-		{`[{"type":"smaz2","params":{"dict":"meshtastic"}}]`, false},
-		{`[]`, false},
-		{``, false},
-		{`not a chain`, true}, // unreadable: treated as sealing, as a send would be
+// chainFake answers GetInterface with a chain or an error.
+type chainFake struct {
+	chain string
+	err   error
+}
+
+func (f chainFake) GetInterface(id string) (*database.Interface, error) {
+	if f.err != nil {
+		return nil, f.err
 	}
-	for _, c := range cases {
-		got := satBirthEntry(base, "300434060000001", c.chain)
-		want := "plain"
-		if c.sealed {
-			want = "sealed"
+	return &database.Interface{ID: id, EgressTransforms: f.chain}, nil
+}
+
+// R28-R2: the format comes from a chain that was read. A read that failed
+// declares nothing, never plain; an empty chain that was read declares plain.
+func TestSatFormatFromTheChainRead(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		db   chainFake
+		want string
+	}{
+		{"encrypting chain", chainFake{chain: `[{"type":"smaz2g","params":{"dict":"meshtastic"}},{"type":"encrypt","params":{"key_ref":"iridium:shared"}}]`}, "sealed"},
+		{"today's kit chain", chainFake{chain: `[{"type":"smaz2"},{"type":"encrypt","params":{"key_ref":"iridium:shared"}},{"type":"base64"}]`}, "sealed"},
+		{"chain without encryption", chainFake{chain: `[{"type":"smaz2","params":{"dict":"meshtastic"}}]`}, "plain"},
+		{"empty chain, read", chainFake{chain: ``}, "plain"},
+		{"empty list, read", chainFake{chain: `[]`}, "plain"},
+		{"unreadable chain JSON", chainFake{chain: `not a chain`}, "sealed"},
+		{"read failed", chainFake{err: errors.New("database is locked")}, ""},
+		{"interface row missing", chainFake{err: sql.ErrNoRows}, ""},
+	} {
+		if got := satFormat(c.db, "iridium_imt_0"); got != c.want {
+			t.Errorf("%s: %q, want %q", c.name, got, c.want)
 		}
-		if got.IMEI != "300434060000001" || got.EgressSealed != c.sealed || got.EgressFormat != want || got.Name != "iridium_imt" || got.Status != "online" {
-			t.Fatalf("chain %q: %+v, want sealed=%v", c.chain, got, c.sealed)
+	}
+}
+
+// The birth entry carries the modem and declares the format; with no format
+// (a failed read) it declares nothing at all, so the Hub keeps the last one.
+func TestSatBirthEntryDeclaresTheFormat(t *testing.T) {
+	base := hubreporter.InterfaceInfo{Name: "iridium_imt", Type: "iridium_imt", Status: "online"}
+	for _, c := range []struct {
+		format string
+		json   []string
+		absent []string
+	}{
+		{"sealed", []string{`"egress_format":"sealed"`, `"egress_sealed":true`}, nil},
+		{"plain", []string{`"egress_format":"plain"`}, []string{`"egress_sealed"`}},
+		{"", nil, []string{`"egress_format"`, `"egress_sealed"`}},
+	} {
+		got := satBirthEntry(base, "300434060000001", c.format)
+		if got.IMEI != "300434060000001" || got.Name != "iridium_imt" || got.Status != "online" {
+			t.Fatalf("format %q: %+v", c.format, got)
 		}
 		b, _ := json.Marshal(got)
-		if strings.Contains(string(b), `"egress_sealed"`) != c.sealed || !strings.Contains(string(b), `"egress_format":"`+want+`"`) {
-			t.Fatalf("chain %q: birth JSON %s", c.chain, b)
+		for _, want := range c.json {
+			if !strings.Contains(string(b), want) {
+				t.Fatalf("format %q: %s lacks %s", c.format, b, want)
+			}
 		}
+		for _, not := range c.absent {
+			if strings.Contains(string(b), not) {
+				t.Fatalf("format %q: %s has %s", c.format, b, not)
+			}
+		}
+	}
+}
+
+// A read that recovers changes the watcher's key, so the held-back
+// declaration is published without anyone republishing.
+func TestSatModemKeyChangesWhenTheReadRecovers(t *testing.T) {
+	failed := satModemKey("iridium_imt", "300434060000001", satFormat(chainFake{err: errors.New("database is locked")}, "iridium_imt_0"))
+	read := satModemKey("iridium_imt", "300434060000001", satFormat(chainFake{chain: `[{"type":"encrypt","params":{"key_ref":"iridium:shared"}}]`}, "iridium_imt_0"))
+	if failed == read {
+		t.Fatalf("the key does not change when the chain is read again: %q", failed)
 	}
 }
 
