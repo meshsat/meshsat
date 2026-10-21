@@ -71,7 +71,7 @@ async function doUnbindDevice(ifaceId) {
 }
 
 // --- Transform Pipeline ---
-const transformTypes = ['zstd', 'smaz2', 'base64', 'encrypt']
+const transformTypes = ['zstd', 'smaz2', 'smaz2g', 'base64', 'encrypt']
 
 function getTransforms(iface, direction) {
   const json = direction === 'egress' ? iface.egress_transforms : iface.ingress_transforms
@@ -427,7 +427,8 @@ function transformBadge(type) {
   switch (type) {
     case 'encrypt': return 'bg-amber-500/20 text-amber-400'
     case 'zstd': return 'bg-purple-500/20 text-purple-400'
-    case 'smaz2': return 'bg-indigo-500/20 text-indigo-400'
+    case 'smaz2':
+    case 'smaz2g': return 'bg-indigo-500/20 text-indigo-400'
     case 'base64': return 'bg-gray-600 text-gray-400'
     default: return 'bg-gray-700 text-gray-500'
   }

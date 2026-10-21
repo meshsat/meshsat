@@ -24,6 +24,9 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sys/unix"
+
+	"meshsat/internal/codec"
+	"meshsat/internal/reticulum"
 )
 
 // DirectIMTTransport implements SatTransport via JSPR for the RockBLOCK 9704.
@@ -790,6 +793,15 @@ func isReticulumPacket(data []byte) bool {
 	// byte, which cannot be all base64. [MESHSAT-1282]
 	if isVersionedBase64(data) {
 		return false
+	}
+	// Without base64 (HeMB-NG S3-2) the chain's output after the version
+	// byte is binary, and a binary destination hash proves nothing. As
+	// Reticulum flags 0x01 is HEADER_1, BROADCAST, SINGLE, ANNOUNCE and
+	// nothing else, and an announce is signed: a payload starting 0x01 is
+	// Reticulum only when its destination hash and signature verify.
+	if data[0] == codec.ProtoVersion1 {
+		a, err := reticulum.UnmarshalAnnouncePacket(data)
+		return err == nil && a.Verify() == nil
 	}
 	// Reticulum Type 1: flags(1) + hops(1) + dest(16) + context(1) = 19 bytes min
 	// Reticulum Type 2: flags(1) + hops(1) + transport(16) + dest(16) + context(1) = 35 bytes min

@@ -85,7 +85,7 @@ func aprsEncryptionState(s *Server, ifaceID string) map[string]interface{} {
 					keyRef = kr
 				}
 			}
-		case "smaz2", "base64", "zstd", "llamazip", "msvqsc", "fec":
+		case "smaz2", "smaz2g", "base64", "zstd", "llamazip", "msvqsc", "fec":
 			summary = append(summary, sp.Type)
 		default:
 			if sp.Type != "" {

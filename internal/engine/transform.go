@@ -171,11 +171,9 @@ func (tp *TransformPipeline) applyTransform(t TransformSpec, data []byte) ([]byt
 		base64.StdEncoding.Encode(dst, data)
 		return dst, nil
 	case "smaz2":
-		dict := compress.DictDefault
-		if t.Params["dict"] == "meshtastic" {
-			dict = compress.DictMeshtastic
-		}
-		return compress.Compress(data, dict), nil
+		return compress.Compress(data, smaz2Dict(t)), nil
+	case "smaz2g":
+		return encodeSmaz2g(data, smaz2Dict(t)), nil
 	case "llamazip":
 		if tp.llamazip == nil || !tp.llamazip.IsReady() {
 			log.Warn().Msg("transform: llamazip sidecar not available, falling back to smaz2")
@@ -266,11 +264,9 @@ func (tp *TransformPipeline) reverseTransform(t TransformSpec, data []byte) ([]b
 		}
 		return dst[:n], nil
 	case "smaz2":
-		dict := compress.DictDefault
-		if t.Params["dict"] == "meshtastic" {
-			dict = compress.DictMeshtastic
-		}
-		return compress.Decompress(data, dict)
+		return compress.Decompress(data, smaz2Dict(t))
+	case "smaz2g":
+		return decodeSmaz2g(data, smaz2Dict(t))
 	case "llamazip":
 		if tp.llamazip == nil || !tp.llamazip.IsReady() {
 			return nil, fmt.Errorf("llamazip sidecar not available for decompression")
@@ -343,6 +339,7 @@ func ValidateTransforms(transformsJSON string, binaryCapable bool, maxPayload in
 	hasBinaryOutput := false // does the chain produce binary output?
 	endsWithBase64 := false
 	hasBase64 := false
+	hasSmaz2g := false
 
 	for _, t := range transforms {
 		switch t.Type {
@@ -370,6 +367,10 @@ func ValidateTransforms(transformsJSON string, binaryCapable bool, maxPayload in
 		case "zstd", "smaz2", "llamazip":
 			hasBinaryOutput = true
 			endsWithBase64 = false
+		case "smaz2g":
+			hasBinaryOutput = true
+			endsWithBase64 = false
+			hasSmaz2g = true
 		case "base64":
 			hasBinaryOutput = false // base64 output is text-safe
 			endsWithBase64 = true
@@ -380,13 +381,16 @@ func ValidateTransforms(transformsJSON string, binaryCapable bool, maxPayload in
 			// Now they're hard errors at runtime; catch them at write time
 			// too so misconfigs fail on the Settings save, not at first
 			// message dispatch.
-			errors = append(errors, fmt.Sprintf("unknown transform type %q — supported: encrypt, decrypt, base64, zstd, smaz2, llamazip, msvqsc, fec", t.Type))
+			errors = append(errors, fmt.Sprintf("unknown transform type %q — supported: encrypt, decrypt, base64, zstd, smaz2, smaz2g, llamazip, msvqsc, fec", t.Type))
 		}
 	}
 
 	// Check: text-only transport with binary output
 	if !binaryCapable && hasBinaryOutput && !endsWithBase64 {
 		errors = append(errors, "text-only transport (SMS/MQTT/webhook) requires base64 as the final transform after encrypt/compress")
+	}
+	if hasSmaz2g {
+		warnings = append(warnings, "smaz2g is read only by a MeshSat Bridge's ingress chain: the Hub and the MeshSat apps do not decode it, so use it where the far end is a Bridge")
 	}
 
 	// Estimate usable capacity on constrained channels.
@@ -405,6 +409,8 @@ func ValidateTransforms(transformsJSON string, binaryCapable bool, maxPayload in
 				usable = usable*ds/(ds+ps) - fecHeaderLenV2 - fecOrigLenTrailer
 			case "encrypt":
 				usable -= 28 // 12 nonce + 16 GCM tag
+			case "smaz2g":
+				usable-- // the mode byte; the text is never sent larger than it is
 			}
 		}
 		if usable < 20 {
@@ -415,6 +421,55 @@ func ValidateTransforms(transformsJSON string, binaryCapable bool, maxPayload in
 	}
 
 	return warnings, errors
+}
+
+// smaz2Dict is the word table a smaz2 or smaz2g step names.
+func smaz2Dict(t TransformSpec) compress.Dictionary {
+	if t.Params["dict"] == "meshtastic" {
+		return compress.DictMeshtastic
+	}
+	return compress.DictDefault
+}
+
+// smaz2g frames carry one mode byte, then the data: the text as it is, or
+// its SMAZ2. The sender takes SMAZ2 only when that is shorter, so a frame is
+// at most one byte longer than its text, where plain smaz2 enlarges most
+// short texts (HeMB-NG S3-1).
+const (
+	smaz2gRaw   byte = 0x00
+	smaz2gSmaz2 byte = 0x01
+)
+
+func encodeSmaz2g(data []byte, dict compress.Dictionary) []byte {
+	if z := compress.Compress(data, dict); len(z) < len(data) {
+		return append([]byte{smaz2gSmaz2}, z...)
+	}
+	return append([]byte{smaz2gRaw}, data...)
+}
+
+// decodeSmaz2g refuses a frame without its mode byte, an unknown mode and a
+// SMAZ2 mode with nothing after it, which no sender writes. The SMAZ2 decoder
+// can index past a cut escape, so a malformed body is an error, not a panic.
+func decodeSmaz2g(frame []byte, dict compress.Dictionary) (out []byte, err error) {
+	if len(frame) == 0 {
+		return nil, errors.New("smaz2g: empty frame, no mode byte")
+	}
+	switch frame[0] {
+	case smaz2gRaw:
+		return append([]byte{}, frame[1:]...), nil
+	case smaz2gSmaz2:
+		if len(frame) == 1 {
+			return nil, errors.New("smaz2g: smaz2 mode with no data")
+		}
+		defer func() {
+			if recover() != nil {
+				out, err = nil, errors.New("smaz2g: malformed smaz2 data")
+			}
+		}()
+		return compress.Decompress(frame[1:], dict)
+	default:
+		return nil, fmt.Errorf("smaz2g: unknown mode 0x%02x", frame[0])
+	}
 }
 
 // resolveEncryptKey returns the hex-encoded AES key for an encrypt

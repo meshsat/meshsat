@@ -215,7 +215,7 @@ func (s *Server) handleTransformCapabilities(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"msvqsc_encode": encode,
 		"msvqsc_decode": decode,
-		"types":         []string{"encrypt", "decrypt", "base64", "zstd", "smaz2", "llamazip", "msvqsc", "fec"},
+		"types":         []string{"encrypt", "decrypt", "base64", "zstd", "smaz2", "smaz2g", "llamazip", "msvqsc", "fec"},
 	})
 }
 
