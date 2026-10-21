@@ -350,7 +350,12 @@ func TestIMT_LateCancelSparesALaterLegacyMOWithTheSameReference(t *testing.T) {
 		t.Fatal("a cancel decided for the MO in flight was refused")
 	}
 	sends := f.cmds("send_mo")
+	// CancelMO returns once the cancel is written to the helper's input; the
+	// fake helper records a command after it has read it, so wait for it.
 	cancels := f.cmds("cancel_mo")
+	for deadline := time.Now().Add(2 * time.Second); len(cancels) == 0 && time.Now().Before(deadline); cancels = f.cmds("cancel_mo") {
+		time.Sleep(time.Millisecond)
+	}
 	close(finishLast)
 	<-lastDone
 	if oldRef != newRef || len(cancels) != 1 || opOf(cancels[0]) != opOf(sends[len(sends)-1]) {
