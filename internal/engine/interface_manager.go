@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -99,6 +100,22 @@ type InterfaceManager struct {
 	// manager must never probe a port itself. [MESHSAT-815]
 	classifyMu sync.RWMutex
 	classify   func(vidpid, port string) string
+
+	// chainChanged hears that a link's transform chains were written (main.go:
+	// the birth declares whether a satellite chain seals, HeMB-NG S3-2).
+	chainChanged atomic.Pointer[func(ifaceID string)]
+}
+
+// SetChainChangeHook names the function told, after the write, that a link's
+// transform chains may have changed.
+func (m *InterfaceManager) SetChainChangeHook(fn func(ifaceID string)) {
+	m.chainChanged.Store(&fn)
+}
+
+func (m *InterfaceManager) noteChainChange(id string) {
+	if fn := m.chainChanged.Load(); fn != nil && *fn != nil {
+		(*fn)(id)
+	}
 }
 
 // NewInterfaceManager creates a new interface manager.
@@ -310,6 +327,7 @@ func (m *InterfaceManager) UpdateInterface(iface database.Interface) error {
 	m.mu.Unlock()
 
 	log.Info().Str("id", iface.ID).Msg("ifacemgr: interface updated")
+	m.noteChainChange(iface.ID)
 	return nil
 }
 
@@ -341,6 +359,7 @@ func (m *InterfaceManager) SetTransforms(id string, ingress, egress *string) (da
 	}
 	m.mu.Unlock()
 	log.Info().Str("id", id).Msg("ifacemgr: interface transforms set")
+	m.noteChainChange(id)
 	return *iface, nil
 }
 

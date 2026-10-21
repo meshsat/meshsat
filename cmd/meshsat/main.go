@@ -2382,7 +2382,15 @@ func main() {
 				if gs.Connected {
 					status = "online"
 				}
-				ifaces = append(ifaces, hubreporter.InterfaceInfo{Name: gs.Type, Type: gs.Type, Status: status})
+				info := hubreporter.InterfaceInfo{Name: gs.Type, Type: gs.Type, Status: status}
+				if imei, ifaceID := satModem(gwMgr, gs.Type); ifaceID != "" {
+					chain := ""
+					if iface, err := db.GetInterface(ifaceID); err == nil {
+						chain = iface.EgressTransforms
+					}
+					info = satBirthEntry(info, imei, chain)
+				}
+				ifaces = append(ifaces, info)
 				caps = append(caps, gs.Type)
 			}
 			if routingID != nil {
@@ -2506,6 +2514,14 @@ func main() {
 			return health
 		}
 		hubReporter = hubreporter.NewHubReporter(reporterCfg, birthFn, healthFn)
+		// The birth declares whether each satellite chain seals its payloads;
+		// a chain changed while connected is declared at once.
+		reporterForChains := hubReporter
+		ifaceMgr.SetChainChangeHook(func(id string) {
+			if id == "iridium_imt_0" || id == "iridium_0" {
+				reporterForChains.RepublishBirth()
+			}
+		})
 
 		// hub_msg, the Hub app route (HeMB-NG stage 2, MESHSAT-1584): a delivery intent to a
 		// contact's "bridge:<id>" goes through the Hub on hub_0, and what the Hub delivers here

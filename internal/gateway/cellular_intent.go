@@ -84,6 +84,26 @@ func smsIntentText(wire []byte, encrypted bool) string {
 	return string(wire)
 }
 
+// SMSIntentWire is the SMS the intent path makes of wire, or why it refuses
+// it: an encrypted wire loses its version byte, the text must be the GSM
+// basic set the modem carries unchanged, and it goes as one SMS of at most
+// 160 characters.
+func SMSIntentWire(wire []byte, encrypted bool) (text, reason, detail string) {
+	text = smsIntentText(wire, encrypted)
+	for _, r := range text {
+		if !smsBasicASCII(r) {
+			return "", "skipped_encoding", fmt.Sprintf("character %q is not carried unchanged by the modem", r)
+		}
+	}
+	if len(text) > 160 {
+		return "", "skipped_oversize", fmt.Sprintf("%d characters, one SMS takes 160", len(text))
+	}
+	if text == "" {
+		return "", "skipped_encoding", "nothing to send"
+	}
+	return text, "", ""
+}
+
 // smsBasicASCII reports whether r is printable ASCII in the GSM 03.38 basic
 // table, one septet that AT text mode carries unchanged.
 func smsBasicASCII(r rune) bool {
@@ -110,17 +130,8 @@ func (g *CellularGateway) IntentAdmit(dest string, wire []byte, encrypted bool) 
 	if encrypted && g.config.IsPlaintextPeer(number) {
 		return "skipped_encoding", "this number takes plain text and the interface encrypts"
 	}
-	text := smsIntentText(wire, encrypted)
-	for _, r := range text {
-		if !smsBasicASCII(r) {
-			return "skipped_encoding", fmt.Sprintf("character %q is not carried unchanged by the modem", r)
-		}
-	}
-	if len(text) > 160 {
-		return "skipped_oversize", fmt.Sprintf("%d characters, one SMS takes 160", len(text))
-	}
-	if text == "" {
-		return "skipped_encoding", "nothing to send"
+	if _, reason, detail := SMSIntentWire(wire, encrypted); reason != "" {
+		return reason, detail
 	}
 	if err := sub.SMSBundleCheck(1); err != nil {
 		return smsBundleRefusal(err)

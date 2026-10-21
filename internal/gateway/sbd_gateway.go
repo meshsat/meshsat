@@ -137,18 +137,9 @@ func (g *SBDGateway) sendSBD(ctx context.Context, msg *transport.MeshMessage) er
 			return fmt.Errorf("sbd: budget exceeded (cost=%d)", cost)
 		}
 		result, err = g.sat.Send(ctx, data)
-	} else if canSendPlaintext(msg) {
-		// Short ASCII text — send as readable plaintext
-		text := msg.DecodedText
-		cost = creditCost(len(text))
-		if !g.budgetAllows(cost, priority) {
-			return fmt.Errorf("sbd: budget exceeded (cost=%d)", cost)
-		}
-		result, err = g.sat.SendText(ctx, text)
-		data = []byte(text)
 	} else {
-		// Non-text or long message — use compact binary encoding (340-byte limit)
-		data, err = EncodeCompact(msg, g.config.IncludePosition)
+		var text bool
+		data, text, err = sbdTextFrame(msg, g.config.IncludePosition)
 		if err != nil {
 			g.errors.Add(1)
 			return fmt.Errorf("sbd: encode failed: %w", err)
@@ -157,7 +148,11 @@ func (g *SBDGateway) sendSBD(ctx context.Context, msg *transport.MeshMessage) er
 		if !g.budgetAllows(cost, priority) {
 			return fmt.Errorf("sbd: budget exceeded (cost=%d)", cost)
 		}
-		result, err = g.sat.Send(ctx, data)
+		if text {
+			result, err = g.sat.SendText(ctx, string(data))
+		} else {
+			result, err = g.sat.Send(ctx, data)
+		}
 	}
 
 	if err != nil {
@@ -192,4 +187,26 @@ func (g *SBDGateway) sendSBD(ctx context.Context, msg *transport.MeshMessage) er
 	}
 
 	return nil
+}
+
+// sbdTextFrame is what a text delivery becomes on the 9603 outside the intent
+// path: short printable ASCII goes as readable text (SBDWT), anything else in
+// the compact frame, whose text field holds at most 255 bytes and cuts the
+// rest (EncodeCompact).
+func sbdTextFrame(msg *transport.MeshMessage, includePosition bool) (data []byte, text bool, err error) {
+	if canSendPlaintext(msg) {
+		return []byte(msg.DecodedText), true, nil
+	}
+	data, err = EncodeCompact(msg, includePosition)
+	return data, false, err
+}
+
+// SBDLegacyFrame is the MO a 9603 set up with cfg sends for wire outside the
+// intent path, and whether the compact frame cut it: the framing the HeMB-NG
+// S3-2 measurement replays.
+func SBDLegacyFrame(cfg IridiumConfig, wire []byte) (data []byte, text, cut bool, err error) {
+	msg := &transport.MeshMessage{PortNum: 1, PortNumName: "TEXT_MESSAGE_APP", DecodedText: string(wire)}
+	data, text, err = sbdTextFrame(msg, cfg.IncludePosition)
+	room := (&SBDGateway{IridiumGateway: IridiumGateway{config: cfg}}).compactTextRoom()
+	return data, text, !text && len(wire) > room, err
 }

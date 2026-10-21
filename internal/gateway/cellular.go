@@ -312,11 +312,7 @@ func (g *CellularGateway) sendSMSSync(ctx context.Context, msg *transport.MeshMe
 	// text over 160 characters arrived as garbage. The kits' USB modems send
 	// one SMS of at most 160 characters whatever max_sms_segments says
 	// (DirectCellTransport.SendSMS). [MESHSAT-1581]
-	maxLen := 160 * g.config.MaxSMSSegments
-	whole := maxLen
-	if g.smsTextMode() && whole > 160 {
-		whole = 160
-	}
+	whole, maxLen := SMSLegacyLimits(g.smsTextMode(), g.config.MaxSMSSegments)
 	if (msg.Encrypted || (msg.RawText && !msg.AsWritten)) && len(text) > whole {
 		return fmt.Errorf("SMS of %d characters, %d fit: %w", len(text), whole, transport.ErrPayloadTooLong)
 	}
@@ -554,4 +550,18 @@ func ParseHubRoutedSMS(text string) (origin, body string, ok bool) {
 		return "", "", false
 	}
 	return m[1], m[2], true
+}
+
+// SMSLegacyLimits are the SMS sizes outside the intent path: maxLen is where
+// a person's words are cut, whole is the most an encrypted text or a frame
+// may be, since a cut one cannot be read; a modem in AT text mode (the kits'
+// USB modems) sends one SMS of at most 160 characters whatever maxSegments
+// says. [MESHSAT-1581]
+func SMSLegacyLimits(textMode bool, maxSegments int) (whole, maxLen int) {
+	maxLen = 160 * maxSegments
+	whole = maxLen
+	if textMode && whole > 160 {
+		whole = 160
+	}
+	return whole, maxLen
 }

@@ -77,6 +77,11 @@ func (g *IMTGateway) IntentAdmit(dest string, wire []byte, _ bool) (reason, deta
 	if !sameIMTAddress(dest, to) {
 		return "skipped_unsupported", fmt.Sprintf("this modem's messages are delivered to %s, not %s; the 9704 carries no recipient", to, strings.TrimSpace(dest))
 	}
+	return IMTIntentSize(wire)
+}
+
+// IMTIntentSize refuses a wire the intent path cannot send as one MO segment.
+func IMTIntentSize(wire []byte) (reason, detail string) {
 	if len(wire) == 0 {
 		return "skipped_encoding", "nothing to send"
 	}

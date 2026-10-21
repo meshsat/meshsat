@@ -68,6 +68,12 @@ func (g *SBDGateway) sbdMO(wire []byte) (data []byte, text bool, reason, detail 
 	return data, false, "", ""
 }
 
+// SBDIntentFrame is the MO the intent path makes of wire on a 9603 set up
+// with cfg, or why it refuses it: sbdMO, for the HeMB-NG S3-2 measurement.
+func SBDIntentFrame(cfg IridiumConfig, wire []byte) (mo []byte, text bool, reason, detail string) {
+	return (&SBDGateway{IridiumGateway: IridiumGateway{config: cfg}}).sbdMO(wire)
+}
+
 // IntentCorrKind implements IntentAdapter.
 func (g *SBDGateway) IntentCorrKind() string { return SBDIntentCorrKind }
 
