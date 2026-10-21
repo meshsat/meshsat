@@ -382,6 +382,13 @@
       "text_hex": "ceb1ceb2ceb3ceb4ceb5ceb6ceb7ceb8ceb9cebacebbcebccebdcebecebfcf80cf81cf83cf84cf85cf86cf87cf88cf89"
     },
     {
+      "compressed_hex": "c289b1930265200730f0ed0569756d2c2007cf073081026520f0ed0469756d20c289b19302652006cf",
+      "dict": "default",
+      "name": "dup_words",
+      "text": "satellite over iridium, total over the iridium satellite total",
+      "text_hex": "736174656c6c697465206f766572206972696469756d2c20746f74616c206f76657220746865206972696469756d20736174656c6c69746520746f74616c"
+    },
+    {
       "compressed_hex": "054f4b203432",
       "dict": "default",
       "name": "tie_meshtastic",
@@ -499,6 +506,13 @@
       "name": "long_verbatim_run",
       "text": "αβγδεζηθικλμνξοπρστυφχψω",
       "text_hex": "ceb1ceb2ceb3ceb4ceb5ceb6ceb7ceb8ceb9cebacebbcebccebdcebecebfcf80cf81cf83cf84cf85cf86cf87cf88cf89"
+    },
+    {
+      "compressed_hex": "077c079f067f2c08cc089f208165087f087c08cc",
+      "dict": "meshtastic",
+      "name": "dup_words",
+      "text": "satellite over iridium, total over the iridium satellite total",
+      "text_hex": "736174656c6c697465206f766572206972696469756d2c20746f74616c206f76657220746865206972696469756d20736174656c6c69746520746f74616c"
     },
     {
       "compressed_hex": "4f4b203432",
@@ -637,6 +651,14 @@
       "frame_hex": "00ceb1ceb2ceb3ceb4ceb5ceb6ceb7ceb8ceb9cebacebbcebccebdcebecebfcf80cf81cf83cf84cf85cf86cf87cf88cf89"
     },
     {
+      "name": "dup_words",
+      "dict": "default",
+      "text": "satellite over iridium, total over the iridium satellite total",
+      "text_hex": "736174656c6c697465206f766572206972696469756d2c20746f74616c206f76657220746865206972696469756d20736174656c6c69746520746f74616c",
+      "mode": "smaz2",
+      "frame_hex": "01c289b1930265200730f0ed0569756d2c2007cf073081026520f0ed0469756d20c289b19302652006cf"
+    },
+    {
       "name": "tie_meshtastic",
       "dict": "default",
       "text": "OK 42",
@@ -771,6 +793,14 @@
       "text_hex": "ceb1ceb2ceb3ceb4ceb5ceb6ceb7ceb8ceb9cebacebbcebccebdcebecebfcf80cf81cf83cf84cf85cf86cf87cf88cf89",
       "mode": "raw",
       "frame_hex": "00ceb1ceb2ceb3ceb4ceb5ceb6ceb7ceb8ceb9cebacebbcebccebdcebecebfcf80cf81cf83cf84cf85cf86cf87cf88cf89"
+    },
+    {
+      "name": "dup_words",
+      "dict": "meshtastic",
+      "text": "satellite over iridium, total over the iridium satellite total",
+      "text_hex": "736174656c6c697465206f766572206972696469756d2c20746f74616c206f76657220746865206972696469756d20736174656c6c69746520746f74616c",
+      "mode": "smaz2",
+      "frame_hex": "01077c079f067f2c08cc089f208165087f087c08cc"
     },
     {
       "name": "tie_meshtastic",

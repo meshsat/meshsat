@@ -26,7 +26,7 @@ type hChainVectors struct {
 	Version     int                 `json:"version"`
 	GeneratedBy string              `json:"generated_by"`
 	Spec        map[string]string   `json:"spec"`
-	Dicts       map[string]dictDump `json:"dictionaries"`
+	Dicts       map[string]dictDump `json:"dictionaries"` // duplicates kept: the compressor indexes a word by its LAST entry
 	Smaz2       []smaz2Vector       `json:"smaz2"`
 	Smaz2g      []smaz2gVector      `json:"smaz2g"`
 	Smaz2gBad   []rejectVector      `json:"smaz2g_reject"`
@@ -129,6 +129,7 @@ var hChainTexts = []struct{ name, text string }{
 	{"control_bytes", "a\x01b\x02c\x03d\x04e\x05f\x06g\x07h\x08i"},
 	{"nul", "ab\x00cd"},
 	{"long_verbatim_run", "αβγδεζηθικλμνξοπρστυφχψω"},
+	{"dup_words", "satellite over iridium, total over the iridium satellite total"},
 	{"tie_meshtastic", "OK 42"},
 	{"tie_default", "on my way!"},
 }
