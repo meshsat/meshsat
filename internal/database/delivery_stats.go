@@ -41,8 +41,24 @@ import (
 // writes each attempt's facts (the classification below) and the intent's
 // outcome to delivery_attempt_facts and delivery_intent_facts (v78), and the
 // statistics read those as they read live rows. An attempt whose intent was
-// pruned before v78 has no facts and cannot be placed: it is counted as
-// unavailable, never in a stage, and the window's coverage is incomplete.
+// pruned without them (before v78, or by v78's moving cutoff: r24 R24-R3)
+// cannot be placed: it is counted as unavailable, never in a stage, and the
+// window's coverage is incomplete.
+// The prune copies an attempt's created_at in SQL, as the ledger stores it,
+// so a kept attempt stays in every window it was in (r24 R24-R1; v79
+// repaired the rows v78 wrote in another form).
+//
+// Coverage has two cohorts (r24 R24-R4). Attempts: attempt rows are never
+// pruned, so an attempt that cannot be placed is seen and counted, and the
+// attempts' coverage is exact. Intents: an intent pruned before v79 could
+// leave no trace (one with no attempts left nothing). v79 recorded from
+// when every intent is known (a day before the upgrade; an empty string
+// when the ledger was made after v78, so known from the start); a window
+// that starts earlier may miss intents, and how many cannot be known. The
+// intents counted are then the known ones, a lower bound.
+//
+// One read transaction (r24 R24-R2): every figure comes from one snapshot,
+// so a prune that commits during the read is in all of them or none.
 //
 // Window (r23 R23-R2): [since, until). The ledger keeps whole seconds, so a
 // bound with a fraction is taken to its next whole second for the query,
@@ -77,14 +93,29 @@ type IntentOutcomeStats struct {
 
 // StatsCoverage says how much of the window the figures cover.
 type StatsCoverage struct {
-	// Complete: every attempt and intent of the window is counted.
+	// Complete: AttemptsComplete and IntentsComplete.
 	Complete bool `json:"complete"`
+	// AttemptsComplete: every attempt made in the window is counted.
+	AttemptsComplete bool `json:"attempts_complete"`
+	// IntentsComplete: every intent created in the window is counted. False
+	// when the window starts before IntentsKnownFrom: the intents counted
+	// are then the known ones, and how many are missing cannot be known.
+	IntentsComplete bool `json:"intents_complete"`
+	// IntentsKnownFrom (RFC 3339): every intent created from then on is
+	// known, live or kept; earlier ones may have been pruned without a trace
+	// (before v79). Empty when the ledger was made after v78: known from the
+	// start.
+	IntentsKnownFrom string `json:"intents_known_from,omitempty"`
+	// LedgerHistory is "fresh" (made after v78) or "upgraded".
+	LedgerHistory string `json:"ledger_history"`
 	// UnavailableAttempts were made in the window, but their intent was
-	// pruned before its facts were kept (v78): they are in no stage.
+	// pruned before v79 without its facts: they are in no stage.
 	UnavailableAttempts int `json:"unavailable_attempts"`
-	// UnavailableIntents are those intents, placed in the window by their
-	// first attempt.
-	UnavailableIntents int `json:"unavailable_intents"`
+	// UnavailableIntentsByFirstAttempt counts those intents, placed by their
+	// first attempt. A proxy: an intent is created at or before its first
+	// attempt, possibly in an earlier window, so this is neither the number
+	// of missing intents created in the window nor a bound on it.
+	UnavailableIntentsByFirstAttempt int `json:"unavailable_intents_by_first_attempt"`
 	// ArchivedAttempts and ArchivedIntents were counted from the facts the
 	// prune kept.
 	ArchivedAttempts int `json:"archived_attempts"`
@@ -123,7 +154,6 @@ func SizeBucket(n int) string {
 type attemptFact struct {
 	AttemptID    int64  `db:"attempt_id"`
 	IntentID     string `db:"intent_id"`
-	CreatedAt    string `db:"created_at"`
 	Bearer       string `db:"bearer"`
 	InterfaceID  string `db:"interface_id"`
 	PlannedBytes int    `db:"planned_bytes"`
@@ -140,7 +170,6 @@ func liveAttemptFacts(q sqlx.Queryer, where string, args ...any) ([]attemptFact,
 	var rows []struct {
 		AttemptID  int64  `db:"attempt_id"`
 		IntentID   string `db:"intent_id"`
-		CreatedAt  string `db:"created_at"`
 		RouteIndex int    `db:"route_index"`
 		Channel    string `db:"channel"`
 		Status     string `db:"status"`
@@ -151,7 +180,7 @@ func liveAttemptFacts(q sqlx.Queryer, where string, args ...any) ([]attemptFact,
 		RoutePlan  string `db:"route_plan"`
 	}
 	if err := sqlx.Select(q, &rows, `
-		SELECT d.id AS attempt_id, d.intent_id, d.created_at, d.route_index, d.channel, d.status, d.retries,
+		SELECT d.id AS attempt_id, d.intent_id, d.route_index, d.channel, d.status, d.retries,
 			COALESCE(length(d.payload), 0) AS payload_len,
 			(SELECT COUNT(*) FROM delivery_transmissions t WHERE t.attempt_id = d.id AND t.state = 'handed_off') AS handed_off,
 			COALESCE((SELECT e.completes FROM delivery_evidence e WHERE e.attempt_id = d.id AND e.matched = 1
@@ -174,7 +203,7 @@ func liveAttemptFacts(q sqlx.Queryer, where string, args ...any) ([]attemptFact,
 			plans[a.IntentID] = plan
 		}
 		route := plan[a.RouteIndex]
-		f := attemptFact{AttemptID: a.AttemptID, IntentID: a.IntentID, CreatedAt: a.CreatedAt, Bearer: route.Kind,
+		f := attemptFact{AttemptID: a.AttemptID, IntentID: a.IntentID, Bearer: route.Kind,
 			InterfaceID: route.InterfaceID, PlannedBytes: route.EstWireBytes, Status: a.Status, Completes: a.Completes,
 			HandedOff: a.HandedOff > 0, Retries: a.Retries}
 		if f.InterfaceID == "" {
@@ -189,7 +218,9 @@ func liveAttemptFacts(q sqlx.Queryer, where string, args ...any) ([]attemptFact,
 }
 
 // archiveIntentFacts keeps the facts of the intents that cond names (on i,
-// with args), and of their attempts, before they are pruned.
+// with args), and of their attempts, before they are pruned. Both created_at
+// values are copied in SQL, as stored: read through the driver they come
+// back in another form, which sorts differently (r24 R24-R1).
 func archiveIntentFacts(tx *sqlx.Tx, cond string, args ...any) error {
 	facts, err := liveAttemptFacts(tx, "WHERE "+cond, args...)
 	if err != nil {
@@ -197,9 +228,9 @@ func archiveIntentFacts(tx *sqlx.Tx, cond string, args ...any) error {
 	}
 	for _, f := range facts {
 		if _, err := tx.Exec(`INSERT OR IGNORE INTO delivery_attempt_facts (attempt_id, intent_id, created_at, bearer,
-			interface_id, planned_bytes, status, completes, handed_off, retries) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			f.AttemptID, f.IntentID, f.CreatedAt, f.Bearer, f.InterfaceID, f.PlannedBytes, f.Status, f.Completes,
-			f.HandedOff, f.Retries); err != nil {
+			interface_id, planned_bytes, status, completes, handed_off, retries)
+			SELECT d.id, d.intent_id, d.created_at, ?, ?, ?, ?, ?, ?, ? FROM message_deliveries d WHERE d.id = ?`,
+			f.Bearer, f.InterfaceID, f.PlannedBytes, f.Status, f.Completes, f.HandedOff, f.Retries, f.AttemptID); err != nil {
 			return fmt.Errorf("keep attempt %d: %w", f.AttemptID, err)
 		}
 	}
@@ -222,21 +253,36 @@ func statsSecond(t time.Time) string {
 }
 
 // DeliveryOutcomeStatsBetween counts the attempts and intents created in
-// [since, until).
+// [since, until), all from one read snapshot.
 func (db *DB) DeliveryOutcomeStatsBetween(since, until time.Time) (DeliveryOutcomeStats, error) {
-	from, to := statsSecond(since), statsSecond(until)
 	out := DeliveryOutcomeStats{Since: since.UTC().Format(time.RFC3339Nano), Until: until.UTC().Format(time.RFC3339Nano),
 		Unit: "attempt", Routes: []OutcomeStats{}, Total: OutcomeStats{Completed: map[string]int{}},
 		Intents: IntentOutcomeStats{ByOutcome: map[string]int{}}}
-
-	live, err := liveAttemptFacts(db, `WHERE d.intent_id IS NOT NULL AND d.created_at >= ? AND d.created_at < ?`, from, to)
+	// A transaction that only reads: under WAL it reads one snapshot from
+	// its first read on, and a writer on another connection is not blocked
+	// (the bridge's pool has one connection, so its other work waits for
+	// this read as it waits for any query).
+	tx, err := db.Beginx()
 	if err != nil {
 		return out, fmt.Errorf("delivery stats: %w", err)
 	}
+	defer func() { _ = tx.Rollback() }()
+	if err := deliveryOutcomeStats(tx, since, until, &out); err != nil {
+		return out, fmt.Errorf("delivery stats: %w", err)
+	}
+	return out, nil
+}
+
+func deliveryOutcomeStats(q sqlx.Queryer, since, until time.Time, out *DeliveryOutcomeStats) error {
+	from, to := statsSecond(since), statsSecond(until)
+	live, err := liveAttemptFacts(q, `WHERE d.intent_id IS NOT NULL AND d.created_at >= ? AND d.created_at < ?`, from, to)
+	if err != nil {
+		return err
+	}
 	var archived []attemptFact
-	if err := db.Select(&archived, `SELECT attempt_id, intent_id, created_at, bearer, interface_id, planned_bytes, status,
+	if err := sqlx.Select(q, &archived, `SELECT attempt_id, intent_id, bearer, interface_id, planned_bytes, status,
 		completes, handed_off, retries FROM delivery_attempt_facts WHERE created_at >= ? AND created_at < ?`, from, to); err != nil {
-		return out, fmt.Errorf("delivery stats: kept facts: %w", err)
+		return fmt.Errorf("kept facts: %w", err)
 	}
 	out.Coverage.ArchivedAttempts = len(archived)
 	rows := map[string]*OutcomeStats{}
@@ -266,17 +312,17 @@ func (db *DB) DeliveryOutcomeStatsBetween(since, until time.Time) (DeliveryOutco
 	})
 
 	// What cannot be placed: attempts of the window whose intent is gone
-	// with no facts kept (pruned before v78).
+	// with no facts kept (pruned before v79).
 	const orphan = `d.intent_id IS NOT NULL AND d.intent_id != ''
 		AND NOT EXISTS (SELECT 1 FROM delivery_intents i WHERE i.id = d.intent_id)
 		AND NOT EXISTS (SELECT 1 FROM delivery_attempt_facts f WHERE f.attempt_id = d.id)`
-	if err := db.Get(&out.Coverage.UnavailableAttempts, `SELECT COUNT(*) FROM message_deliveries d
+	if err := sqlx.Get(q, &out.Coverage.UnavailableAttempts, `SELECT COUNT(*) FROM message_deliveries d
 		WHERE d.created_at >= ? AND d.created_at < ? AND `+orphan, from, to); err != nil {
-		return out, fmt.Errorf("delivery stats: unavailable attempts: %w", err)
+		return fmt.Errorf("unavailable attempts: %w", err)
 	}
-	if err := db.Get(&out.Coverage.UnavailableIntents, `SELECT COUNT(*) FROM (SELECT MIN(d.created_at) AS first
+	if err := sqlx.Get(q, &out.Coverage.UnavailableIntentsByFirstAttempt, `SELECT COUNT(*) FROM (SELECT MIN(d.created_at) AS first
 		FROM message_deliveries d WHERE `+orphan+` GROUP BY d.intent_id) WHERE first >= ? AND first < ?`, from, to); err != nil {
-		return out, fmt.Errorf("delivery stats: unavailable intents: %w", err)
+		return fmt.Errorf("unavailable intents: %w", err)
 	}
 
 	var intents []struct {
@@ -285,13 +331,13 @@ func (db *DB) DeliveryOutcomeStatsBetween(since, until time.Time) (DeliveryOutco
 		N       int    `db:"n"`
 		Kept    int    `db:"kept"`
 	}
-	if err := db.Select(&intents, `
+	if err := sqlx.Select(q, &intents, `
 		SELECT state, outcome, COUNT(*) AS n, SUM(kept) AS kept FROM (
 			SELECT state, outcome, 0 AS kept FROM delivery_intents WHERE created_at >= ? AND created_at < ?
 			UNION ALL
 			SELECT state, outcome, 1 AS kept FROM delivery_intent_facts WHERE created_at >= ? AND created_at < ?
 		) GROUP BY state, outcome`, from, to, from, to); err != nil {
-		return out, fmt.Errorf("delivery stats: intents: %w", err)
+		return fmt.Errorf("intents: %w", err)
 	}
 	for _, i := range intents {
 		out.Intents.Intents += i.N
@@ -302,8 +348,26 @@ func (db *DB) DeliveryOutcomeStatsBetween(since, until time.Time) (DeliveryOutco
 		}
 		out.Intents.ByOutcome[i.Outcome] += i.N
 	}
-	out.Coverage.Complete = out.Coverage.UnavailableAttempts == 0 && out.Coverage.UnavailableIntents == 0
-	return out, nil
+
+	var history struct {
+		KnownFrom  string `db:"intents_known_from"`
+		Provenance string `db:"provenance"`
+	}
+	if err := sqlx.Get(q, &history, `SELECT intents_known_from, provenance FROM delivery_history_coverage WHERE id = 1`); err != nil {
+		return fmt.Errorf("history coverage: %w", err)
+	}
+	out.Coverage.LedgerHistory = history.Provenance
+	out.Coverage.AttemptsComplete = out.Coverage.UnavailableAttempts == 0
+	out.Coverage.IntentsComplete = history.KnownFrom == "" || from >= history.KnownFrom
+	if history.KnownFrom != "" {
+		t, err := time.Parse("2006-01-02 15:04:05", history.KnownFrom)
+		if err != nil {
+			return fmt.Errorf("history coverage: %w", err)
+		}
+		out.Coverage.IntentsKnownFrom = t.UTC().Format(time.RFC3339)
+	}
+	out.Coverage.Complete = out.Coverage.AttemptsComplete && out.Coverage.IntentsComplete
+	return nil
 }
 
 // countAttempt puts one attempt in exactly one stage of r.

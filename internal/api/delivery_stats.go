@@ -24,11 +24,20 @@ import (
 // @Description refusal never reached the air, and an unknown is not proven data
 // @Description loss. intents counts the intents made in the window by outcome.
 // @Description coverage: intents pruned by retention are counted from the facts
-// @Description the prune kept (archived_attempts, archived_intents); attempts
-// @Description whose intent was pruned before those facts were kept cannot be
-// @Description placed: they are unavailable_attempts (and unavailable_intents),
-// @Description in no stage, and complete is false. A window with nothing in it
-// @Description is complete with zero attempts. The bucket is the planned size
+// @Description the prune kept (archived_attempts, archived_intents). Attempts:
+// @Description one whose intent was pruned before those facts were kept cannot
+// @Description be placed; it is in unavailable_attempts, in no stage, and
+// @Description attempts_complete is false (unavailable_intents_by_first_attempt
+// @Description places those intents by their first attempt, a proxy, not a
+// @Description count of the window's missing intents). Intents: on an upgraded
+// @Description ledger an intent created before intents_known_from may have been
+// @Description pruned without a trace, so a window that starts earlier has
+// @Description intents_complete false and its intents are the known ones, a
+// @Description lower bound; a ledger made after v78 (ledger_history fresh) is
+// @Description known from the start. complete is attempts_complete and
+// @Description intents_complete. Every figure comes from one read snapshot. A
+// @Description window with nothing in it is complete with zero attempts when
+// @Description its history is known. The bucket is the planned size
 // @Description (the plan's estimate at admission), not framed or billed bytes.
 // @Description since and until are answered as requested; the ledger keeps
 // @Description whole seconds, so a bound with a fraction counts from the next

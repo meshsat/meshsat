@@ -1826,6 +1826,47 @@ var migrations = []string{
 	CREATE INDEX IF NOT EXISTS idx_delivery_intent_facts_created ON delivery_intent_facts(created_at);
 	CREATE INDEX IF NOT EXISTS idx_delivery_evidence_attempt ON delivery_evidence(attempt_id);
 	CREATE INDEX IF NOT EXISTS idx_message_deliveries_intent_created ON message_deliveries(created_at) WHERE intent_id IS NOT NULL;`,
+
+	// v79: HeMB-NG stage 3 S3-3 (r24 R24-R1, R24-R4), two repairs to v78's kept history.
+	// (1) v78's prune wrote an attempt's created_at as the driver handed it back
+	// ("2026-09-10T23:50:19Z"), which sorts differently from the ledger's own
+	// "2026-09-10 23:50:19" within a day, so a narrow window lost the attempt. Each such row
+	// takes back its attempt row's value (attempt rows are never pruned), or the same instant
+	// in the ledger's form when that row is gone. The prune now copies the value in SQL.
+	// (2) What is known of the intents. A prune before this version could delete an intent
+	// without a trace (one with no attempts left nothing behind, and v78's moving cutoff could
+	// delete one whose facts it had not kept). A prune removes only intents closed more than a
+	// day before it ran (the shortest retention it allows), so every intent created from a
+	// day before this upgrade is known, live or kept; earlier ones may be missing, and the
+	// statistics say so. A ledger whose tables were made in the same start as this migration
+	// has no such history and is known from the start: migrate marks it (postMigration).
+	// [MESHSAT-1584]
+	`UPDATE delivery_attempt_facts SET created_at = COALESCE(
+		(SELECT d.created_at FROM message_deliveries d WHERE d.id = delivery_attempt_facts.attempt_id),
+		strftime('%Y-%m-%d %H:%M:%S', created_at))
+	WHERE created_at LIKE '%T%';
+	CREATE TABLE IF NOT EXISTS delivery_history_coverage (
+		id                 INTEGER PRIMARY KEY CHECK (id = 1),
+		intents_known_from TEXT NOT NULL,
+		provenance         TEXT NOT NULL,
+		recorded_at        TEXT NOT NULL
+	);
+	INSERT OR IGNORE INTO delivery_history_coverage (id, intents_known_from, provenance, recorded_at)
+		VALUES (1, datetime('now', '-1 day'), 'upgraded', datetime('now'));`,
+}
+
+// postMigration is what a migration needs to know that its SQL cannot see:
+// the version the database was at when this start began.
+var postMigration = map[int]func(db *DB, from int) error{
+	// v79: a ledger whose tables (v62) were made in this same start has no
+	// history a prune could have lost. [MESHSAT-1584]
+	79: func(db *DB, from int) error {
+		if from >= 62 {
+			return nil
+		}
+		_, err := db.Exec(`UPDATE delivery_history_coverage SET intents_known_from = '', provenance = 'fresh' WHERE id = 1`)
+		return err
+	},
 }
 
 func (db *DB) migrate() error {
@@ -1843,9 +1884,15 @@ func (db *DB) migrate() error {
 		}
 	}
 
+	from := currentVersion
 	for i := currentVersion; i < len(migrations); i++ {
 		if _, err := db.Exec(migrations[i]); err != nil {
 			return fmt.Errorf("migration v%d: %w", i+1, err)
+		}
+		if after := postMigration[i+1]; after != nil {
+			if err := after(db, from); err != nil {
+				return fmt.Errorf("migration v%d: %w", i+1, err)
+			}
 		}
 		if i > 0 { // v1 inserts its own version row
 			if _, err := db.Exec("UPDATE schema_version SET version = ?", i+1); err != nil {

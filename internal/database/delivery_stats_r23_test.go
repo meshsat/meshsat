@@ -124,7 +124,8 @@ func TestDeliveryOutcomeStatsSurviveThePrune(t *testing.T) {
 		}
 	}
 	lost := window()
-	if lost.Coverage.Complete || lost.Coverage.UnavailableAttempts != 1 || lost.Coverage.UnavailableIntents != 1 ||
+	if lost.Coverage.Complete || lost.Coverage.AttemptsComplete || lost.Coverage.UnavailableAttempts != 1 ||
+		lost.Coverage.UnavailableIntentsByFirstAttempt != 1 ||
 		lost.Total.Attempts != 4 || lost.Intents.Intents != 4 {
 		t.Errorf("history pruned without facts: coverage %+v, attempts %d, intents %d", lost.Coverage, lost.Total.Attempts, lost.Intents.Intents)
 	}

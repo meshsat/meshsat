@@ -1727,35 +1727,49 @@ func (db *DB) CurrentTariff(ifaceID string) (*Tariff, error) {
 // with no intent. Attempt rows stay, as every delivery row does. First, in
 // the same transaction, it keeps what the delivery statistics need of them
 // (delivery_attempt_facts, delivery_intent_facts: r23 R23-R1).
+//
+// One cutoff and one set of intents serve every statement (r24 R24-R3):
+// datetime('now') moves between statements, and an intent that came of age
+// after its facts were kept would otherwise be deleted without them. An
+// intent that comes of age during the prune waits for the next one.
 func (db *DB) PruneClosedIntents(days int) (int64, error) {
 	if days < 1 {
 		days = 1
 	}
 	var n int64
 	err := db.withTx(func(tx *sqlx.Tx) error {
-		cutoff := "-" + strconv.Itoa(days) + " days"
-		if err := archiveIntentFacts(tx, `i.state = 'closed' AND i.closed_at < datetime('now', ?)`, cutoff); err != nil {
+		var cutoff string
+		if err := tx.Get(&cutoff, `SELECT datetime('now', ?)`, "-"+strconv.Itoa(days)+" days"); err != nil {
+			return fmt.Errorf("prune intents: cutoff: %w", err)
+		}
+		ids := []string{}
+		if err := tx.Select(&ids, `SELECT id FROM delivery_intents WHERE state = 'closed' AND closed_at < ?`, cutoff); err != nil {
 			return fmt.Errorf("prune intents: %w", err)
 		}
-		if _, err := tx.Exec(`DELETE FROM delivery_evidence WHERE intent_id IN
-			(SELECT id FROM delivery_intents WHERE state = 'closed' AND closed_at < datetime('now', ?))`, cutoff); err != nil {
+		set, err := json.Marshal(ids)
+		if err != nil {
 			return err
 		}
-		if _, err := tx.Exec(`DELETE FROM delivery_transmissions WHERE intent_id IN
-			(SELECT id FROM delivery_intents WHERE state = 'closed' AND closed_at < datetime('now', ?))`, cutoff); err != nil {
+		if err := archiveIntentFacts(tx, `i.id IN (SELECT value FROM json_each(?))`, string(set)); err != nil {
+			return fmt.Errorf("prune intents: %w", err)
+		}
+		if _, err := tx.Exec(`DELETE FROM delivery_evidence WHERE intent_id IN (SELECT value FROM json_each(?))`, string(set)); err != nil {
 			return err
 		}
-		res, err := tx.Exec(`DELETE FROM delivery_intents WHERE state = 'closed' AND closed_at < datetime('now', ?)`, cutoff)
+		if _, err := tx.Exec(`DELETE FROM delivery_transmissions WHERE intent_id IN (SELECT value FROM json_each(?))`, string(set)); err != nil {
+			return err
+		}
+		res, err := tx.Exec(`DELETE FROM delivery_intents WHERE id IN (SELECT value FROM json_each(?))`, string(set))
 		if err != nil {
 			return err
 		}
 		n, _ = res.RowsAffected()
-		if _, err := tx.Exec(`DELETE FROM delivery_evidence WHERE intent_id IS NULL AND received_at < datetime('now', ?)`, cutoff); err != nil {
+		if _, err := tx.Exec(`DELETE FROM delivery_evidence WHERE intent_id IS NULL AND received_at < ?`, cutoff); err != nil {
 			return err
 		}
 		_, err = tx.Exec(`DELETE FROM delivery_submissions WHERE NOT EXISTS
 			(SELECT 1 FROM delivery_intents i WHERE i.submission_id = delivery_submissions.id)
-			AND created_at < datetime('now', ?)`, cutoff)
+			AND created_at < ?`, cutoff)
 		return err
 	})
 	return n, err
