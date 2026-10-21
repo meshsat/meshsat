@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -120,5 +121,37 @@ func TestWatchSatModemsRepublishesOnChange(t *testing.T) {
 	// "" -> "iridium_imt=" -> the IMEI -> "" -> the IMEI: four changes.
 	if published != 4 {
 		t.Fatalf("published %d times, want 4", published)
+	}
+}
+
+// The stored birth timestamp survives a restart (a new store on the same
+// database); a missing or unreadable one starts from the clock. [MESHSAT-1584]
+func TestBirthStampsSurviveARestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "bridge.db")
+	db, err := database.New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := (birthStamps{db}).LastBirthStamp(); !got.IsZero() {
+		t.Fatalf("nothing stored: %v", got)
+	}
+	at := time.Date(2026, 10, 21, 18, 0, 0, 123456789, time.UTC)
+	birthStamps{db}.SaveBirthStamp(at)
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err = database.New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if got := (birthStamps{db}).LastBirthStamp(); !got.Equal(at) {
+		t.Fatalf("after a restart: %v, want %v", got, at)
+	}
+	if err := db.SetSystemConfig(birthStampKey, "not a time"); err != nil {
+		t.Fatal(err)
+	}
+	if got := (birthStamps{db}).LastBirthStamp(); !got.IsZero() {
+		t.Fatalf("unreadable: %v", got)
 	}
 }

@@ -2365,6 +2365,7 @@ func main() {
 			TLSInsecure:    hubTLSInsecure,
 			HealthInterval: hubHealthInterval,
 			TopicPrefix:    hubTopicPrefix,
+			BirthStamps:    birthStamps{db},
 		}
 		birthFn := func() hubreporter.BridgeBirth {
 			ifaces := []hubreporter.InterfaceInfo{}

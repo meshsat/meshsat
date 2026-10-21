@@ -43,6 +43,15 @@ type ReporterConfig struct {
 	// (mqtt_topic_prefix): "meshsat" or empty for the platform tenant,
 	// "meshsat/{tenant}" for a customer's (MESHSAT-1467).
 	TopicPrefix string
+	// BirthStamps keeps the last birth's timestamp across restarts
+	// (birthStamp). Nil keeps it for this process only.
+	BirthStamps BirthStampStore
+}
+
+// BirthStampStore keeps the timestamp of the last birth published.
+type BirthStampStore interface {
+	LastBirthStamp() time.Time
+	SaveBirthStamp(time.Time)
 }
 
 // Validate checks that the minimum required config is present.
@@ -88,6 +97,10 @@ type HubReporter struct {
 	tlsErr        error             // set when TLS material is present but unusable [MESHSAT-1027]
 	linkState     string            // the link as the apps show it (link.go)
 	linkError     string            // why the last connect failed; cleared by a connect
+
+	stampMu     sync.Mutex
+	stampLoaded bool
+	lastStamp   time.Time // the last birth's timestamp (birthStamp)
 
 	// TAK relay stats surfaced to the dashboard widget via a synthetic
 	// gateway entry (type "tak_hub_relay"). The widget reports 0 without
@@ -634,7 +647,7 @@ func (r *HubReporter) publishBirth() {
 	birth := r.birthData()
 	birth.Protocol = ProtocolVersion
 	birth.BridgeID = r.cfg.BridgeID
-	birth.Timestamp = time.Now().UTC()
+	birth.Timestamp = r.birthStamp(time.Now())
 
 	// Attach certificate and signature if signing credentials are loaded.
 	birth.Certificate = r.certPEM
@@ -650,6 +663,32 @@ func (r *HubReporter) publishBirth() {
 		signed := birth.Signature != ""
 		log.Info().Str("bridge_id", r.cfg.BridgeID).Bool("signed", signed).Msg("hubreporter: birth certificate published")
 	}
+}
+
+// birthStamp is the timestamp a birth goes out with: now, but always later
+// than the last birth this bridge published, also across a restart
+// (cfg.BirthStamps). The Hub orders a bridge's births by it and writes a
+// declaration or a row only when it is not older than what it stored
+// (HeMB-NG S3-2), so a clock that stepped back, as a kit's does when it boots
+// at the last mount time, cannot make a newer birth look older.
+func (r *HubReporter) birthStamp(now time.Time) time.Time {
+	r.stampMu.Lock()
+	defer r.stampMu.Unlock()
+	if !r.stampLoaded {
+		r.stampLoaded = true
+		if r.cfg.BirthStamps != nil {
+			r.lastStamp = r.cfg.BirthStamps.LastBirthStamp()
+		}
+	}
+	stamp := now.UTC()
+	if !stamp.After(r.lastStamp) {
+		stamp = r.lastStamp.Add(time.Microsecond)
+	}
+	r.lastStamp = stamp
+	if r.cfg.BirthStamps != nil {
+		r.cfg.BirthStamps.SaveBirthStamp(stamp)
+	}
+	return stamp
 }
 
 // subscribeCmd subscribes to the command topic for this bridge.

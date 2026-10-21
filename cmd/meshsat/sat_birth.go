@@ -104,3 +104,29 @@ func watchSatModems(ctx context.Context, every time.Duration, key func() string,
 		}
 	}
 }
+
+// birthStamps keeps the last Hub birth's timestamp in system_config, so the
+// first birth after a restart is stamped later than the last one before it,
+// even when the clock came up behind (hubreporter.BirthStampStore).
+type birthStamps struct{ db *database.DB }
+
+const birthStampKey = "hub_last_birth_stamp"
+
+func (s birthStamps) LastBirthStamp() time.Time {
+	v, err := s.db.GetSystemConfig(birthStampKey)
+	if err != nil {
+		return time.Time{}
+	}
+	t, err := time.Parse(time.RFC3339Nano, v)
+	if err != nil {
+		log.Warn().Err(err).Msg("birth: the stored birth timestamp is unreadable; stamping from the clock")
+		return time.Time{}
+	}
+	return t
+}
+
+func (s birthStamps) SaveBirthStamp(t time.Time) {
+	if err := s.db.SetSystemConfig(birthStampKey, t.Format(time.RFC3339Nano)); err != nil {
+		log.Warn().Err(err).Msg("birth: the birth timestamp was not stored")
+	}
+}
