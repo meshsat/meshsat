@@ -125,18 +125,22 @@ func TestWatchSatModemsRepublishesOnChange(t *testing.T) {
 }
 
 // The stored birth timestamp survives a restart (a new store on the same
-// database); a missing or unreadable one starts from the clock. [MESHSAT-1584]
+// database). No row is no stamp and no error; a value that is not a timestamp
+// and a database that cannot be read are errors, never the zero time; a save
+// the database refuses is an error. [MESHSAT-1584]
 func TestBirthStampsSurviveARestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "bridge.db")
 	db, err := database.New(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := (birthStamps{db}).LastBirthStamp(); !got.IsZero() {
-		t.Fatalf("nothing stored: %v", got)
+	if got, err := (birthStamps{db}).LastBirthStamp(); err != nil || !got.IsZero() {
+		t.Fatalf("nothing stored: %v %v", got, err)
 	}
 	at := time.Date(2026, 10, 21, 18, 0, 0, 123456789, time.UTC)
-	birthStamps{db}.SaveBirthStamp(at)
+	if err := (birthStamps{db}).SaveBirthStamp(at); err != nil {
+		t.Fatal(err)
+	}
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -144,14 +148,23 @@ func TestBirthStampsSurviveARestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
-	if got := (birthStamps{db}).LastBirthStamp(); !got.Equal(at) {
-		t.Fatalf("after a restart: %v, want %v", got, at)
+	if got, err := (birthStamps{db}).LastBirthStamp(); err != nil || !got.Equal(at) {
+		t.Fatalf("after a restart: %v %v, want %v", got, err, at)
 	}
 	if err := db.SetSystemConfig(birthStampKey, "not a time"); err != nil {
 		t.Fatal(err)
 	}
-	if got := (birthStamps{db}).LastBirthStamp(); !got.IsZero() {
-		t.Fatalf("unreadable: %v", got)
+	if got, err := (birthStamps{db}).LastBirthStamp(); err == nil || !got.IsZero() {
+		t.Fatalf("unreadable value: %v %v, want an error", got, err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// A database that cannot be read: an error, not "no stamp yet".
+	if got, err := (birthStamps{db}).LastBirthStamp(); err == nil || errors.Is(err, sql.ErrNoRows) || !got.IsZero() {
+		t.Fatalf("read failure: %v %v, want an error", got, err)
+	}
+	if err := (birthStamps{db}).SaveBirthStamp(at); err == nil {
+		t.Fatal("a save the database refused reported success")
 	}
 }

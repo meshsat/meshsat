@@ -48,11 +48,19 @@ type ReporterConfig struct {
 	BirthStamps BirthStampStore
 }
 
-// BirthStampStore keeps the timestamp of the last birth published.
+// BirthStampStore keeps the timestamp of the last birth stamped.
+// LastBirthStamp answers the zero time and no error when none was ever
+// stored, and an error when it could not read one or what it read is not a
+// timestamp: an unknown floor is never "no floor". SaveBirthStamp answers
+// nil only once the stamp is stored durably.
 type BirthStampStore interface {
-	LastBirthStamp() time.Time
-	SaveBirthStamp(time.Time)
+	LastBirthStamp() (time.Time, error)
+	SaveBirthStamp(time.Time) error
 }
+
+// birthRetryEvery is how often a birth that could not go out is tried again
+// while connected. A package variable so tests can shorten it.
+var birthRetryEvery = 10 * time.Second
 
 // Validate checks that the minimum required config is present.
 func (c ReporterConfig) Validate() error {
@@ -98,9 +106,12 @@ type HubReporter struct {
 	linkState     string            // the link as the apps show it (link.go)
 	linkError     string            // why the last connect failed; cleared by a connect
 
-	stampMu     sync.Mutex
-	stampLoaded bool
-	lastStamp   time.Time // the last birth's timestamp (birthStamp)
+	stampMu      sync.Mutex
+	stampLoaded  bool
+	lastStamp    time.Time        // the last birth stamp stored (birthStamp)
+	birthMu      sync.Mutex       // one birth at a time, in stamp order
+	birthPending atomic.Bool      // a birth did not go out; retryBirthLoop sends one
+	clock        func() time.Time // time.Now unless a test sets it
 
 	// TAK relay stats surfaced to the dashboard widget via a synthetic
 	// gateway entry (type "tak_hub_relay"). The widget reports 0 without
@@ -285,6 +296,7 @@ func (r *HubReporter) Start(ctx context.Context) error {
 	// background and OnConnect fires whenever the Hub appears, so a reporter
 	// that is merely not connected yet must still be fully wired. [MESHSAT-1027]
 	go r.healthLoop(ctx)
+	go r.retryBirthLoop(ctx)
 
 	if connectErr != nil {
 		go r.logWhileDisconnected(ctx)
@@ -644,10 +656,31 @@ func (r *HubReporter) RepublishBirth() {
 }
 
 func (r *HubReporter) publishBirth() {
+	r.birthMu.Lock()
+	defer r.birthMu.Unlock()
+	if err := r.publishBirthLocked(); err != nil {
+		r.birthPending.Store(true)
+		log.Error().Err(err).Dur("retry_every", birthRetryEvery).Msg("hubreporter: birth not published; it is tried again")
+		return
+	}
+	r.birthPending.Store(false)
+}
+
+// publishBirthLocked collects, stamps, signs and publishes one birth. A birth
+// whose stamp could not be read or stored does not go out (birthStamp).
+func (r *HubReporter) publishBirthLocked() error {
 	birth := r.birthData()
 	birth.Protocol = ProtocolVersion
 	birth.BridgeID = r.cfg.BridgeID
-	birth.Timestamp = r.birthStamp(time.Now())
+	now := time.Now
+	if r.clock != nil {
+		now = r.clock
+	}
+	stamp, err := r.birthStamp(now())
+	if err != nil {
+		return err
+	}
+	birth.Timestamp = stamp
 
 	// Attach certificate and signature if signing credentials are loaded.
 	birth.Certificate = r.certPEM
@@ -657,38 +690,72 @@ func (r *HubReporter) publishBirth() {
 	}
 
 	if err := r.publish(r.topics.BridgeBirth(r.cfg.BridgeID), 1, true, birth); err != nil {
-		log.Error().Err(err).Msg("hubreporter: failed to publish birth")
-	} else {
-		r.takMsgsOut.Add(1)
-		signed := birth.Signature != ""
-		log.Info().Str("bridge_id", r.cfg.BridgeID).Bool("signed", signed).Msg("hubreporter: birth certificate published")
+		return err
+	}
+	r.takMsgsOut.Add(1)
+	signed := birth.Signature != ""
+	log.Info().Str("bridge_id", r.cfg.BridgeID).Bool("signed", signed).Msg("hubreporter: birth certificate published")
+	return nil
+}
+
+// retryBirthLoop publishes a birth that did not go out (its stamp could not
+// be read or stored, or the publish failed) every birthRetryEvery while
+// connected, until one does. A reconnect publishes one anyway.
+func (r *HubReporter) retryBirthLoop(ctx context.Context) {
+	t := time.NewTicker(birthRetryEvery)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-r.stopCh:
+			return
+		case <-t.C:
+			if r.birthPending.Load() && r.IsConnected() {
+				r.publishBirth()
+			}
+		}
 	}
 }
 
-// birthStamp is the timestamp a birth goes out with: now, but always later
-// than the last birth this bridge published, also across a restart
+// birthStamp reserves the timestamp of the next birth: now, but always later
+// than the last stamp this bridge stored, also across a restart
 // (cfg.BirthStamps). The Hub orders a bridge's births by it and writes a
 // declaration or a row only when it is not older than what it stored
 // (HeMB-NG S3-2), so a clock that stepped back, as a kit's does when it boots
 // at the last mount time, cannot make a newer birth look older.
-func (r *HubReporter) birthStamp(now time.Time) time.Time {
+//
+// The floor is read until it is read: a failed read, or a stored value that
+// is not a timestamp, is an error, and no stamp is handed out until the floor
+// is known. A stamp is stored before it is handed out, and one that could not
+// be stored is not handed out, so a restart can never hand out again a stamp
+// a birth already carried.
+func (r *HubReporter) birthStamp(now time.Time) (time.Time, error) {
 	r.stampMu.Lock()
 	defer r.stampMu.Unlock()
 	if !r.stampLoaded {
-		r.stampLoaded = true
 		if r.cfg.BirthStamps != nil {
-			r.lastStamp = r.cfg.BirthStamps.LastBirthStamp()
+			last, err := r.cfg.BirthStamps.LastBirthStamp()
+			if err != nil {
+				return time.Time{}, fmt.Errorf("the last birth stamp could not be read: %w", err)
+			}
+			if last.After(r.lastStamp) {
+				r.lastStamp = last
+			}
 		}
+		r.stampLoaded = true
 	}
 	stamp := now.UTC()
 	if !stamp.After(r.lastStamp) {
 		stamp = r.lastStamp.Add(time.Microsecond)
 	}
-	r.lastStamp = stamp
 	if r.cfg.BirthStamps != nil {
-		r.cfg.BirthStamps.SaveBirthStamp(stamp)
+		if err := r.cfg.BirthStamps.SaveBirthStamp(stamp); err != nil {
+			return time.Time{}, fmt.Errorf("the birth stamp could not be stored: %w", err)
+		}
 	}
-	return stamp
+	r.lastStamp = stamp
+	return stamp, nil
 }
 
 // subscribeCmd subscribes to the command topic for this bridge.
