@@ -80,6 +80,13 @@ func init() {
 	}
 }
 
+// MeshtasticTables returns the Meshtastic dictionary's 256 words and its 128
+// bigrams (256 bytes) in table order: what the shared H-chain test vectors
+// carry for the apps to compare their copies against (MESHSAT-1623).
+func MeshtasticTables() (words []string, bigrams string) {
+	return append([]string(nil), meshtasticWords...), meshtasticBigrams
+}
+
 // compressMeshtastic compresses data using the Meshtastic dictionary.
 func compressMeshtastic(s []byte) []byte {
 	dst := make([]byte, 0, len(s))

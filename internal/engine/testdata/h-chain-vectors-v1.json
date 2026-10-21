@@ -1,0 +1,973 @@
+{
+  "name": "meshsat-h-chain-vectors",
+  "version": 1,
+  "generated_by": "meshsat internal/engine/h_chain_vectors_test.go (MESHSAT_WRITE_VECTORS=1)",
+  "spec": {
+    "dictionary": "a configured agreement (step param dict: meshtastic or default); nothing on the wire names it",
+    "envelope": "protocol version 0x01 || 12-byte nonce || AES-256-GCM ciphertext of the smaz2g frame || 16-byte tag; no AAD, no base64",
+    "h_chain_egress": "[{\"type\":\"smaz2g\",\"params\":{\"dict\":\"meshtastic\"}},{\"type\":\"encrypt\",\"params\":{\"key_ref\":\"...\"}}]",
+    "protocol_version": "01",
+    "rejects": "every smaz2g_reject frame and envelope_reject wire must fail without a crash and without showing text",
+    "rollback_egress": "[{\"type\":\"smaz2\",\"params\":{\"dict\":\"meshtastic\"}},{\"type\":\"encrypt\"},{\"type\":\"base64\"}]",
+    "smaz2g": "mode byte 0x00 = the text's UTF-8 bytes as they are, 0x01 = its SMAZ2, taken only when strictly shorter (a tie stays raw)",
+    "wire_len": "30 + min(n, z) for n UTF-8 bytes and SMAZ2 output z"
+  },
+  "dictionaries": {
+    "meshtastic": {
+      "words": [
+        "mesh",
+        "node",
+        "message",
+        "channel",
+        "signal",
+        "radio",
+        "frequency",
+        "power",
+        "antenna",
+        "range",
+        "gateway",
+        "relay",
+        "bridge",
+        "network",
+        "packet",
+        "payload",
+        "status",
+        "battery",
+        "voltage",
+        "level",
+        "percent",
+        "position",
+        "latitude",
+        "longitude",
+        "altitude",
+        "heading",
+        "speed",
+        "distance",
+        "bearing",
+        "elevation",
+        "terrain",
+        "route",
+        "satellite",
+        "iridium",
+        "modem",
+        "serial",
+        "port",
+        "device",
+        "sensor",
+        "timestamp",
+        "meshtastic",
+        "location",
+        "coordinates",
+        "waypoint",
+        "temperature",
+        "humidity",
+        "pressure",
+        "weather",
+        "connected",
+        "offline",
+        "online",
+        "update",
+        "received",
+        "transmitted",
+        "error",
+        "warning",
+        "critical",
+        "enabled",
+        "disabled",
+        "configuration",
+        "settings",
+        "interface",
+        "protocol",
+        "timeout",
+        "emergency",
+        "rescue",
+        "medical",
+        "assistance",
+        "helicopter",
+        "vehicle",
+        "boat",
+        "shelter",
+        "water",
+        "food",
+        "camp",
+        "base",
+        "standing",
+        "moving",
+        "stopped",
+        "request",
+        "respond",
+        "acknowledge",
+        "confirmed",
+        "denied",
+        "approved",
+        "copy",
+        "over",
+        "roger",
+        "affirmative",
+        "negative",
+        "clear",
+        "blocked",
+        "north",
+        "south",
+        "east",
+        "west",
+        "success",
+        "failed",
+        "pending",
+        "queued",
+        "delivered",
+        "expired",
+        "forwarded",
+        "dropped",
+        "retry",
+        "noise",
+        "interference",
+        "coverage",
+        "degrees",
+        "meters",
+        "kilometers",
+        "knots",
+        "duration",
+        "interval",
+        "threshold",
+        "maximum",
+        "minimum",
+        "average",
+        "total",
+        "count",
+        "report",
+        "checksum",
+        "baud",
+        "cellular",
+        "satellite",
+        "webhook",
+        "mqtt",
+        "iridium",
+        "that",
+        "this",
+        "with",
+        "from",
+        "your",
+        "have",
+        "more",
+        "will",
+        "home",
+        "about",
+        "time",
+        "they",
+        "what",
+        "which",
+        "their",
+        "there",
+        "only",
+        "when",
+        "here",
+        "also",
+        "help",
+        "been",
+        "would",
+        "were",
+        "some",
+        "these",
+        "like",
+        "than",
+        "find",
+        "back",
+        "just",
+        "over",
+        "into",
+        "them",
+        "should",
+        "then",
+        "good",
+        "well",
+        "where",
+        "right",
+        "high",
+        "through",
+        "each",
+        "very",
+        "read",
+        "need",
+        "many",
+        "said",
+        "does",
+        "under",
+        "full",
+        "part",
+        "could",
+        "great",
+        "send",
+        "type",
+        "because",
+        "local",
+        "those",
+        "using",
+        "result",
+        "before",
+        "make",
+        "data",
+        "area",
+        "want",
+        "show",
+        "even",
+        "check",
+        "open",
+        "today",
+        "state",
+        "both",
+        "down",
+        "system",
+        "three",
+        "total",
+        "place",
+        "without",
+        "access",
+        "think",
+        "current",
+        "control",
+        "change",
+        "small",
+        "rate",
+        "number",
+        "line",
+        "name",
+        "list",
+        "work",
+        "last",
+        "next",
+        "used",
+        "free",
+        "other",
+        "first",
+        "world",
+        "after",
+        "best",
+        "long",
+        "based",
+        "code",
+        "being",
+        "while",
+        "care",
+        "same",
+        "found",
+        "link",
+        "text",
+        "site",
+        "form",
+        "event",
+        "love",
+        "main",
+        "still",
+        "information",
+        "service",
+        "people",
+        "year",
+        "email",
+        "group",
+        "detail",
+        "design",
+        "board",
+        "point",
+        "test",
+        "track"
+      ],
+      "bigrams": "intherreheanonesorteattistenntartondalitseediseangoulecomeneriroderaioicliofasetvetasihamaecomceelllcaurlachhidihofonsotacnarssoprrtsassusnoiltsemctgeloeebetrnipeiepancpooldaadviunamutwimoshyoaiewowosfiepttmiopiaweagsuiddoooirspplscaywaigeirylytuulivimabty"
+    }
+  },
+  "smaz2": [
+    {
+      "compressed_hex": "",
+      "dict": "default",
+      "name": "empty",
+      "text": "",
+      "text_hex": ""
+    },
+    {
+      "compressed_hex": "016b",
+      "dict": "default",
+      "name": "k",
+      "text": "k",
+      "text_hex": "6b"
+    },
+    {
+      "compressed_hex": "026f6b",
+      "dict": "default",
+      "name": "ok",
+      "text": "ok",
+      "text_hex": "6f6b"
+    },
+    {
+      "compressed_hex": "04534f532007629cb7b2026c20a6aa8c85af",
+      "dict": "default",
+      "name": "en_sos",
+      "text": "SOS need medical assistance",
+      "text_hex": "534f53206e656564206d65646963616c20617373697374616e6365"
+    },
+    {
+      "compressed_hex": "84b1026f200615022c2081026520c289b193026520960120800120a1980165",
+      "dict": "default",
+      "name": "en_sentence",
+      "text": "hello there, the satellite is in range",
+      "text_hex": "68656c6c6f2074686572652c2074686520736174656c6c69746520697320696e2072616e6765"
+    },
+    {
+      "compressed_hex": "81026520c5a00220628a89f8012007f5960120cb03772c2083b4037920678ae1f4012006cb",
+      "dict": "default",
+      "name": "en_words_spaces",
+      "text": "the node battery level is low, relay gateway down",
+      "text_hex": "746865206e6f64652062617474657279206c6576656c206973206c6f772c2072656c6179206761746577617920646f776e"
+    },
+    {
+      "compressed_hex": "0153a9fa0273200682023a2092026c20c5a0027320061e032c20628a89f8012007f503383020d00172af8e022c2006b1920120064f022c20d4aa8b860120d906e702642007e0810265200739064a032e205497026d208a01208102652007d601678a03652c2092026c20c20466652c20ddd8980120900120b2036d70200786d605726b2e204e046578742007a980012086026520b8b30120073081026520c289b193026520b5859d046c2e20429e0164ca012083b402792096052075702c209cde012007ca027175d103742c20c50120829fbe012e",
+      "dict": "default",
+      "name": "en_long",
+      "text": "Status report: all nodes online, battery level 80 percent, signal good, position unchanged since the last message. Team at the north gate, all safe, moving to camp before dark. Next check in one hour over the satellite channel. Bridge relay is up, mesh network quiet, no errors.",
+      "text_hex": "537461747573207265706f72743a20616c6c206e6f646573206f6e6c696e652c2062617474657279206c6576656c2038302070657263656e742c207369676e616c20676f6f642c20706f736974696f6e20756e6368616e6765642073696e636520746865206c617374206d6573736167652e205465616d20617420746865206e6f72746820676174652c20616c6c20736166652c206d6f76696e6720746f2063616d70206265666f7265206461726b2e204e65787420636865636b20696e206f6e6520686f7572206f7665722074686520736174656c6c697465206368616e6e656c2e204272696467652072656c61792069732075702c206d657368206e6574776f726b2071756965742c206e6f206572726f72732e"
+    },
+    {
+      "compressed_hex": "05ce9aceb1ce05bbceb7cebc05ceadcf81ce01b1",
+      "dict": "default",
+      "name": "el_word",
+      "text": "Καλημέρα",
+      "text_hex": "ce9aceb1cebbceb7cebcceadcf81ceb1"
+    },
+    {
+      "compressed_hex": "05ce95ceafce05bcceb1cf8305cf84ceb52005cf83cf84ce05bf20ceb2cf058ccf81ceb505ceb9cebf2005cf86cf85ce05bbceacceba05ceb9cebf2c0520cf8ccebb05cebfceb92005cebaceb1ce05bbceac2c2005cebaceb9ce05bdcebfcf8d05cebcceb1cf0583cf84ceb50520cf80cf8105cebfcf822005cf84cebf2005cf83cf84cf0581ceb1cf8405cf8ccf80ce05b5ceb4cebf",
+      "dict": "default",
+      "name": "el_sentence",
+      "text": "Είμαστε στο βόρειο φυλάκιο, όλοι καλά, κινούμαστε προς το στρατόπεδο",
+      "text_hex": "ce95ceafcebcceb1cf83cf84ceb520cf83cf84cebf20ceb2cf8ccf81ceb5ceb9cebf20cf86cf85cebbceaccebaceb9cebf2c20cf8ccebbcebfceb920cebaceb1cebbceac2c20cebaceb9cebdcebfcf8dcebcceb1cf83cf84ceb520cf80cf81cebfcf8220cf84cebf20cf83cf84cf81ceb1cf84cf8ccf80ceb5ceb4cebf"
+    },
+    {
+      "compressed_hex": "024e6fa00520373a20ce05b8ceadcf8305ceb7204f4b032c20628a89f805203830252c0520cf8ccebb05ceb120ceba05ceb1cebbce01ac",
+      "dict": "default",
+      "name": "mixed",
+      "text": "Node 7: θέση OK, battery 80%, όλα καλά",
+      "text_hex": "4e6f646520373a20ceb8ceadcf83ceb7204f4b2c2062617474657279203830252c20cf8ccebbceb120cebaceb1cebbceac"
+    },
+    {
+      "compressed_hex": "05534f5320f0059f9aa820cf0583cf84cebf0520cf83ceb705cebcceb5ce05afcebf2034022c20076207db04f09f92a7",
+      "dict": "default",
+      "name": "emoji",
+      "text": "SOS 🚨 στο σημείο 4, need water 💧",
+      "text_hex": "534f5320f09f9aa820cf83cf84cebf20cf83ceb7cebcceb5ceafcebf20342c206e65656420776174657220f09f92a7"
+    },
+    {
+      "compressed_hex": "b20466c3a920bd02c3afa805206661c3a7d705652c20477205c3b6c39f65042c20c3b1850364c3ba",
+      "dict": "default",
+      "name": "latin1_multibyte",
+      "text": "café naïve façade, Größe, ñandú",
+      "text_hex": "636166c3a9206e61c3af7665206661c3a76164652c204772c3b6c39f652c20c3b1616e64c3ba"
+    },
+    {
+      "compressed_hex": "0161010162020163030164040165050166060167070168080169",
+      "dict": "default",
+      "name": "control_bytes",
+      "text": "a\u0001b\u0002c\u0003d\u0004e\u0005f\u0006g\u0007h\bi",
+      "text_hex": "6101620263036404650566066707680869"
+    },
+    {
+      "compressed_hex": "fe03006364",
+      "dict": "default",
+      "name": "nul",
+      "text": "ab\u0000cd",
+      "text_hex": "6162006364"
+    },
+    {
+      "compressed_hex": "05ceb1ceb2ce05b3ceb4ceb505ceb6ceb7ce05b8ceb9ceba05cebbcebcce05bdcebecebf05cf80cf81cf0583cf84cf8505cf86cf87cf0388cf89",
+      "dict": "default",
+      "name": "long_verbatim_run",
+      "text": "αβγδεζηθικλμνξοπρστυφχψω",
+      "text_hex": "ceb1ceb2ceb3ceb4ceb5ceb6ceb7ceb8ceb9cebacebbcebccebdcebecebfcf80cf81cf83cf84cf85cf86cf87cf88cf89"
+    },
+    {
+      "compressed_hex": "054f4b203432",
+      "dict": "default",
+      "name": "tie_meshtastic",
+      "text": "OK 42",
+      "text_hex": "4f4b203432"
+    },
+    {
+      "compressed_hex": "8604206d7920f5027921",
+      "dict": "default",
+      "name": "tie_default",
+      "text": "on my way!",
+      "text_hex": "6f6e206d792077617921"
+    },
+    {
+      "compressed_hex": "",
+      "dict": "meshtastic",
+      "name": "empty",
+      "text": "",
+      "text_hex": ""
+    },
+    {
+      "compressed_hex": "6b",
+      "dict": "meshtastic",
+      "name": "k",
+      "text": "k",
+      "text_hex": "6b"
+    },
+    {
+      "compressed_hex": "6f6b",
+      "dict": "meshtastic",
+      "name": "ok",
+      "text": "ok",
+      "text_hex": "6f6b"
+    },
+    {
+      "compressed_hex": "534f5308ad08420843",
+      "dict": "meshtastic",
+      "name": "en_sos",
+      "text": "SOS need medical assistance",
+      "text_hex": "534f53206e656564206d65646963616c20617373697374616e6365"
+    },
+    {
+      "compressed_hex": "84b16f088f2c208165087c209620800809",
+      "dict": "meshtastic",
+      "name": "en_sentence",
+      "text": "hello there, the satellite is in range",
+      "text_hex": "68656c6c6f2074686572652c2074686520736174656c6c69746520697320696e2072616e6765"
+    },
+    {
+      "compressed_hex": "8165080108110813209620cb772c080b080a08c9",
+      "dict": "meshtastic",
+      "name": "en_words_spaces",
+      "text": "the node battery level is low, relay gateway down",
+      "text_hex": "746865206e6f64652062617474657279206c6576656c206973206c6f772c2072656c6179206761746577617920646f776e"
+    },
+    {
+      "compressed_hex": "53a9fa7308783a20926c08017308322c0811081320383008142c080408a42c081520d906d36420aad36520816508db08022e2054976d208a208165085c20678a652c20926c20c266652c084d2090084a08bd20d6726b2e204e65787408c4208020866520b8b3089f208165087c08032e20429e64ca080b20962075702c0800080d207175d1742c20c50836732e",
+      "dict": "meshtastic",
+      "name": "en_long",
+      "text": "Status report: all nodes online, battery level 80 percent, signal good, position unchanged since the last message. Team at the north gate, all safe, moving to camp before dark. Next check in one hour over the satellite channel. Bridge relay is up, mesh network quiet, no errors.",
+      "text_hex": "537461747573207265706f72743a20616c6c206e6f646573206f6e6c696e652c2062617474657279206c6576656c2038302070657263656e742c207369676e616c20676f6f642c20706f736974696f6e20756e6368616e6765642073696e636520746865206c617374206d6573736167652e205465616d20617420746865206e6f72746820676174652c20616c6c20736166652c206d6f76696e6720746f2063616d70206265666f7265206461726b2e204e65787420636865636b20696e206f6e6520686f7572206f7665722074686520736174656c6c697465206368616e6e656c2e204272696467652072656c61792069732075702c206d657368206e6574776f726b2071756965742c206e6f206572726f72732e"
+    },
+    {
+      "compressed_hex": "05ce9aceb1ce05bbceb7cebc05ceadcf81ce01b1",
+      "dict": "meshtastic",
+      "name": "el_word",
+      "text": "Καλημέρα",
+      "text_hex": "ce9aceb1cebbceb7cebcceadcf81ceb1"
+    },
+    {
+      "compressed_hex": "05ce95ceafce05bcceb1cf8304cf84ceb52005cf83cf84ce01bf2005ceb2cf8ccf0581ceb5ceb902cebf2005cf86cf85ce05bbceacceba04ceb9cebf2c2005cf8ccebbce03bfceb92005cebaceb1ce03bbceac2c2005cebaceb9ce05bdcebfcf8d05cebcceb1cf0583cf84ceb52005cf80cf81ce03bfcf822004cf84cebf2005cf83cf84cf0581ceb1cf8405cf8ccf80ce05b5ceb4cebf",
+      "dict": "meshtastic",
+      "name": "el_sentence",
+      "text": "Είμαστε στο βόρειο φυλάκιο, όλοι καλά, κινούμαστε προς το στρατόπεδο",
+      "text_hex": "ce95ceafcebcceb1cf83cf84ceb520cf83cf84cebf20ceb2cf8ccf81ceb5ceb9cebf20cf86cf85cebbceaccebaceb9cebf2c20cf8ccebbcebfceb920cebaceb1cebbceac2c20cebaceb9cebdcebfcf8dcebcceb1cf83cf84ceb520cf80cf81cebfcf8220cf84cebf20cf83cf84cf81ceb1cf84cf8ccf80ceb5ceb4cebf"
+    },
+    {
+      "compressed_hex": "4e6fa020373a2005ceb8ceadcf0383ceb7204f4b2c0811203830252c2005cf8ccebbce01b12005cebaceb1ce03bbceac",
+      "dict": "meshtastic",
+      "name": "mixed",
+      "text": "Node 7: θέση OK, battery 80%, όλα καλά",
+      "text_hex": "4e6f646520373a20ceb8ceadcf83ceb7204f4b2c2062617474657279203830252c20cf8ccebbceb120cebaceb1cebbceac"
+    },
+    {
+      "compressed_hex": "534f532004f09f9aa82005cf83cf84ce01bf2005cf83ceb7ce05bcceb5ceaf02cebf20342c08ad08482004f09f92a7",
+      "dict": "meshtastic",
+      "name": "emoji",
+      "text": "SOS 🚨 στο σημείο 4, need water 💧",
+      "text_hex": "534f5320f09f9aa820cf83cf84cebf20cf83ceb7cebcceb5ceafcebf20342c206e65656420776174657220f09f92a7"
+    },
+    {
+      "compressed_hex": "b26602c3a920bd02c3afa820666102c3a7d7652c20477204c3b6c39f652c2002c3b1856402c3ba",
+      "dict": "meshtastic",
+      "name": "latin1_multibyte",
+      "text": "café naïve façade, Größe, ñandú",
+      "text_hex": "636166c3a9206e61c3af7665206661c3a76164652c204772c3b6c39f652c20c3b1616e64c3ba"
+    },
+    {
+      "compressed_hex": "61010162010263010364010465010566010667010768010869",
+      "dict": "meshtastic",
+      "name": "control_bytes",
+      "text": "a\u0001b\u0002c\u0003d\u0004e\u0005f\u0006g\u0007h\bi",
+      "text_hex": "6101620263036404650566066707680869"
+    },
+    {
+      "compressed_hex": "fe006364",
+      "dict": "meshtastic",
+      "name": "nul",
+      "text": "ab\u0000cd",
+      "text_hex": "6162006364"
+    },
+    {
+      "compressed_hex": "05ceb1ceb2ce05b3ceb4ceb505ceb6ceb7ce05b8ceb9ceba05cebbcebcce05bdcebecebf05cf80cf81cf0583cf84cf8505cf86cf87cf0388cf89",
+      "dict": "meshtastic",
+      "name": "long_verbatim_run",
+      "text": "αβγδεζηθικλμνξοπρστυφχψω",
+      "text_hex": "ceb1ceb2ceb3ceb4ceb5ceb6ceb7ceb8ceb9cebacebbcebccebdcebecebfcf80cf81cf83cf84cf85cf86cf87cf88cf89"
+    },
+    {
+      "compressed_hex": "4f4b203432",
+      "dict": "meshtastic",
+      "name": "tie_meshtastic",
+      "text": "OK 42",
+      "text_hex": "4f4b203432"
+    },
+    {
+      "compressed_hex": "86206d7920f57921",
+      "dict": "meshtastic",
+      "name": "tie_default",
+      "text": "on my way!",
+      "text_hex": "6f6e206d792077617921"
+    }
+  ],
+  "smaz2g": [
+    {
+      "name": "empty",
+      "dict": "default",
+      "text": "",
+      "text_hex": "",
+      "mode": "raw",
+      "frame_hex": "00"
+    },
+    {
+      "name": "k",
+      "dict": "default",
+      "text": "k",
+      "text_hex": "6b",
+      "mode": "raw",
+      "frame_hex": "006b"
+    },
+    {
+      "name": "ok",
+      "dict": "default",
+      "text": "ok",
+      "text_hex": "6f6b",
+      "mode": "raw",
+      "frame_hex": "006f6b"
+    },
+    {
+      "name": "en_sos",
+      "dict": "default",
+      "text": "SOS need medical assistance",
+      "text_hex": "534f53206e656564206d65646963616c20617373697374616e6365",
+      "mode": "smaz2",
+      "frame_hex": "0104534f532007629cb7b2026c20a6aa8c85af"
+    },
+    {
+      "name": "en_sentence",
+      "dict": "default",
+      "text": "hello there, the satellite is in range",
+      "text_hex": "68656c6c6f2074686572652c2074686520736174656c6c69746520697320696e2072616e6765",
+      "mode": "smaz2",
+      "frame_hex": "0184b1026f200615022c2081026520c289b193026520960120800120a1980165"
+    },
+    {
+      "name": "en_words_spaces",
+      "dict": "default",
+      "text": "the node battery level is low, relay gateway down",
+      "text_hex": "746865206e6f64652062617474657279206c6576656c206973206c6f772c2072656c6179206761746577617920646f776e",
+      "mode": "smaz2",
+      "frame_hex": "0181026520c5a00220628a89f8012007f5960120cb03772c2083b4037920678ae1f4012006cb"
+    },
+    {
+      "name": "en_long",
+      "dict": "default",
+      "text": "Status report: all nodes online, battery level 80 percent, signal good, position unchanged since the last message. Team at the north gate, all safe, moving to camp before dark. Next check in one hour over the satellite channel. Bridge relay is up, mesh network quiet, no errors.",
+      "text_hex": "537461747573207265706f72743a20616c6c206e6f646573206f6e6c696e652c2062617474657279206c6576656c2038302070657263656e742c207369676e616c20676f6f642c20706f736974696f6e20756e6368616e6765642073696e636520746865206c617374206d6573736167652e205465616d20617420746865206e6f72746820676174652c20616c6c20736166652c206d6f76696e6720746f2063616d70206265666f7265206461726b2e204e65787420636865636b20696e206f6e6520686f7572206f7665722074686520736174656c6c697465206368616e6e656c2e204272696467652072656c61792069732075702c206d657368206e6574776f726b2071756965742c206e6f206572726f72732e",
+      "mode": "smaz2",
+      "frame_hex": "010153a9fa0273200682023a2092026c20c5a0027320061e032c20628a89f8012007f503383020d00172af8e022c2006b1920120064f022c20d4aa8b860120d906e702642007e0810265200739064a032e205497026d208a01208102652007d601678a03652c2092026c20c20466652c20ddd8980120900120b2036d70200786d605726b2e204e046578742007a980012086026520b8b30120073081026520c289b193026520b5859d046c2e20429e0164ca012083b402792096052075702c209cde012007ca027175d103742c20c50120829fbe012e"
+    },
+    {
+      "name": "el_word",
+      "dict": "default",
+      "text": "Καλημέρα",
+      "text_hex": "ce9aceb1cebbceb7cebcceadcf81ceb1",
+      "mode": "raw",
+      "frame_hex": "00ce9aceb1cebbceb7cebcceadcf81ceb1"
+    },
+    {
+      "name": "el_sentence",
+      "dict": "default",
+      "text": "Είμαστε στο βόρειο φυλάκιο, όλοι καλά, κινούμαστε προς το στρατόπεδο",
+      "text_hex": "ce95ceafcebcceb1cf83cf84ceb520cf83cf84cebf20ceb2cf8ccf81ceb5ceb9cebf20cf86cf85cebbceaccebaceb9cebf2c20cf8ccebbcebfceb920cebaceb1cebbceac2c20cebaceb9cebdcebfcf8dcebcceb1cf83cf84ceb520cf80cf81cebfcf8220cf84cebf20cf83cf84cf81ceb1cf84cf8ccf80ceb5ceb4cebf",
+      "mode": "raw",
+      "frame_hex": "00ce95ceafcebcceb1cf83cf84ceb520cf83cf84cebf20ceb2cf8ccf81ceb5ceb9cebf20cf86cf85cebbceaccebaceb9cebf2c20cf8ccebbcebfceb920cebaceb1cebbceac2c20cebaceb9cebdcebfcf8dcebcceb1cf83cf84ceb520cf80cf81cebfcf8220cf84cebf20cf83cf84cf81ceb1cf84cf8ccf80ceb5ceb4cebf"
+    },
+    {
+      "name": "mixed",
+      "dict": "default",
+      "text": "Node 7: θέση OK, battery 80%, όλα καλά",
+      "text_hex": "4e6f646520373a20ceb8ceadcf83ceb7204f4b2c2062617474657279203830252c20cf8ccebbceb120cebaceb1cebbceac",
+      "mode": "raw",
+      "frame_hex": "004e6f646520373a20ceb8ceadcf83ceb7204f4b2c2062617474657279203830252c20cf8ccebbceb120cebaceb1cebbceac"
+    },
+    {
+      "name": "emoji",
+      "dict": "default",
+      "text": "SOS 🚨 στο σημείο 4, need water 💧",
+      "text_hex": "534f5320f09f9aa820cf83cf84cebf20cf83ceb7cebcceb5ceafcebf20342c206e65656420776174657220f09f92a7",
+      "mode": "raw",
+      "frame_hex": "00534f5320f09f9aa820cf83cf84cebf20cf83ceb7cebcceb5ceafcebf20342c206e65656420776174657220f09f92a7"
+    },
+    {
+      "name": "latin1_multibyte",
+      "dict": "default",
+      "text": "café naïve façade, Größe, ñandú",
+      "text_hex": "636166c3a9206e61c3af7665206661c3a76164652c204772c3b6c39f652c20c3b1616e64c3ba",
+      "mode": "raw",
+      "frame_hex": "00636166c3a9206e61c3af7665206661c3a76164652c204772c3b6c39f652c20c3b1616e64c3ba"
+    },
+    {
+      "name": "control_bytes",
+      "dict": "default",
+      "text": "a\u0001b\u0002c\u0003d\u0004e\u0005f\u0006g\u0007h\bi",
+      "text_hex": "6101620263036404650566066707680869",
+      "mode": "raw",
+      "frame_hex": "006101620263036404650566066707680869"
+    },
+    {
+      "name": "nul",
+      "dict": "default",
+      "text": "ab\u0000cd",
+      "text_hex": "6162006364",
+      "mode": "raw",
+      "frame_hex": "006162006364"
+    },
+    {
+      "name": "long_verbatim_run",
+      "dict": "default",
+      "text": "αβγδεζηθικλμνξοπρστυφχψω",
+      "text_hex": "ceb1ceb2ceb3ceb4ceb5ceb6ceb7ceb8ceb9cebacebbcebccebdcebecebfcf80cf81cf83cf84cf85cf86cf87cf88cf89",
+      "mode": "raw",
+      "frame_hex": "00ceb1ceb2ceb3ceb4ceb5ceb6ceb7ceb8ceb9cebacebbcebccebdcebecebfcf80cf81cf83cf84cf85cf86cf87cf88cf89"
+    },
+    {
+      "name": "tie_meshtastic",
+      "dict": "default",
+      "text": "OK 42",
+      "text_hex": "4f4b203432",
+      "mode": "raw",
+      "frame_hex": "004f4b203432"
+    },
+    {
+      "name": "tie_default",
+      "dict": "default",
+      "text": "on my way!",
+      "text_hex": "6f6e206d792077617921",
+      "mode": "raw",
+      "frame_hex": "006f6e206d792077617921"
+    },
+    {
+      "name": "empty",
+      "dict": "meshtastic",
+      "text": "",
+      "text_hex": "",
+      "mode": "raw",
+      "frame_hex": "00"
+    },
+    {
+      "name": "k",
+      "dict": "meshtastic",
+      "text": "k",
+      "text_hex": "6b",
+      "mode": "raw",
+      "frame_hex": "006b"
+    },
+    {
+      "name": "ok",
+      "dict": "meshtastic",
+      "text": "ok",
+      "text_hex": "6f6b",
+      "mode": "raw",
+      "frame_hex": "006f6b"
+    },
+    {
+      "name": "en_sos",
+      "dict": "meshtastic",
+      "text": "SOS need medical assistance",
+      "text_hex": "534f53206e656564206d65646963616c20617373697374616e6365",
+      "mode": "smaz2",
+      "frame_hex": "01534f5308ad08420843"
+    },
+    {
+      "name": "en_sentence",
+      "dict": "meshtastic",
+      "text": "hello there, the satellite is in range",
+      "text_hex": "68656c6c6f2074686572652c2074686520736174656c6c69746520697320696e2072616e6765",
+      "mode": "smaz2",
+      "frame_hex": "0184b16f088f2c208165087c209620800809"
+    },
+    {
+      "name": "en_words_spaces",
+      "dict": "meshtastic",
+      "text": "the node battery level is low, relay gateway down",
+      "text_hex": "746865206e6f64652062617474657279206c6576656c206973206c6f772c2072656c6179206761746577617920646f776e",
+      "mode": "smaz2",
+      "frame_hex": "018165080108110813209620cb772c080b080a08c9"
+    },
+    {
+      "name": "en_long",
+      "dict": "meshtastic",
+      "text": "Status report: all nodes online, battery level 80 percent, signal good, position unchanged since the last message. Team at the north gate, all safe, moving to camp before dark. Next check in one hour over the satellite channel. Bridge relay is up, mesh network quiet, no errors.",
+      "text_hex": "537461747573207265706f72743a20616c6c206e6f646573206f6e6c696e652c2062617474657279206c6576656c2038302070657263656e742c207369676e616c20676f6f642c20706f736974696f6e20756e6368616e6765642073696e636520746865206c617374206d6573736167652e205465616d20617420746865206e6f72746820676174652c20616c6c20736166652c206d6f76696e6720746f2063616d70206265666f7265206461726b2e204e65787420636865636b20696e206f6e6520686f7572206f7665722074686520736174656c6c697465206368616e6e656c2e204272696467652072656c61792069732075702c206d657368206e6574776f726b2071756965742c206e6f206572726f72732e",
+      "mode": "smaz2",
+      "frame_hex": "0153a9fa7308783a20926c08017308322c0811081320383008142c080408a42c081520d906d36420aad36520816508db08022e2054976d208a208165085c20678a652c20926c20c266652c084d2090084a08bd20d6726b2e204e65787408c4208020866520b8b3089f208165087c08032e20429e64ca080b20962075702c0800080d207175d1742c20c50836732e"
+    },
+    {
+      "name": "el_word",
+      "dict": "meshtastic",
+      "text": "Καλημέρα",
+      "text_hex": "ce9aceb1cebbceb7cebcceadcf81ceb1",
+      "mode": "raw",
+      "frame_hex": "00ce9aceb1cebbceb7cebcceadcf81ceb1"
+    },
+    {
+      "name": "el_sentence",
+      "dict": "meshtastic",
+      "text": "Είμαστε στο βόρειο φυλάκιο, όλοι καλά, κινούμαστε προς το στρατόπεδο",
+      "text_hex": "ce95ceafcebcceb1cf83cf84ceb520cf83cf84cebf20ceb2cf8ccf81ceb5ceb9cebf20cf86cf85cebbceaccebaceb9cebf2c20cf8ccebbcebfceb920cebaceb1cebbceac2c20cebaceb9cebdcebfcf8dcebcceb1cf83cf84ceb520cf80cf81cebfcf8220cf84cebf20cf83cf84cf81ceb1cf84cf8ccf80ceb5ceb4cebf",
+      "mode": "raw",
+      "frame_hex": "00ce95ceafcebcceb1cf83cf84ceb520cf83cf84cebf20ceb2cf8ccf81ceb5ceb9cebf20cf86cf85cebbceaccebaceb9cebf2c20cf8ccebbcebfceb920cebaceb1cebbceac2c20cebaceb9cebdcebfcf8dcebcceb1cf83cf84ceb520cf80cf81cebfcf8220cf84cebf20cf83cf84cf81ceb1cf84cf8ccf80ceb5ceb4cebf"
+    },
+    {
+      "name": "mixed",
+      "dict": "meshtastic",
+      "text": "Node 7: θέση OK, battery 80%, όλα καλά",
+      "text_hex": "4e6f646520373a20ceb8ceadcf83ceb7204f4b2c2062617474657279203830252c20cf8ccebbceb120cebaceb1cebbceac",
+      "mode": "smaz2",
+      "frame_hex": "014e6fa020373a2005ceb8ceadcf0383ceb7204f4b2c0811203830252c2005cf8ccebbce01b12005cebaceb1ce03bbceac"
+    },
+    {
+      "name": "emoji",
+      "dict": "meshtastic",
+      "text": "SOS 🚨 στο σημείο 4, need water 💧",
+      "text_hex": "534f5320f09f9aa820cf83cf84cebf20cf83ceb7cebcceb5ceafcebf20342c206e65656420776174657220f09f92a7",
+      "mode": "raw",
+      "frame_hex": "00534f5320f09f9aa820cf83cf84cebf20cf83ceb7cebcceb5ceafcebf20342c206e65656420776174657220f09f92a7"
+    },
+    {
+      "name": "latin1_multibyte",
+      "dict": "meshtastic",
+      "text": "café naïve façade, Größe, ñandú",
+      "text_hex": "636166c3a9206e61c3af7665206661c3a76164652c204772c3b6c39f652c20c3b1616e64c3ba",
+      "mode": "raw",
+      "frame_hex": "00636166c3a9206e61c3af7665206661c3a76164652c204772c3b6c39f652c20c3b1616e64c3ba"
+    },
+    {
+      "name": "control_bytes",
+      "dict": "meshtastic",
+      "text": "a\u0001b\u0002c\u0003d\u0004e\u0005f\u0006g\u0007h\bi",
+      "text_hex": "6101620263036404650566066707680869",
+      "mode": "raw",
+      "frame_hex": "006101620263036404650566066707680869"
+    },
+    {
+      "name": "nul",
+      "dict": "meshtastic",
+      "text": "ab\u0000cd",
+      "text_hex": "6162006364",
+      "mode": "smaz2",
+      "frame_hex": "01fe006364"
+    },
+    {
+      "name": "long_verbatim_run",
+      "dict": "meshtastic",
+      "text": "αβγδεζηθικλμνξοπρστυφχψω",
+      "text_hex": "ceb1ceb2ceb3ceb4ceb5ceb6ceb7ceb8ceb9cebacebbcebccebdcebecebfcf80cf81cf83cf84cf85cf86cf87cf88cf89",
+      "mode": "raw",
+      "frame_hex": "00ceb1ceb2ceb3ceb4ceb5ceb6ceb7ceb8ceb9cebacebbcebccebdcebecebfcf80cf81cf83cf84cf85cf86cf87cf88cf89"
+    },
+    {
+      "name": "tie_meshtastic",
+      "dict": "meshtastic",
+      "text": "OK 42",
+      "text_hex": "4f4b203432",
+      "mode": "raw",
+      "frame_hex": "004f4b203432"
+    },
+    {
+      "name": "tie_default",
+      "dict": "meshtastic",
+      "text": "on my way!",
+      "text_hex": "6f6e206d792077617921",
+      "mode": "smaz2",
+      "frame_hex": "0186206d7920f57921"
+    }
+  ],
+  "smaz2g_reject": [
+    {
+      "name": "empty_frame",
+      "dict": "meshtastic",
+      "bytes_hex": "",
+      "why": "no mode byte"
+    },
+    {
+      "name": "unknown_mode_02",
+      "dict": "meshtastic",
+      "bytes_hex": "0268656c6c6f",
+      "why": "unknown mode"
+    },
+    {
+      "name": "unknown_mode_ff",
+      "dict": "default",
+      "bytes_hex": "ff00",
+      "why": "unknown mode"
+    },
+    {
+      "name": "smaz2_mode_no_body",
+      "dict": "meshtastic",
+      "bytes_hex": "01",
+      "why": "smaz2 mode with no data"
+    },
+    {
+      "name": "word_escape_at_end",
+      "dict": "meshtastic",
+      "bytes_hex": "0106",
+      "why": "truncated word escape"
+    },
+    {
+      "name": "word_space_escape_at_end",
+      "dict": "meshtastic",
+      "bytes_hex": "0107",
+      "why": "truncated word+space escape"
+    },
+    {
+      "name": "space_word_escape_at_end",
+      "dict": "meshtastic",
+      "bytes_hex": "0108",
+      "why": "truncated space+word escape"
+    },
+    {
+      "name": "verbatim_overflow",
+      "dict": "meshtastic",
+      "bytes_hex": "010341",
+      "why": "verbatim run longer than the data"
+    },
+    {
+      "name": "default_smaz2_mode_no_body",
+      "dict": "default",
+      "bytes_hex": "01",
+      "why": "smaz2 mode with no data"
+    }
+  ],
+  "envelopes": [
+    {
+      "name": "empty",
+      "dict": "meshtastic",
+      "text": "",
+      "key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "nonce_hex": "000000000000000000000001",
+      "wire_hex": "01000000000000000000000001150bf78d5d4519e5ec03772a4606838fe3",
+      "wire_len": 30
+    },
+    {
+      "name": "en_sos",
+      "dict": "meshtastic",
+      "text": "SOS need medical assistance",
+      "key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "nonce_hex": "a1a2a3a4a5a6a7a8a9aaabac",
+      "wire_hex": "01a1a2a3a4a5a6a7a8a9aaabac27bcc83cfcf8362d863d7a49e84df47578021690d6e6bd2b72a2",
+      "wire_len": 39
+    },
+    {
+      "name": "en_sentence_nonce_starts_01",
+      "dict": "meshtastic",
+      "text": "hello there, the satellite is in range",
+      "key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "nonce_hex": "0102030405060708090a0b0c",
+      "wire_hex": "010102030405060708090a0b0c046eebbae41bdca6cdc76b3b3085caa84a4a671b9497953f69ba372b2dd04118dc65",
+      "wire_len": 47
+    },
+    {
+      "name": "el_sentence",
+      "dict": "meshtastic",
+      "text": "Είμαστε στο βόρειο φυλάκιο, όλοι καλά, κινούμαστε προς το στρατόπεδο",
+      "key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "nonce_hex": "0f0e0d0c0b0a090807060504",
+      "wire_hex": "010f0e0d0c0b0a090807060504a4fe2492f41913605a103290bc543c21a6e5d0e401e6d1aae4862230b3c405e4bd447c60e4cfb40bee0ee2415db6e6bcd9bfd971a73190503ae3884f53b9ff4403f9fcc7cd758a79efd5817bede6cb7e5efcf14a249dc436c853a8a1c6ce46cfd80415019bdc054072ed6b7cf600784aa4b422bec8fbb16e56a3a4632376b111e537c5e1ae17684bc70225768ee1",
+      "wire_len": 155
+    },
+    {
+      "name": "mixed",
+      "dict": "meshtastic",
+      "text": "Node 7: θέση OK, battery 80%, όλα καλά",
+      "key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "nonce_hex": "deadbeefcafebabe00112233",
+      "wire_hex": "01deadbeefcafebabe0011223338d5e30ded8fed83ca7f20126cabde16df69581968fb6638866c80bbe42e4134dd522a5cd6d1a34673381ba8675c9d2441e5556f2804711219aeb0e75815fec777",
+      "wire_len": 78
+    },
+    {
+      "name": "emoji",
+      "dict": "meshtastic",
+      "text": "SOS 🚨 στο σημείο 4, need water 💧",
+      "key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "nonce_hex": "112233445566778899aabbcc",
+      "wire_hex": "01112233445566778899aabbcc619aa660dccf5beefa954df9962ba884d7f59eb39dc9df4d555401a3d6d4a83addf398c50a64acb48baca24aa7508ec15d4de4db7679987347b88feea6e11a6d",
+      "wire_len": 77
+    },
+    {
+      "name": "en_long",
+      "dict": "meshtastic",
+      "text": "Status report: all nodes online, battery level 80 percent, signal good, position unchanged since the last message. Team at the north gate, all safe, moving to camp before dark. Next check in one hour over the satellite channel. Bridge relay is up, mesh network quiet, no errors.",
+      "key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "nonce_hex": "ffeeddccbbaa998877665544",
+      "wire_hex": "01ffeeddccbbaa998877665544df15a1f13efd98f929fe014530efaa13e7e7946e2b433537a635e9bc60983d14d660afdcbb9a6b3b5ddc7c3d1625f24c57c3885d02f4be3864a41452579fecad2442c48aba088ebd2ec9e1307652abcd4c046e4abd607f69c8d51da80b558137fe68335f9003864369b9ff5356acd6f708cde80e1d168d95deefddb28e0c5cabdb9118820b20bb59536de0d88f68e8d163e3a6b1769996b19bbd64ee4eb0",
+      "wire_len": 171
+    },
+    {
+      "name": "default_dict",
+      "dict": "default",
+      "text": "hello there, the satellite is in range",
+      "key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "nonce_hex": "010101010101010101010101",
+      "wire_hex": "010101010101010101010101017647543707a56e73d67847991a02721a42df1cd9f4a380ddd35b06cc3c91ff5477413466099032f0ee62fe505bc10675",
+      "wire_len": 61
+    }
+  ],
+  "envelope_reject": [
+    {
+      "name": "wrong_key",
+      "dict": "meshtastic",
+      "key_hex": "1f1e1d1c1b1a191817161514131211100f0e0d0c0b0a09080706050403020100",
+      "bytes_hex": "01a1a2a3a4a5a6a7a8a9aaabac27bcc83cfcf8362d863d7a49e84df47578021690d6e6bd2b72a2",
+      "why": "another key"
+    },
+    {
+      "name": "tag_modified",
+      "dict": "meshtastic",
+      "key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "bytes_hex": "01a1a2a3a4a5a6a7a8a9aaabac27bcc83cfcf8362d863d7a49e84df47578021690d6e6bd2b72a3",
+      "why": "last tag byte flipped"
+    },
+    {
+      "name": "ciphertext_modified",
+      "dict": "meshtastic",
+      "key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "bytes_hex": "01a1a2a3a4a5a6a7a8a9aaabac26bcc83cfcf8362d863d7a49e84df47578021690d6e6bd2b72a2",
+      "why": "first ciphertext byte flipped"
+    },
+    {
+      "name": "nonce_modified",
+      "dict": "meshtastic",
+      "key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "bytes_hex": "01a0a2a3a4a5a6a7a8a9aaabac27bcc83cfcf8362d863d7a49e84df47578021690d6e6bd2b72a2",
+      "why": "first nonce byte flipped"
+    },
+    {
+      "name": "truncated_one_byte",
+      "dict": "meshtastic",
+      "key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "bytes_hex": "01a1a2a3a4a5a6a7a8a9aaabac27bcc83cfcf8362d863d7a49e84df47578021690d6e6bd2b72",
+      "why": "last byte cut"
+    },
+    {
+      "name": "nonce_only",
+      "dict": "meshtastic",
+      "key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "bytes_hex": "01a1a2a3a4a5a6a7a8a9aaabac",
+      "why": "version byte and nonce, nothing else"
+    },
+    {
+      "name": "version_only",
+      "dict": "meshtastic",
+      "key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "bytes_hex": "01",
+      "why": "version byte only"
+    }
+  ]
+}
