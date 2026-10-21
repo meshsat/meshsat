@@ -2522,6 +2522,7 @@ func main() {
 				reporterForChains.RepublishBirth()
 			}
 		})
+		go watchSatModems(ctx, 30*time.Second, func() string { return satModemsKey(gwMgr) }, reporterForChains.RepublishBirth)
 
 		// hub_msg, the Hub app route (HeMB-NG stage 2, MESHSAT-1584): a delivery intent to a
 		// contact's "bridge:<id>" goes through the Hub on hub_0, and what the Hub delivers here

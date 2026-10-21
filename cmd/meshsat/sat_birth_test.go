@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"meshsat/internal/hubreporter"
 )
@@ -33,5 +36,37 @@ func TestSatBirthEntryDeclaresASealingChain(t *testing.T) {
 		if strings.Contains(string(b), `"egress_sealed"`) != c.sealed {
 			t.Fatalf("chain %q: birth JSON %s", c.chain, b)
 		}
+	}
+}
+
+// The birth is published again whenever the satellite modems change, the
+// IMEI arriving after the connect included, and not on every tick.
+func TestWatchSatModemsRepublishesOnChange(t *testing.T) {
+	seq := []string{"", "", "iridium_imt=", "iridium_imt=300434060000001", "iridium_imt=300434060000001", "", "iridium_imt=300434060000001"}
+	var mu sync.Mutex
+	i, published := 0, 0
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		watchSatModems(ctx, time.Millisecond, func() string {
+			mu.Lock()
+			defer mu.Unlock()
+			if i == len(seq) {
+				cancel()
+				return seq[len(seq)-1]
+			}
+			i++
+			return seq[i-1]
+		}, func() { mu.Lock(); published++; mu.Unlock() })
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("watcher did not stop")
+	}
+	// "" -> "iridium_imt=" -> the IMEI -> "" -> the IMEI: four changes.
+	if published != 4 {
+		t.Fatalf("published %d times, want 4", published)
 	}
 }
