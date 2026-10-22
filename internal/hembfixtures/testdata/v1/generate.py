@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Generate the HeMB-NG stage 2 fixture release v1 (MESHSAT-1584).
 
-Every file in this folder except README.md and this script is written by it,
-byte for byte the same on every run: the ES256 signatures use RFC 6979
-deterministic signing. Each case's expected value is written by hand below and
+Every file in this folder except README.md, directory_v2_rest.json and this
+script is written by it, byte for byte the same on every run: the ES256
+signatures use RFC 6979 deterministic signing. directory_v2_rest.json (v1.2) is
+written by the Hub's own code (internal/directory/fixtures_rest_test.go,
+MESHSAT_WRITE_FIXTURES=1); this script lists it in SHA256SUMS as it is. Each case's expected value is written by hand below and
 checked against a small reference implementation of the contract before
 anything is written; a mismatch stops the run.
 
@@ -15,7 +17,9 @@ deterministic signatures). The contract is "HeMB-NG stage 2 and stage 3: the
 cross-repo contract", r4 (18 Oct 2026); the decision numbers below (C1d, C3,
 C6, ...) are its. v1.1 corrects v1.0 after the review of 18 Oct 2026 19:34
 (C10-R1, FIX-R1): the receivers recompute the digest from the delivered
-fields, and the SOS frames carry the run's start in milliseconds.
+fields, and the SOS frames carry the run's start in milliseconds. v1.2 adds
+directory_v2_rest.json after the review of 22 Oct 2026 (r40, decision 1) and
+changes nothing else this script writes.
 """
 
 import base64
@@ -31,7 +35,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-RELEASE = "fixtures-v1.1"
+RELEASE = "fixtures-v1.2"
 NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "https://meshsat.net/ns/hemb-ng/v1")
 SKEW_MS = 120_000
 KEEP_AFTER_EXPIRY_MS = 24 * 3600_000
@@ -748,7 +752,7 @@ def build():
         "sms_parts.tsv": parts,
         "RELEASE": (RELEASE + "\n").encode(),
     }
-    for name in ("README.md", "generate.py"):
+    for name in ("README.md", "generate.py", "directory_v2_rest.json"):
         with open(os.path.join(HERE, name), "rb") as f:
             files[name] = f.read()
     sums = "".join("%s  %s\n" % (hashlib.sha256(files[n]).hexdigest(), n) for n in sorted(files))
@@ -767,7 +771,7 @@ def main():
         print("ok: %d files, SHA256SUMS %s" % (len(files), hashlib.sha256(files["SHA256SUMS"]).hexdigest()))
         return
     for name, data in files.items():
-        if name not in ("README.md", "generate.py"):
+        if name not in ("README.md", "generate.py", "directory_v2_rest.json"):
             with open(os.path.join(HERE, name), "wb") as f:
                 f.write(data)
     print("wrote %d files, SHA256SUMS %s" % (len(files), hashlib.sha256(files["SHA256SUMS"]).hexdigest()))
