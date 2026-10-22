@@ -190,7 +190,7 @@ func (s *Server) handleRotateKey(w http.ResponseWriter, r *http.Request) {
 
 // handleListKeys returns all key metadata (no raw key material).
 // @Summary List managed keys
-// @Description Returns metadata for all channel encryption keys (keys are redacted), each with the label that says where it came from: none when set here, hub-rotated-v<n> from the Hub, "Bridge <type> (<hash>)" from a bundle
+// @Description Returns metadata for all channel encryption keys (keys are redacted), each with the label that says where it came from: none when set here, hub-rotated-v<n> from the Hub, "Bridge <type> (<hash>)" from a bundle, and its key_check (first 4 bytes of SHA-256 of the key, hex), which MeshSat Android shows for its satellite key so both ends can be compared without showing the key
 // @Tags keys
 // @Success 200 {array} keystore.KeyMeta
 // @Router /api/keys [get]

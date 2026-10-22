@@ -3,6 +3,7 @@ package keystore
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"errors"
@@ -27,6 +28,7 @@ type KeyMeta struct {
 	KeyVersion  int     `json:"key_version"`
 	Status      string  `json:"status"` // active, retired, revoked
 	KeyPreview  string  `json:"key_preview"`
+	KeyCheck    string  `json:"key_check,omitempty"` // first 4 bytes of SHA-256 of the key, hex: the check MeshSat Android shows
 	ExpiresAt   *string `json:"expires_at,omitempty"`
 	CreatedAt   string  `json:"created_at"`
 	Label       string  `json:"label,omitempty"` // hub-rotated-v<n>, "Bridge <type> (<hash>)", or what a person gave
@@ -264,9 +266,10 @@ func (ks *KeyStore) ListKeys() ([]KeyMeta, error) {
 	metas := make([]KeyMeta, len(bundles))
 	for i, kb := range bundles {
 		// Unwrap to get preview (first 4 bytes hex)
-		preview := "****"
+		preview, check := "****", ""
 		if raw, err := unwrapKey(ks.masterKey, kb.EncryptedKey); err == nil && len(raw) >= 4 {
 			preview = hex.EncodeToString(raw[:4]) + "..."
+			check = KeyCheck(raw)
 		}
 		metas[i] = KeyMeta{
 			ID:          kb.ID,
@@ -275,12 +278,22 @@ func (ks *KeyStore) ListKeys() ([]KeyMeta, error) {
 			KeyVersion:  kb.KeyVersion,
 			Status:      kb.Status,
 			KeyPreview:  preview,
+			KeyCheck:    check,
 			ExpiresAt:   kb.ExpiresAt,
 			CreatedAt:   kb.CreatedAt,
 			Label:       kb.Label,
 		}
 	}
 	return metas, nil
+}
+
+// KeyCheck is a key's check value: the first 4 bytes of SHA-256 over the raw
+// key, in hex. The same check on a phone (MeshSat Android's satellite chain
+// setting) and on this key list means both ends hold the same key, and it
+// shows nothing of the key itself. [MESHSAT-1623]
+func KeyCheck(raw []byte) string {
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:4])
 }
 
 // CreateBundle generates a signed QR-ready key bundle for the specified channels.
