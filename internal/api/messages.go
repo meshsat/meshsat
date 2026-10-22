@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -18,14 +19,15 @@ import (
 // @Description Returns paginated mesh messages with optional filters
 // @Tags messages
 // @Param node query string false "Filter by node ID (!hex format)"
-// @Param since query string false "Start time (RFC3339)"
-// @Param until query string false "End time (RFC3339)"
+// @Param since query string false "Start time: RFC 3339 (any offset, fractional seconds allowed), YYYY-MM-DD HH:MM:SS (UTC) or YYYY-MM-DD"
+// @Param until query string false "End time, the same forms as since"
 // @Param portnum query int false "Filter by port number"
 // @Param transport query string false "Filter by transport (radio, mqtt, satellite)"
 // @Param direction query string false "Filter by direction (rx, tx)"
 // @Param limit query int false "Results per page (default 50, max 1000)"
 // @Param offset query int false "Offset for pagination"
 // @Success 200 {object} map[string]interface{} "messages, total, limit, offset"
+// @Failure 400 {object} map[string]string "since or until is not a time"
 // @Router /api/messages [get]
 func (s *Server) handleGetMessages(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
@@ -48,6 +50,10 @@ func (s *Server) handleGetMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	msgs, total, err := s.db.GetMessages(filter)
+	if errors.Is(err, database.ErrBadTimeBound) {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Failed to query messages: "+err.Error())
 		return

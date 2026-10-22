@@ -2,6 +2,7 @@ package database
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -71,8 +72,8 @@ type GatewayConfig struct {
 // MessageFilter controls query parameters for message listing.
 type MessageFilter struct {
 	Node      string
-	Since     string // RFC3339
-	Until     string // RFC3339
+	Since     string // RFC 3339, "YYYY-MM-DD HH:MM:SS" (UTC) or "YYYY-MM-DD"
+	Until     string // as Since
 	PortNum   *int
 	Transport string
 	Direction string
@@ -123,6 +124,24 @@ func (db *DB) InsertPosition(p *Position) error {
 }
 
 // GetMessages returns paginated messages matching the filter.
+// ErrBadTimeBound is a since or until the message filter cannot read as a time.
+var ErrBadTimeBound = errors.New("not an RFC 3339 time, YYYY-MM-DD HH:MM:SS (UTC) or YYYY-MM-DD")
+
+// storedTimeBound turns a since or until into the form messages.created_at is stored in
+// (CURRENT_TIMESTAMP: "YYYY-MM-DD HH:MM:SS", UTC, whole seconds), so the string comparison the
+// created_at index serves compares like with like. An RFC 3339 value has a "T" where the stored
+// form has a space and sorts after every row of its own day, so ?since=<RFC 3339> found nothing
+// and the topology view's message links were always empty. [MESHSAT-1640]
+func storedTimeBound(s string) (string, error) {
+	v := strings.TrimSpace(s)
+	for _, layout := range []string{time.RFC3339Nano, "2006-01-02T15:04:05", "2006-01-02 15:04:05", "2006-01-02"} {
+		if t, err := time.Parse(layout, v); err == nil {
+			return t.UTC().Format("2006-01-02 15:04:05"), nil
+		}
+	}
+	return "", fmt.Errorf("%w: %q", ErrBadTimeBound, s)
+}
+
 func (db *DB) GetMessages(f MessageFilter) ([]Message, int, error) {
 	var where []string
 	var args []interface{}
@@ -132,12 +151,20 @@ func (db *DB) GetMessages(f MessageFilter) ([]Message, int, error) {
 		args = append(args, f.Node)
 	}
 	if f.Since != "" {
+		b, err := storedTimeBound(f.Since)
+		if err != nil {
+			return nil, 0, fmt.Errorf("since: %w", err)
+		}
 		where = append(where, "created_at >= ?")
-		args = append(args, f.Since)
+		args = append(args, b)
 	}
 	if f.Until != "" {
+		b, err := storedTimeBound(f.Until)
+		if err != nil {
+			return nil, 0, fmt.Errorf("until: %w", err)
+		}
 		where = append(where, "created_at <= ?")
-		args = append(args, f.Until)
+		args = append(args, b)
 	}
 	if f.PortNum != nil {
 		where = append(where, "portnum = ?")
