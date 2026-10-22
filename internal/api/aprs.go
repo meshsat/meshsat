@@ -96,8 +96,9 @@ func aprsEncryptionState(s *Server, ifaceID string) map[string]interface{} {
 	out["summary"] = strings.Join(summary, " → ")
 	out["key_ref"] = keyRef
 
-	// Fingerprint = first 8 hex chars of SHA-256(raw key). Mirrors the
-	// `key_preview` convention used by /api/keys. Only produced if a
+	// Fingerprint = the first 8 bytes of SHA-256(raw key), in hex; the key
+	// list's key_check is the first 4 bytes of the same hash. Neither gives
+	// any byte of the key itself. [MESHSAT-1639] Only produced if a
 	// keystore is available AND the key_ref resolves — otherwise the
 	// UI shows "no key" without leaking a misleading value.
 	if s.keyStore != nil && keyRef != "" {

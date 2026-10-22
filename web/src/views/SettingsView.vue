@@ -263,7 +263,7 @@ async function refreshAPRSKey() {
     const data = await api.get('/keys')
     const keys = data?.keys || []
     const k = keys.find(x => x.channel_type === 'aprs' && x.address === 'shared')
-    aprsKeyFingerprint.value = k?.key_preview || ''
+    aprsKeyFingerprint.value = k?.key_check ? `check ${k.key_check}` : ''
   } catch { aprsKeyFingerprint.value = '' }
 }
 
@@ -367,7 +367,7 @@ async function refreshBondKey() {
   try {
     const data = await api.get('/keys')
     const k = (data?.keys || []).find(x => x.channel_type === 'bond' && x.address === selectedBondId.value)
-    bondKeyFingerprint.value = k?.key_preview || ''
+    bondKeyFingerprint.value = k?.key_check ? `check ${k.key_check}` : ''
   } catch { bondKeyFingerprint.value = '' }
 }
 

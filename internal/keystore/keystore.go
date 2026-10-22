@@ -22,16 +22,18 @@ import (
 
 // KeyMeta is the metadata for a stored key (no raw key material).
 type KeyMeta struct {
-	ID          int64   `json:"id"`
-	ChannelType string  `json:"channel_type"`
-	Address     string  `json:"address"`
-	KeyVersion  int     `json:"key_version"`
-	Status      string  `json:"status"` // active, retired, revoked
-	KeyPreview  string  `json:"key_preview"`
-	KeyCheck    string  `json:"key_check,omitempty"` // first 4 bytes of SHA-256 of the key, hex: the check MeshSat Android shows
-	ExpiresAt   *string `json:"expires_at,omitempty"`
-	CreatedAt   string  `json:"created_at"`
-	Label       string  `json:"label,omitempty"` // hub-rotated-v<n>, "Bridge <type> (<hash>)", or what a person gave
+	ID          int64  `json:"id"`
+	ChannelType string `json:"channel_type"`
+	Address     string `json:"address"`
+	KeyVersion  int    `json:"key_version"`
+	Status      string `json:"status"` // active, retired, revoked
+	// KeyCheck identifies the key without giving any of it: the first 4 bytes of SHA-256 over
+	// the raw key, hex, the check MeshSat Android shows. It replaced key_preview, which was the
+	// key's own first 4 bytes on an unauthenticated API. [MESHSAT-1639]
+	KeyCheck  string  `json:"key_check,omitempty"`
+	ExpiresAt *string `json:"expires_at,omitempty"`
+	CreatedAt string  `json:"created_at"`
+	Label     string  `json:"label,omitempty"` // hub-rotated-v<n>, "Bridge <type> (<hash>)", or what a person gave
 }
 
 // KeyStore manages envelope-encrypted channel keys with master key wrapping.
@@ -265,10 +267,9 @@ func (ks *KeyStore) ListKeys() ([]KeyMeta, error) {
 
 	metas := make([]KeyMeta, len(bundles))
 	for i, kb := range bundles {
-		// Unwrap to get preview (first 4 bytes hex)
-		preview, check := "****", ""
-		if raw, err := unwrapKey(ks.masterKey, kb.EncryptedKey); err == nil && len(raw) >= 4 {
-			preview = hex.EncodeToString(raw[:4]) + "..."
+		// Unwrapped only to compute the check; nothing of the key itself is listed. [MESHSAT-1639]
+		check := ""
+		if raw, err := unwrapKey(ks.masterKey, kb.EncryptedKey); err == nil && len(raw) > 0 {
 			check = KeyCheck(raw)
 		}
 		metas[i] = KeyMeta{
@@ -277,7 +278,6 @@ func (ks *KeyStore) ListKeys() ([]KeyMeta, error) {
 			Address:     kb.Address,
 			KeyVersion:  kb.KeyVersion,
 			Status:      kb.Status,
-			KeyPreview:  preview,
 			KeyCheck:    check,
 			ExpiresAt:   kb.ExpiresAt,
 			CreatedAt:   kb.CreatedAt,
