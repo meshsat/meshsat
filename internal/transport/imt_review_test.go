@@ -3,6 +3,8 @@ package transport
 import (
 	"context"
 	"errors"
+	"runtime"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -198,6 +200,9 @@ func TestIMT_CancelledWhileQueuedDoesNotSubmit(t *testing.T) {
 				t.Fatal(err)
 			}
 			ctx, cancel := context.WithCancel(context.Background())
+			// The cancel lands after the permit is handed over and before the
+			// caller acts on it, whichever CPU the caller runs on. [MESHSAT-1645]
+			imtMOAcquiredHook = cancel
 			done := make(chan error, 1)
 			go func() {
 				if legacy {
@@ -208,17 +213,39 @@ func TestIMT_CancelledWhileQueuedDoesNotSubmit(t *testing.T) {
 				_, err := tr.SubmitMO(ctx, []byte("queued"))
 				done <- err
 			}()
-			time.Sleep(5 * time.Millisecond) // parked on the permit
+			waitParkedIn(t, ").acquireMO(") // parked on the permit, not merely started
 			hold()
-			cancel()
 			if err := <-done; !errors.Is(err, context.Canceled) {
 				t.Fatalf("legacy=%v call %d: %v", legacy, i, err)
 			}
+			imtMOAcquiredHook = nil
+			cancel()
 		}
 	}
 	if n := len(f.cmds("send_mo")); n != 0 {
 		t.Fatalf("%d MOs started for callers cancelled while queued", n)
 	}
+}
+
+// waitParkedIn returns once a goroutine is blocked in a select inside fn, read
+// from the runtime's goroutine dump. A 5 ms sleep stood in for this and lost
+// on a slow scheduler: a caller not yet parked could arrive between the
+// permit's release and the cancel, find the permit free and the context
+// live, and rightly send. Parked in the select, the caller is handed the
+// permit as it frees (a blocked sender on a buffered channel is), so the
+// cancel always lands before it runs. [MESHSAT-1645]
+func waitParkedIn(t *testing.T, fn string) {
+	t.Helper()
+	buf := make([]byte, 1<<20)
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(200 * time.Microsecond) {
+		n := runtime.Stack(buf, true)
+		for _, g := range strings.Split(string(buf[:n]), "\n\n") {
+			if strings.Contains(g, " [select") && strings.Contains(g, fn) {
+				return
+			}
+		}
+	}
+	t.Fatalf("no goroutine parked in %s", fn)
 }
 
 func opOf(cmd map[string]any) string { v, _ := cmd["op"].(string); return v }

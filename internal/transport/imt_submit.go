@@ -166,12 +166,23 @@ func (t *DirectIMTTransport) acquireMO(ctx context.Context) (func(), error) {
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
+	if imtMOAcquiredHook != nil {
+		imtMOAcquiredHook()
+	}
 	if err := ctx.Err(); err != nil {
 		<-t.moSem
 		return nil, err
 	}
 	return func() { <-t.moSem }, nil
 }
+
+// imtMOAcquiredHook, when set by a test, runs right after a caller is handed
+// the modem and before it looks at its context again: a cancel made there is
+// the one the review's IMT-R3 case needs, decided after the handover and
+// before the caller acts on it. A test cannot order that from outside, since
+// the caller may run on another CPU as soon as it is handed the permit.
+// [MESHSAT-1645]
+var imtMOAcquiredHook func()
 
 // endMO ends the MO with the modem, for the cancel's snapshot.
 func (t *DirectIMTTransport) endMO() {
