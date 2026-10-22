@@ -43,6 +43,26 @@ func TestPinDirectoryKey(t *testing.T) {
 		t.Fatalf("stored %q, pinned %d", v, pinnedCalls)
 	}
 
+	// A key from a provisioning bundle lands while the fetch is out: the
+	// fetched one is not stored over it, and nothing is announced twice.
+	// [MESHSAT-1642]
+	if err := db.SetSystemConfig(directory.RotationKeyConfig, ""); err != nil {
+		t.Fatal(err)
+	}
+	fetchDirectoryKey = func(context.Context, string) ([]byte, error) {
+		if err := db.SetSystemConfig(directory.RotationKeyConfig, "b0b0"); err != nil {
+			t.Fatal(err)
+		}
+		return []byte{0x30, 0x09}, nil
+	}
+	pinDirectoryKey(context.Background(), db, "https://hub.example.invalid", "", pinned)
+	if v, _ := db.GetSystemConfig(directory.RotationKeyConfig); v != "b0b0" || pinnedCalls != 1 {
+		t.Fatalf("the bundle's key: stored %q, pinned %d", v, pinnedCalls)
+	}
+	if err := db.SetSystemConfig(directory.RotationKeyConfig, "3001"); err != nil {
+		t.Fatal(err)
+	}
+
 	// A key is pinned: the Hub is not asked, whatever it would answer.
 	fetches = 0
 	fetchDirectoryKey = func(context.Context, string) ([]byte, error) { fetches++; return []byte{0x30, 0x02}, nil }

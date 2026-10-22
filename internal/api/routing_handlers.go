@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -11,7 +12,9 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/rs/zerolog/log"
 
+	"meshsat/internal/directory"
 	"meshsat/internal/hubreporter"
 	"meshsat/internal/routing"
 )
@@ -609,6 +612,10 @@ type hubConnectionUpdate struct {
 	HealthInterval *int    `json:"health_interval"`
 	APIURL         *string `json:"api_url"`
 	TopicPrefix    *string `json:"mqtt_topic_prefix"`
+	// DirSignPub is the bundle's directory signing key (PKIX DER, base64).
+	// It is pinned when this Bridge trusts none yet, never over another one,
+	// and is not kept in these settings. [MESHSAT-1642]
+	DirSignPub *string `json:"dir_sign_pub"`
 }
 
 // hubEnabled reads the stored switch: absent is on.
@@ -652,7 +659,7 @@ func (s *Server) hubLinkState() string {
 
 // handleSetHubConfig saves Hub MQTT credentials. Takes effect on next restart.
 // @Summary Set Hub connection config
-// @Description Fields left out keep what is stored; url, bridge_id, username, password and the client certificate are also kept when sent empty. tls_ca_pem sent empty clears the CA. mqtt_topic_prefix is the bundle's tenant topic root ("meshsat" or "meshsat/<tenant>"; empty = platform tenant); any other value is refused. Takes effect at the Bridge's next start.
+// @Description Fields left out keep what is stored; url, bridge_id, username, password and the client certificate are also kept when sent empty. tls_ca_pem sent empty clears the CA. mqtt_topic_prefix is the bundle's tenant topic root ("meshsat" or "meshsat/<tenant>"; empty = platform tenant); any other value is refused. dir_sign_pub is the bundle's directory signing key (ECDSA P-256 PKIX DER, base64): pinned at once when the Bridge trusts no directory key yet, so the HTTPS bootstrap never runs; a different key already pinned is kept and the warning says so; not stored in these settings. The rest takes effect at the Bridge's next start.
 // @Tags routing
 // @Accept json
 // @Produce json
@@ -675,6 +682,15 @@ func (s *Server) handleSetHubConfig(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
+	}
+	var bundleKey []byte
+	if req.DirSignPub != nil && strings.TrimSpace(*req.DirSignPub) != "" {
+		der, err := base64.StdEncoding.DecodeString(strings.TrimSpace(*req.DirSignPub))
+		if err != nil || hubreporter.CheckDirectoryKey(der) != nil {
+			writeError(w, http.StatusBadRequest, "dir_sign_pub must be the Hub's ECDSA P-256 directory key, PKIX DER in base64")
+			return
+		}
+		bundleKey = der
 	}
 
 	prev := s.loadHubConfig()
@@ -734,7 +750,42 @@ func (s *Server) handleSetHubConfig(w http.ResponseWriter, r *http.Request) {
 	resp.Password = ""
 	resp.TLSCertPEM, resp.TLSKeyPEM, resp.TLSCAPEM = "", "", ""
 	resp.Warning = "Hub connection config saved. Restart the bridge for changes to take effect."
+	if bundleKey != nil {
+		if note := s.pinBundleDirectoryKey(bundleKey); note != "" {
+			resp.Warning += " " + note
+		}
+	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// pinBundleDirectoryKey pins the directory key a provisioning bundle
+// carries when this Bridge trusts none yet. From then on the HTTPS
+// bootstrap never runs, and only a rotation record the key signed moves it
+// (r19 review answer 3). A different key already pinned is kept, and the
+// answer says so: a bundle is no signed record. [MESHSAT-1642]
+func (s *Server) pinBundleDirectoryKey(der []byte) string {
+	want := hex.EncodeToString(der)
+	stored, err := s.db.SetSystemConfigIfEmpty(directory.RotationKeyConfig, want)
+	if err != nil {
+		return "The directory key was not pinned: " + err.Error()
+	}
+	if stored {
+		log.Info().Str("key_id", hubreporter.KeyID(der)).Msg("directory: Hub directory key pinned from the provisioning bundle")
+		if s.hubReporter != nil {
+			s.hubReporter.RepublishBirth()
+		}
+		return ""
+	}
+	cur, _ := s.db.GetSystemConfig(directory.RotationKeyConfig)
+	if cur == want {
+		return ""
+	}
+	curID := cur
+	if curDER, err := hex.DecodeString(cur); err == nil {
+		curID = hubreporter.KeyID(curDER)
+	}
+	return fmt.Sprintf("The directory key in the bundle (%.12s) is not the one this Bridge trusts (%.12s) and was not pinned: "+
+		"a pinned key moves only by a rotation record it signed.", hubreporter.KeyID(der), curID)
 }
 
 // handleHubPing tests the Hub link: a QoS 1 message the broker acknowledges,

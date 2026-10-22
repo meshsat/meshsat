@@ -51,6 +51,13 @@ func p256Key(pkix []byte) (*ecdsa.PublicKey, error) {
 	return pub, nil
 }
 
+// CheckDirectoryKey says whether pkix is an ECDSA P-256 public key, as a
+// directory key must be (a provisioning bundle's dir_sign_pub). [MESHSAT-1642]
+func CheckDirectoryKey(pkix []byte) error {
+	_, err := p256Key(pkix)
+	return err
+}
+
 // OpenEnvelope verifies a v2 envelope under trusted (PKIX DER) and returns
 // its payload bytes. Nothing of the payload is read before the signature
 // verifies.

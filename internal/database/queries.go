@@ -983,6 +983,22 @@ func (db *DB) SetSystemConfig(key, value string) error {
 	return err
 }
 
+// SetSystemConfigIfEmpty stores value under key only while the key is
+// absent or empty, in one statement, and says whether it did: of two
+// writers racing for an empty key, one wins and the other learns it lost.
+// [MESHSAT-1642]
+func (db *DB) SetSystemConfigIfEmpty(key, value string) (bool, error) {
+	res, err := db.Exec(
+		`INSERT INTO system_config (key, value, updated_at) VALUES (?, ?, datetime('now'))
+		 ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=datetime('now') WHERE system_config.value = ''`,
+		key, value)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
+
 // SetSystemConfigs upserts several key-value pairs in one transaction:
 // all of them or none. [MESHSAT-1584]
 func (db *DB) SetSystemConfigs(pairs ...[2]string) error {

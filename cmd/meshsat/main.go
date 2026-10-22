@@ -3528,7 +3528,9 @@ var fetchDirectoryKey = hubreporter.FetchDirectoryKey
 // pinDirectoryKey pins the Hub's directory signing key when none is: it
 // asks GET /api/relay/directory-key over HTTPS every 5 min until it has one,
 // then calls pinned. A pinned key is never fetched again nor replaced here,
-// and a failed fetch stores nothing. [MESHSAT-1584]
+// and a failed fetch stores nothing. A key pinned from a provisioning bundle
+// (PUT /api/routing/hub dir_sign_pub) meanwhile wins: the fetched one is
+// stored only into an empty pin. [MESHSAT-1584, MESHSAT-1642]
 func pinDirectoryKey(ctx context.Context, db *database.DB, hubAPIURL, mqttURL string, pinned func()) {
 	if hubAPIURL == "" {
 		hubAPIURL = relayclient.DeriveAPIURL(mqttURL)
@@ -3542,10 +3544,14 @@ func pinDirectoryKey(ctx context.Context, db *database.DB, hubAPIURL, mqttURL st
 		}
 		pkix, err := fetchDirectoryKey(ctx, hubAPIURL)
 		if err == nil {
-			if err := db.SetSystemConfig(directory.RotationKeyConfig, hex.EncodeToString(pkix)); err == nil {
+			stored, err := db.SetSystemConfigIfEmpty(directory.RotationKeyConfig, hex.EncodeToString(pkix))
+			if err == nil && stored {
 				log.Info().Str("hub", hubAPIURL).Str("key_id", hubreporter.KeyID(pkix)).Msg("directory: Hub directory key pinned")
 				pinned()
 				return
+			}
+			if err == nil {
+				return // pinned meanwhile, from a provisioning bundle
 			}
 		} else {
 			log.Warn().Err(err).Str("hub", hubAPIURL).Msg("directory: Hub directory key not fetched, asking again in 5 min")
