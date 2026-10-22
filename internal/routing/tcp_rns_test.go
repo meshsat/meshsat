@@ -505,17 +505,21 @@ func TestTCPRNSClientMTLS(t *testing.T) {
 			}
 
 			// Refusals: no certificate stored, a certificate from another CA, and
-			// a stored certificate that cannot be read.
+			// a stored certificate that cannot be read. The server's alert reads
+			// "certificate required" or "bad certificate" up to Go 1.24 and,
+			// under TLS 1.2, "handshake failure" from Go 1.25: either is the
+			// refusal. [MESHSAT-1648]
+			refused := []string{"certificate", "tls: handshake failure"}
 			for _, rc := range []struct {
 				name string
 				cert func() (*tls.Certificate, error)
-				want string
+				want []string
 			}{
-				{"no Hub certificate", func() (*tls.Certificate, error) { return nil, nil }, "certificate"},
-				{"no certificate function", nil, "certificate"},
-				{"certificate from another CA", func() (*tls.Certificate, error) { return &strangerCert, nil }, "certificate"},
+				{"no Hub certificate", func() (*tls.Certificate, error) { return nil, nil }, refused},
+				{"no certificate function", nil, refused},
+				{"certificate from another CA", func() (*tls.Certificate, error) { return &strangerCert, nil }, refused},
 				{"unreadable Hub certificate", func() (*tls.Certificate, error) { return nil, errors.New("tls: failed to find any PEM data") },
-					"client certificate: tls: failed to find any PEM data"},
+					[]string{"client certificate: tls: failed to find any PEM data"}},
 			} {
 				bad := NewTCPRNSClient("tcp_rns_0", TCPRNSConfig{Host: "127.0.0.1", Port: node.port(), TLS: true}, rc.cert, nil)
 				bad.rootCAs = ca.pool
@@ -523,8 +527,13 @@ func TestTCPRNSClientMTLS(t *testing.T) {
 					t.Fatal(err)
 				}
 				waitCond(t, rc.name+" in LastError", 5*time.Second, func() bool { return bad.LastError() != "" })
-				if le := bad.LastError(); !strings.Contains(le, rc.want) || bad.IsOnline() {
-					t.Errorf("%s: last error %q (want %q), online %v", rc.name, le, rc.want, bad.IsOnline())
+				le := bad.LastError()
+				matched := false
+				for _, w := range rc.want {
+					matched = matched || strings.Contains(le, w)
+				}
+				if !matched || bad.IsOnline() {
+					t.Errorf("%s: last error %q (want one of %q), online %v", rc.name, le, rc.want, bad.IsOnline())
 				} else {
 					t.Logf("%s: %s", rc.name, le)
 				}
