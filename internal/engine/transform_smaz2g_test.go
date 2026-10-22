@@ -191,8 +191,8 @@ func TestValidateTransformsSmaz2g(t *testing.T) {
 	if len(errs) != 0 {
 		t.Fatalf("binary bearer: %v", errs)
 	}
-	if !containsSubstring(warnings, "read only by a MeshSat Bridge") {
-		t.Fatalf("no warning that only a Bridge reads smaz2g: %v", warnings)
+	if !containsSubstring(warnings, "the Hub never decodes it") || !containsSubstring(warnings, "MeshSat Android from 2.22.3") {
+		t.Fatalf("no warning saying who reads smaz2g: %v", warnings)
 	}
 	if _, errs := ValidateTransforms(chain, false, 0); len(errs) == 0 {
 		t.Fatal("a text bearer took binary smaz2g output without base64")

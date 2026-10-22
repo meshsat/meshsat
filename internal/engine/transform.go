@@ -390,7 +390,10 @@ func ValidateTransforms(transformsJSON string, binaryCapable bool, maxPayload in
 		errors = append(errors, "text-only transport (SMS/MQTT/webhook) requires base64 as the final transform after encrypt/compress")
 	}
 	if hasSmaz2g {
-		warnings = append(warnings, "smaz2g is read only by a MeshSat Bridge's ingress chain: the Hub and the MeshSat apps do not decode it, so use it where the far end is a Bridge")
+		// MeshSat Android reads it from 2.22.3 on the satellite chain through a node's 9704;
+		// iOS has it in code only. The Hub relays the frame and never decodes it. [MESHSAT-1623]
+		warnings = append(warnings, "smaz2g is read by a MeshSat Bridge and by MeshSat Android from 2.22.3 on a node's 9704: "+
+			"the Hub never decodes it, it only relays the frame, so use it where the far end is a Bridge or a phone on a node's 9704")
 	}
 
 	// Estimate usable capacity on constrained channels.
