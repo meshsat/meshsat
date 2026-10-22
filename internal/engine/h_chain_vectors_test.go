@@ -44,8 +44,8 @@ type dictDump struct {
 
 type smaz2Vector struct {
 	Name, Dict, Text, TextHex, CompressedHex string
-	// DecompressedHex is what this Bridge's Decompress makes of CompressedHex. It is the
-	// text, except where the default table (lib-x smaz2) does not round trip: bytes 0x01-0x08.
+	// DecompressedHex is what this Bridge's Decompress makes of CompressedHex: the text, for
+	// every vector since the default table's compressor stopped losing bytes 0x01-0x08. [MESHSAT-1626]
 	DecompressedHex string
 }
 
@@ -167,7 +167,7 @@ func buildHChainVectors(t *testing.T) hChainVectors {
 			"rollback_egress":    `[{"type":"smaz2"},{"type":"encrypt","params":{"key_ref":"iridium:shared"}},{"type":"base64"}]`,
 			"legacy_envelope":    "the rollback chain as parallax's iridium_imt_0 runs it (22 Oct 2026): protocol version 0x01 || base64(12-byte nonce || AES-256-GCM ciphertext of smaz2 with the DEFAULT table || 16-byte tag); the smaz2 step names no dict",
 			"protocol_version":   "01",
-			"smaz2_decompressed": "decompressed_hex is what the Bridge's Decompress returns for compressed_hex; the default table (lib-x smaz2) does not round trip bytes 0x01-0x08 (control_bytes), the meshtastic table does",
+			"smaz2_decompressed": "decompressed_hex is what the Bridge's Decompress returns for compressed_hex; every vector round trips: with the default table a byte 0x01-0x08 is its own verbatim run (0x01, the byte), where lib-x wrote it as a literal the decoder reads as an escape (MESHSAT-1626)",
 		},
 		Dicts: map[string]dictDump{"meshtastic": {Words: words, Bigrams: bigrams}},
 	}
@@ -178,7 +178,7 @@ func buildHChainVectors(t *testing.T) hChainVectors {
 			if err != nil {
 				t.Fatalf("smaz2 %s (%s): %v", c.name, dict, err)
 			}
-			if !bytes.Equal(back, []byte(c.text)) && (dict != "default" || c.name != "control_bytes") {
+			if !bytes.Equal(back, []byte(c.text)) {
 				t.Fatalf("smaz2 %s (%s) does not round trip", c.name, dict)
 			}
 			v.Smaz2 = append(v.Smaz2, smaz2Vector{Name: c.name, Dict: dict, Text: c.text, TextHex: hex.EncodeToString([]byte(c.text)), CompressedHex: hex.EncodeToString(z), DecompressedHex: hex.EncodeToString(back)})

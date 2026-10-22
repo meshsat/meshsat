@@ -10,7 +10,7 @@
     "protocol_version": "01",
     "rejects": "every smaz2g_reject frame and envelope_reject wire must fail without a crash and without showing text",
     "rollback_egress": "[{\"type\":\"smaz2\"},{\"type\":\"encrypt\",\"params\":{\"key_ref\":\"iridium:shared\"}},{\"type\":\"base64\"}]",
-    "smaz2_decompressed": "decompressed_hex is what the Bridge's Decompress returns for compressed_hex; the default table (lib-x smaz2) does not round trip bytes 0x01-0x08 (control_bytes), the meshtastic table does",
+    "smaz2_decompressed": "decompressed_hex is what the Bridge's Decompress returns for compressed_hex; every vector round trips: with the default table a byte 0x01-0x08 is its own verbatim run (0x01, the byte), where lib-x wrote it as a literal the decoder reads as an escape (MESHSAT-1626)",
     "smaz2g": "mode byte 0x00 = the text's UTF-8 bytes as they are, 0x01 = its SMAZ2, taken only when strictly shorter (a tie stays raw)",
     "wire_len": "30 + min(n, z) for n UTF-8 bytes and SMAZ2 output z"
   },
@@ -375,8 +375,8 @@
       "text_hex": "636166c3a9206e61c3af7665206661c3a76164652c204772c3b6c39f652c20c3b1616e64c3ba"
     },
     {
-      "compressed_hex": "0161010162020163030164040165050166060167070168080169",
-      "decompressed_hex": "6101620163016404650166060167746869732068207468697369",
+      "compressed_hex": "01610101016201020163010301640104016501050166010601670107016801080169",
+      "decompressed_hex": "6101620263036404650566066707680869",
       "dict": "default",
       "name": "control_bytes",
       "text": "a\u0001b\u0002c\u0003d\u0004e\u0005f\u0006g\u0007h\bi",

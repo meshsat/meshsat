@@ -21,8 +21,37 @@ func Compress(data []byte, dict Dictionary) []byte {
 	case DictMeshtastic:
 		return compressMeshtastic(data)
 	default:
+		return compressDefault(data)
+	}
+}
+
+// compressDefault is lib-x smaz2 with one fix: a byte 0x01-0x08 goes out as
+// its own verbatim run (0x01 then the byte). lib-x wrote it as a literal,
+// which every decoder, its own included, reads as an escape (1-5 a verbatim
+// count, 6-8 a word), so such text came back as other bytes. Compressing the
+// text around each such byte with lib-x is exactly the fixed compressor: no
+// word or bigram contains one, and lib-x ends its verbatim run there. Text
+// without them compresses byte for byte as before, which receivers that
+// check a payload by compressing its text again rely on. [MESHSAT-1626]
+func compressDefault(data []byte) []byte {
+	var out []byte
+	start := 0
+	for i, b := range data {
+		if b >= 0x01 && b <= 0x08 {
+			if start < i {
+				out = append(out, smaz2.CompressBytes(data[start:i])...)
+			}
+			out = append(out, 0x01, b)
+			start = i + 1
+		}
+	}
+	if start == 0 {
 		return smaz2.CompressBytes(data)
 	}
+	if start < len(data) {
+		out = append(out, smaz2.CompressBytes(data[start:])...)
+	}
+	return out
 }
 
 // Decompress decompresses SMAZ2 data with the specified dictionary.
