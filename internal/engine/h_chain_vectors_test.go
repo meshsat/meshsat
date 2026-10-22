@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"os"
@@ -32,6 +33,8 @@ type hChainVectors struct {
 	Smaz2gBad   []rejectVector      `json:"smaz2g_reject"`
 	Envelopes   []envelopeVector    `json:"envelopes"`
 	EnvelopeBad []rejectVector      `json:"envelope_reject"`
+	Legacy      []envelopeVector    `json:"legacy_envelopes"`
+	LegacyBad   []rejectVector      `json:"legacy_reject"`
 }
 
 type dictDump struct {
@@ -89,6 +92,12 @@ func smaz2gChain(dict string) string {
 		return `[{"type":"smaz2g","params":{"dict":"meshtastic"}}]`
 	}
 	return `[{"type":"smaz2g"}]`
+}
+
+// legacyChain is the kits' chain before the H chain, the agreed rollback: the
+// same steps as parallax's iridium_imt_0, with the key itself for its key_ref.
+func legacyChain(key string) string {
+	return `[{"type":"smaz2"},{"type":"encrypt","params":{"key":"` + key + `"}},{"type":"base64"}]`
 }
 
 func hChain(dict, key string) string {
@@ -155,7 +164,8 @@ func buildHChainVectors(t *testing.T) hChainVectors {
 			"wire_len":           "30 + min(n, z) for n UTF-8 bytes and SMAZ2 output z",
 			"rejects":            "every smaz2g_reject frame and envelope_reject wire must fail without a crash and without showing text",
 			"h_chain_egress":     `[{"type":"smaz2g","params":{"dict":"meshtastic"}},{"type":"encrypt","params":{"key_ref":"..."}}]`,
-			"rollback_egress":    `[{"type":"smaz2","params":{"dict":"meshtastic"}},{"type":"encrypt"},{"type":"base64"}]`,
+			"rollback_egress":    `[{"type":"smaz2"},{"type":"encrypt","params":{"key_ref":"iridium:shared"}},{"type":"base64"}]`,
+			"legacy_envelope":    "the rollback chain as parallax's iridium_imt_0 runs it (22 Oct 2026): protocol version 0x01 || base64(12-byte nonce || AES-256-GCM ciphertext of smaz2 with the DEFAULT table || 16-byte tag); the smaz2 step names no dict",
 			"protocol_version":   "01",
 			"smaz2_decompressed": "decompressed_hex is what the Bridge's Decompress returns for compressed_hex; the default table (lib-x smaz2) does not round trip bytes 0x01-0x08 (control_bytes), the meshtastic table does",
 		},
@@ -266,6 +276,57 @@ func buildHChainVectors(t *testing.T) hChainVectors {
 			t.Fatalf("envelope reject %s: the Bridge read it", r.name)
 		}
 		v.EnvelopeBad = append(v.EnvelopeBad, rejectVector{Name: r.name, Dict: "meshtastic", Key: r.key, Bytes: hex.EncodeToString(r.wire), Why: r.why})
+	}
+	// The rollback chain, byte for byte: what parallax sends and reads today.
+	for _, e := range []struct{ name, text, nonce string }{
+		{"empty", "", "000000000000000000000002"},
+		{"en_sentence", "hello there, the satellite is in range", "a1a2a3a4a5a6a7a8a9aaabac"},
+		{"en_nonce_starts_01", "SOS need medical assistance", "0102030405060708090a0b0c"},
+		{"el_sentence", "Είμαστε στο βόρειο φυλάκιο, όλοι καλά, κινούμαστε προς το στρατόπεδο", "0f0e0d0c0b0a090807060504"},
+		{"mixed", "Node 7: θέση OK, battery 80%, όλα καλά", "deadbeefcafebabe00112233"},
+		{"en_long", hChainTexts[6].text, "ffeeddccbbaa998877665544"},
+	} {
+		sealed := hChainSeal(t, compress.Compress([]byte(e.text), compress.DictDefault), key, e.nonce)
+		b64 := make([]byte, base64.StdEncoding.EncodedLen(len(sealed)))
+		base64.StdEncoding.Encode(b64, sealed)
+		wire := append([]byte{codec.ProtoVersion1}, b64...)
+		ver, body := codec.StripVersionByte(wire)
+		if ver != codec.ProtoVersion1 {
+			t.Fatalf("legacy %s: version %d", e.name, ver)
+		}
+		text, err := tp.ApplyIngress(body, legacyChain(key))
+		if err != nil || string(text) != e.text {
+			t.Fatalf("legacy %s: the Bridge read %q, %v", e.name, text, err)
+		}
+		live, err := tp.ApplyEgress([]byte(e.text), legacyChain(key))
+		if err != nil || len(live)+1 != len(wire) {
+			t.Fatalf("legacy %s: production egress %d bytes, %v", e.name, len(live)+1, err)
+		}
+		v.Legacy = append(v.Legacy, envelopeVector{Name: e.name, Dict: "default", Text: e.text, Key: key, Nonce: e.nonce, Wire: hex.EncodeToString(wire), WireLen: len(wire)})
+	}
+	lgood, _ := hex.DecodeString(v.Legacy[1].Wire)
+	lflip := append([]byte(nil), lgood...)
+	if lflip[20] == 'A' {
+		lflip[20] = 'B'
+	} else {
+		lflip[20] = 'A'
+	}
+	for _, r := range []struct {
+		name, key string
+		wire      []byte
+		why       string
+	}{
+		{"wrong_key", wrongKey, lgood, "another key"},
+		{"base64_char_changed", key, lflip, "one base64 character of the ciphertext changed"},
+		{"truncated_four_chars", key, lgood[:len(lgood)-4], "last 4 base64 characters cut (whole groups, so it still decodes)"},
+		{"not_base64", key, append([]byte{codec.ProtoVersion1}, []byte("not base64 at all!")...), "body is not base64"},
+		{"version_only", key, lgood[:1], "version byte only"},
+	} {
+		_, body := codec.StripVersionByte(r.wire)
+		if _, err := tp.ApplyIngress(body, legacyChain(r.key)); err == nil {
+			t.Fatalf("legacy reject %s: the Bridge read it", r.name)
+		}
+		v.LegacyBad = append(v.LegacyBad, rejectVector{Name: r.name, Dict: "default", Key: r.key, Bytes: hex.EncodeToString(r.wire), Why: r.why})
 	}
 	return v
 }

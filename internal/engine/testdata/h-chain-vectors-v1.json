@@ -6,9 +6,10 @@
     "dictionary": "a configured agreement (step param dict: meshtastic or default); nothing on the wire names it",
     "envelope": "protocol version 0x01 || 12-byte nonce || AES-256-GCM ciphertext of the smaz2g frame || 16-byte tag; no AAD, no base64",
     "h_chain_egress": "[{\"type\":\"smaz2g\",\"params\":{\"dict\":\"meshtastic\"}},{\"type\":\"encrypt\",\"params\":{\"key_ref\":\"...\"}}]",
+    "legacy_envelope": "the rollback chain as parallax's iridium_imt_0 runs it (22 Oct 2026): protocol version 0x01 || base64(12-byte nonce || AES-256-GCM ciphertext of smaz2 with the DEFAULT table || 16-byte tag); the smaz2 step names no dict",
     "protocol_version": "01",
     "rejects": "every smaz2g_reject frame and envelope_reject wire must fail without a crash and without showing text",
-    "rollback_egress": "[{\"type\":\"smaz2\",\"params\":{\"dict\":\"meshtastic\"}},{\"type\":\"encrypt\"},{\"type\":\"base64\"}]",
+    "rollback_egress": "[{\"type\":\"smaz2\"},{\"type\":\"encrypt\",\"params\":{\"key_ref\":\"iridium:shared\"}},{\"type\":\"base64\"}]",
     "smaz2_decompressed": "decompressed_hex is what the Bridge's Decompress returns for compressed_hex; the default table (lib-x smaz2) does not round trip bytes 0x01-0x08 (control_bytes), the meshtastic table does",
     "smaz2g": "mode byte 0x00 = the text's UTF-8 bytes as they are, 0x01 = its SMAZ2, taken only when strictly shorter (a tie stays raw)",
     "wire_len": "30 + min(n, z) for n UTF-8 bytes and SMAZ2 output z"
@@ -1032,6 +1033,99 @@
     {
       "name": "version_only",
       "dict": "meshtastic",
+      "key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "bytes_hex": "01",
+      "why": "version byte only"
+    }
+  ],
+  "legacy_envelopes": [
+    {
+      "name": "empty",
+      "dict": "default",
+      "text": "",
+      "key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "nonce_hex": "000000000000000000000002",
+      "wire_hex": "0141414141414141414141414141414143374e6d6d35534e4a385550314b324e6d4355344262513d3d",
+      "wire_len": 41
+    },
+    {
+      "name": "en_sentence",
+      "dict": "default",
+      "text": "hello there, the satellite is in range",
+      "key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "nonce_hex": "a1a2a3a4a5a6a7a8a9aaabac",
+      "wire_hex": "016f614b6a704b576d70366970717175736f6c3646414e52544b323269586a4e794d65494f2b744d454b4570583031576e597034583866775a416d4450533668317050366170517431514651716f58303d",
+      "wire_len": 81
+    },
+    {
+      "name": "en_nonce_starts_01",
+      "dict": "default",
+      "text": "SOS need medical assistance",
+      "key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "nonce_hex": "0102030405060708090a0b0c",
+      "wire_hex": "0141514944424155474277674a4367734d41626b56687379546b687237454745724d4c5641704d66734c5631484f6361346c7156733168504d4434476562673d3d",
+      "wire_len": 65
+    },
+    {
+      "name": "el_sentence",
+      "dict": "default",
+      "text": "Είμαστε στο βόρειο φυλάκιο, όλοι καλά, κινούμαστε προς το στρατόπεδο",
+      "key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "nonce_hex": "0f0e0d0c0b0a090807060504",
+      "wire_hex": "014477344e4441734b43516748426755456f66346b6b76515a7168496c626e37635056554e7a3978474771394d6c6e5771552f614f4d5944467461624c437733314c6f6643514a2b564b5349567736334c457273372f6159485779564e6b766e61646c654b426e794d517366656c784f58554e5743652b486d63516f646e6d476b6b4a7a394e2f565447447a48385562444533566d54517263684130435357704b504b5234533657453650533475507a4f6e646e7547564c706b5367645a51764e4945784233796c3731567566677a67324e3961486d3144464c386f594962505a783171784c5a526e3967323759413d3d",
+      "wire_len": 241
+    },
+    {
+      "name": "mixed",
+      "dict": "default",
+      "text": "Node 7: θέση OK, battery 80%, όλα καλά",
+      "key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "nonce_hex": "deadbeefcafebabe00112233",
+      "wire_hex": "013371322b3738722b757234414553497a4f39586a44636959344a6e766635316b44386b53466851517a335a736e473046686a5936467a414c5a4d4e6875623258393638506a5161484736694a6b5a7a76493039693439574a3473495351415063476a6e7474716e2f675766335530673d",
+      "wire_len": 113
+    },
+    {
+      "name": "en_long",
+      "dict": "default",
+      "text": "Status report: all nodes online, battery level 80 percent, signal good, position unchanged since the last message. Team at the north gate, all safe, moving to camp before dark. Next check in one hour over the satellite channel. Bridge relay is up, mesh network quiet, no errors.",
+      "key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "nonce_hex": "ffeeddccbbaa998877665544",
+      "wire_hex": "012f2b37647a4c75716d5968335a6c56453378576838552b47774d574c626c64746f35374f41513550687855595a524d456767476e5075316f6d426a5a674977396a576e66476f57676c782b375950776d7a63434765786c682f7a67364c68367858754d567a456b6c6a496f76684339394c597a4b415430344f4f736d5745526f426a4b65527367616572566657704d5747634b325835796270306d61756277794f4c5879315073314d70465a5449532b544871517439346e306e3357376c506458722f4c45417663794f6c56787553434768736255744e45696857396b44482f2f6839366c6b556c334247714d31344646394a526a67397a6b3777465a6657437a46314d666b784c6f474e6a4554736f2b34325a4a4c66367a706456365a4a635876635a4d4f53424e577449444f774c72694743674b377036396e6d7a4d344534413d3d",
+      "wire_len": 325
+    }
+  ],
+  "legacy_reject": [
+    {
+      "name": "wrong_key",
+      "dict": "default",
+      "key_hex": "1f1e1d1c1b1a191817161514131211100f0e0d0c0b0a09080706050403020100",
+      "bytes_hex": "016f614b6a704b576d70366970717175736f6c3646414e52544b323269586a4e794d65494f2b744d454b4570583031576e597034583866775a416d4450533668317050366170517431514651716f58303d",
+      "why": "another key"
+    },
+    {
+      "name": "base64_char_changed",
+      "dict": "default",
+      "key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "bytes_hex": "016f614b6a704b576d70366970717175736f6c3641414e52544b323269586a4e794d65494f2b744d454b4570583031576e597034583866775a416d4450533668317050366170517431514651716f58303d",
+      "why": "one base64 character of the ciphertext changed"
+    },
+    {
+      "name": "truncated_four_chars",
+      "dict": "default",
+      "key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "bytes_hex": "016f614b6a704b576d70366970717175736f6c3646414e52544b323269586a4e794d65494f2b744d454b4570583031576e597034583866775a416d445053366831705036617051743151465171",
+      "why": "last 4 base64 characters cut (whole groups, so it still decodes)"
+    },
+    {
+      "name": "not_base64",
+      "dict": "default",
+      "key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "bytes_hex": "016e6f742062617365363420617420616c6c21",
+      "why": "body is not base64"
+    },
+    {
+      "name": "version_only",
+      "dict": "default",
       "key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
       "bytes_hex": "01",
       "why": "version byte only"
