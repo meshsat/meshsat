@@ -78,10 +78,26 @@ func (f *fakeChatKeys) ChatKeyHex(channelType, address string) (string, bool, er
 	return k, ok, nil
 }
 
-// androidSeal is MeshSat Android's SmsSender.send with a key (SMAZ2 on, as
-// it is whenever a key is used without MSVQ-SC): SMAZ2 when shorter,
-// AES-256-GCM, the version byte, base64.
+// androidSeal is MeshSat Android's SmsSender.send with a key, wire v2
+// (codec.SMSWireV2): SMAZ2 when shorter, else the text, as a frame that
+// names its codec, AES-256-GCM, version and mode, base64.
 func androidSeal(t *testing.T, text, hexKey string) string {
+	t.Helper()
+	frame := append([]byte{codec.SMSCodecText}, text...)
+	if z := compress.Compress([]byte(text), compress.DictDefault); len(z) < len(text) {
+		frame = append([]byte{codec.SMSCodecSMAZ2}, z...)
+	}
+	sealed, err := encryptAESGCM(frame, hexKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return base64.StdEncoding.EncodeToString(append(codec.SMSWireV2Header(codec.SMSModeAESGCM), sealed...))
+}
+
+// androidSealV1 is the SmsSender of MeshSat Android up to 2.22.3: SMAZ2 when
+// shorter, AES-256-GCM, the version byte 0x01, base64. Nothing says which
+// codec, so "sara" goes as the two bytes of "¡" (r40 review R40-R1).
+func androidSealV1(t *testing.T, text, hexKey string) string {
 	t.Helper()
 	payload := []byte(text)
 	if z := compress.Compress(payload, compress.DictDefault); len(z) < len(payload) {
@@ -94,14 +110,26 @@ func androidSeal(t *testing.T, text, hexKey string) string {
 	return base64.StdEncoding.EncodeToString(codec.PrependVersionByte(sealed))
 }
 
-// androidOpen is MeshSat Android's SmsReceiver.processIncoming with a key:
-// base64, the version byte off, AES-256-GCM, then SMAZ2 when that gives
-// printable ASCII, else the bytes as UTF-8. (Android reads only ASCII right:
-// its SMAZ2 step turns any other UTF-8 into bigrams.)
+// androidOpen is MeshSat Android's SmsReceiver with a key: a v2 frame read
+// by its codec; anything else the v1 way (the version byte off, AES-256-GCM,
+// then SMAZ2 when that gives printable text, else the bytes as UTF-8).
 func androidOpen(wire, hexKey string) (string, bool) {
 	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(wire))
 	if err != nil || len(raw) < 2 {
 		return "", false
+	}
+	if mode, payload, v2 := codec.ParseSMSWireV2(raw); v2 && mode == codec.SMSModeAESGCM {
+		if frame, err := decryptAESGCM(payload, hexKey); err == nil && len(frame) > 0 {
+			switch frame[0] {
+			case codec.SMSCodecText:
+				return string(frame[1:]), true
+			case codec.SMSCodecSMAZ2:
+				if s, err := decompressSMAZ2(frame[1:]); err == nil {
+					return string(s), true
+				}
+			}
+			return "", false
+		}
 	}
 	_, payload := codec.StripVersionByte(raw)
 	p, err := decryptAESGCM(payload, hexKey)
@@ -141,15 +169,17 @@ func sealWithNonce(t *testing.T, payload []byte, hexKey string, nonce []byte) []
 // --- sealing and opening -------------------------------------------------
 
 // What the Bridge seals is what MeshSat Android sends and reads: base64 of
-// the version byte and the encrypt step's own AES-256-GCM (nonce, ciphertext,
-// tag), SMAZ2 inside when it made the text shorter. The sealed part opens
-// through the chain's existing decrypt step.
+// the app SMS wire v2, version 0x02, mode 0x01 (AES-GCM), then the encrypt
+// step's own AES-256-GCM (nonce, ciphertext, tag) of a frame whose first
+// byte names the codec: SMAZ2 when it made the text shorter, else the text.
+// The sealed part opens through the chain's existing decrypt step.
 func TestSealChatSMS_AndroidWireFormat(t *testing.T) {
 	tp := NewTransformPipeline()
 	for _, text := range []string{
 		"the team is at the bridge, meet there at six", // SMAZ2 makes it shorter
 		"ok 42",       // SMAZ2 does not
 		"QRV 145.500", // nor here
+		"sara",        // SMAZ2's two bytes are those of "¡": the frame says which
 	} {
 		wire, err := tp.SealChatSMS([]byte(text), chatKeyNumber, "[]")
 		if err != nil {
@@ -162,23 +192,21 @@ func TestSealChatSMS_AndroidWireFormat(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%q: not standard padded base64: %v", text, err)
 		}
-		if blob[0] != codec.ProtoVersion1 {
-			t.Fatalf("%q: first byte 0x%02x, want the version byte inside the base64", text, blob[0])
+		if blob[0] != codec.SMSWireV2 || blob[1] != codec.SMSModeAESGCM {
+			t.Fatalf("%q: header % x, want 02 01", text, blob[:2])
 		}
 		z := compress.Compress([]byte(text), compress.DictDefault)
-		payload := []byte(text)
-		chain := `[{"type":"decrypt","params":{"key":"` + chatKeyNumber + `"}}]`
+		frame := append([]byte{codec.SMSCodecText}, text...)
 		if len(z) < len(text) {
-			payload = z
-			chain = `[{"type":"smaz2"},{"type":"decrypt","params":{"key":"` + chatKeyNumber + `"}}]`
+			frame = append([]byte{codec.SMSCodecSMAZ2}, z...)
 		}
-		if want := 1 + chatSealOverhead + len(payload); len(blob) != want {
-			t.Fatalf("%q: %d bytes, want %d (version, nonce, payload, tag)", text, len(blob), want)
+		if want := 2 + chatSealOverhead + len(frame); len(blob) != want {
+			t.Fatalf("%q: %d bytes, want %d (version, mode, nonce, frame, tag)", text, len(blob), want)
 		}
-		// The chain's existing decrypt step (and smaz2 when used) reads it.
-		got, err := tp.ApplyIngress(blob[1:], chain)
-		if err != nil || string(got) != text {
-			t.Fatalf("%q: through the decrypt transform: %q, %v", text, got, err)
+		// The chain's existing decrypt step opens it to the frame.
+		got, err := tp.ApplyIngress(blob[2:], `[{"type":"decrypt","params":{"key":"`+chatKeyNumber+`"}}]`)
+		if err != nil || string(got) != string(frame) {
+			t.Fatalf("%q: through the decrypt transform: % x, %v; want % x", text, got, err, frame)
 		}
 		if got, ok := androidOpen(wire, chatKeyNumber); !ok || got != text {
 			t.Fatalf("%q: MeshSat Android reads %q (%v)", text, got, ok)
@@ -190,8 +218,8 @@ func TestSealChatSMS_AndroidWireFormat(t *testing.T) {
 }
 
 // A link whose chain compresses with MSVQ-SC gets no SMAZ2; with no MSVQ-SC
-// encoder beside the Bridge the text goes as typed, as Android sends it when
-// its encoder fails, not in the chain's SMAZ2 fallback.
+// encoder beside the Bridge the text goes as typed (codec 0x00), as Android
+// sends it when its encoder fails, not in the chain's SMAZ2 fallback.
 func TestSealChatSMS_MSVQSCChainWithoutEncoder(t *testing.T) {
 	tp := NewTransformPipeline()
 	const text = "the team is at the bridge, meet there at six"
@@ -200,9 +228,9 @@ func TestSealChatSMS_MSVQSCChainWithoutEncoder(t *testing.T) {
 		t.Fatal(err)
 	}
 	blob, _ := base64.StdEncoding.DecodeString(wire)
-	p, err := decryptAESGCM(blob[1:], chatKeyNumber)
-	if err != nil || string(p) != text {
-		t.Fatalf("payload %q, %v; want the text as typed", p, err)
+	p, err := decryptAESGCM(blob[2:], chatKeyNumber)
+	if err != nil || string(p) != "\x00"+text {
+		t.Fatalf("frame %q, %v; want codec 0x00 and the text as typed", p, err)
 	}
 }
 
@@ -219,6 +247,9 @@ func TestOpenChatSMS_Forms(t *testing.T) {
 	}
 	legacy, _ := encryptAESGCM([]byte("no version byte"), chatKeyNumber)
 	withNonce01 := sealWithNonce(t, []byte("nonce starts with 01"), chatKeyNumber, []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12})
+	// A v1 blob without the version byte whose nonce starts 02 01 looks like
+	// a v2 header: it opens nowhere as v2 and is read the old way.
+	withNonce0201 := sealWithNonce(t, []byte("nonce starts with 02 01"), chatKeyNumber, []byte{2, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12})
 
 	for in, want := range map[string]string{
 		androidSeal(t, "meet at the bridge at six", chatKeyNumber):                        "meet at the bridge at six",
@@ -229,6 +260,14 @@ func TestOpenChatSMS_Forms(t *testing.T) {
 		base64.StdEncoding.EncodeToString(legacy):                                         "no version byte",
 		"\x01" + base64.StdEncoding.EncodeToString(withNonce01):                           "nonce starts with 01",
 		base64.StdEncoding.EncodeToString(codec.PrependVersionByte(withNonce01)) + "\r\n": "nonce starts with 01",
+		base64.StdEncoding.EncodeToString(withNonce0201):                                  "nonce starts with 02 01",
+		androidSeal(t, "sara", chatKeyNumber):                                             "sara",
+		androidSeal(t, "sata", chatKeyNumber):                                             "sata",
+		androidSeal(t, "¡ ©", chatKeyNumber):                                              "¡ ©",
+		androidSealV1(t, "meet at the bridge at six", chatKeyNumber):                      "meet at the bridge at six",
+		// Version 1 cannot say "sara" from "¡": the old rule reads the text
+		// (codec.SMSWireV2, r40 review R40-R1). Only v2 senders escape it.
+		androidSealV1(t, "sara", chatKeyNumber): "¡",
 	} {
 		got, ref, ok := tp.OpenChatSMS(chatPeer, in)
 		if !ok || string(got) != want || ref != "sms:"+chatPeer {
@@ -272,15 +311,24 @@ func TestChatWords(t *testing.T) {
 			t.Errorf("chatWords(%q) = %q, want %q", in, got, want)
 		}
 	}
-	// SMAZ2 the other end would take for text is not sent as SMAZ2.
-	if z := compress.Compress([]byte("beat"), compress.DictDefault); len(z) < 4 && readsAsText(z) {
-		wire, err := tp.SealChatSMS([]byte("beat"), chatKeyNumber, "")
+	// SMAZ2 that reads as text by itself goes as SMAZ2 now, and comes back
+	// as what was typed: the v2 frame names the codec.
+	tp.SetChatKeyResolver(newFakeChatKeys("sms:"+chatPeer, chatKeyNumber))
+	for _, text := range []string{"beat", "sara", "sata"} {
+		z := compress.Compress([]byte(text), compress.DictDefault)
+		if !readsAsText(z) {
+			t.Fatalf("%q: SMAZ2 % x no longer reads as text; pick another word", text, z)
+		}
+		wire, err := tp.SealChatSMS([]byte(text), chatKeyNumber, "")
 		if err != nil {
 			t.Fatal(err)
 		}
 		blob, _ := base64.StdEncoding.DecodeString(wire)
-		if p, _ := decryptAESGCM(blob[1:], chatKeyNumber); string(p) != "beat" {
-			t.Fatalf("ambiguous SMAZ2 sent: payload %q", p)
+		if p, _ := decryptAESGCM(blob[2:], chatKeyNumber); len(p) == 0 || p[0] != codec.SMSCodecSMAZ2 {
+			t.Fatalf("%q: frame % x, want SMAZ2 named", text, p)
+		}
+		if got, _, ok := tp.OpenChatSMS(chatPeer, wire); !ok || string(got) != text {
+			t.Fatalf("%q came back as %q (%v)", text, got, ok)
 		}
 	}
 }
@@ -721,17 +769,18 @@ func TestChatKeys_RoundTripOutAndIn(t *testing.T) {
 			t.Fatalf("%q came back as %q encrypted=%v", text, h.Text, h.Encrypted)
 		}
 
-		// The chain's existing decrypt step reads the sealed part.
+		// The chain's existing decrypt step opens the sealed part to the
+		// v2 frame, which reads by the codec it names.
 		blob, err := base64.StdEncoding.DecodeString(onAir)
-		if err != nil || blob[0] != codec.ProtoVersion1 {
+		if err != nil || blob[0] != codec.SMSWireV2 || blob[1] != codec.SMSModeAESGCM {
 			t.Fatalf("%q: on air %q", text, onAir)
 		}
-		p, err := tp.ApplyIngress(blob[1:], `[{"type":"decrypt","params":{"key":"`+chatKeyNumber+`"}}]`)
+		p, err := tp.ApplyIngress(blob[2:], `[{"type":"decrypt","params":{"key":"`+chatKeyNumber+`"}}]`)
 		if err != nil {
 			t.Fatalf("%q: the decrypt transform: %v", text, err)
 		}
-		if got := string(tp.chatWords(p)); got != text {
-			t.Fatalf("%q: decrypted to %q", text, got)
+		if got, ok := tp.smsFrameWords(p); !ok || string(got) != text {
+			t.Fatalf("%q: decrypted to %q (%v)", text, got, ok)
 		}
 	}
 }

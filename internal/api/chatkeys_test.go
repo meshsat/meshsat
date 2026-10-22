@@ -222,9 +222,10 @@ func TestSealedSMSLength(t *testing.T) {
 	text := strings.Repeat("x", 120) // SMAZ2 cannot shorten it
 
 	onAir, limit, sealed, err := sealedSMSLength(cfg, tp, "[]", "+31612345678", text)
-	// base64 of the version byte, nonce, 120 bytes and the tag: 4*ceil(149/3)
-	if err != nil || !sealed || limit != 160 || onAir != 200 {
-		t.Fatalf("sealed: %d of %d, sealed=%v, %v; want 200 of 160", onAir, limit, sealed, err)
+	// base64 of the v2 version and mode, nonce, codec byte, 120 bytes and
+	// the tag: 4*ceil(151/3)
+	if err != nil || !sealed || limit != 160 || onAir != 204 {
+		t.Fatalf("sealed: %d of %d, sealed=%v, %v; want 204 of 160", onAir, limit, sealed, err)
 	}
 	if _, _, sealed, _ := sealedSMSLength(cfg, tp, "[]", "+31600000001", text); sealed {
 		t.Fatal("a number without a key counted as sealed")

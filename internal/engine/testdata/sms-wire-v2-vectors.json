@@ -1,0 +1,456 @@
+{
+  "version": 1,
+  "contract": "SMS text = base64(0x02 | mode | payload). mode 0x00 clear: payload = codec | body. mode 0x01 AES-256-GCM: payload = nonce(12) | ciphertext(codec | body) | tag(16), no AAD. codec 0x00 UTF-8 text, 0x01 SMAZ2 with the default table, 0x02 MSVQ-SC. Senders: MSVQ-SC when set and it encodes, else SMAZ2 when shorter, else the text. A plain SMS (no key, no compression) is the typed text, unframed.",
+  "kept": "status kept: the receiver shows the SMS text as it came (the base64), reads nothing into it, and logs the unknown mode or codec. status legacy: version 1 or unversioned, read by the old rule; its ambiguity is the contract's reason to exist.",
+  "key_hex": "101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f",
+  "vectors": [
+    {
+      "name": "sara_clear",
+      "text": "sara",
+      "mode": 0,
+      "codec": 1,
+      "frame_hex": "01c2a1",
+      "wire_hex": "020001c2a1",
+      "sms": "AgABwqE=",
+      "expect": {
+        "status": "decoded",
+        "text": "sara"
+      }
+    },
+    {
+      "name": "sara_aesgcm",
+      "text": "sara",
+      "mode": 1,
+      "codec": 1,
+      "frame_hex": "01c2a1",
+      "nonce_hex": "a1a1a1a1a1a1a1a1a1a1a101",
+      "wire_hex": "0201a1a1a1a1a1a1a1a1a1a1a101438f9ec221436fef72cb11333c264fa493a746",
+      "sms": "AgGhoaGhoaGhoaGhoQFDj57CIUNv73LLETM8Jk+kk6dG",
+      "expect": {
+        "status": "decoded",
+        "text": "sara"
+      }
+    },
+    {
+      "name": "sata_clear",
+      "text": "sata",
+      "mode": 0,
+      "codec": 1,
+      "frame_hex": "01c2a9",
+      "wire_hex": "020001c2a9",
+      "sms": "AgABwqk=",
+      "expect": {
+        "status": "decoded",
+        "text": "sata"
+      }
+    },
+    {
+      "name": "sata_aesgcm",
+      "text": "sata",
+      "mode": 1,
+      "codec": 1,
+      "frame_hex": "01c2a9",
+      "nonce_hex": "a2a2a2a2a2a2a2a2a2a2a202",
+      "wire_hex": "0201a2a2a2a2a2a2a2a2a2a2a202df28f33c0c160a6e2b49e5cbad147fdf3f6a85",
+      "sms": "AgGioqKioqKioqKiogLfKPM8DBYKbitJ5cutFH/fP2qF",
+      "expect": {
+        "status": "decoded",
+        "text": "sata"
+      }
+    },
+    {
+      "name": "inverted_exclamation_clear",
+      "text": "¡",
+      "mode": 0,
+      "codec": 0,
+      "frame_hex": "00c2a1",
+      "wire_hex": "020000c2a1",
+      "sms": "AgAAwqE=",
+      "expect": {
+        "status": "decoded",
+        "text": "¡"
+      }
+    },
+    {
+      "name": "inverted_exclamation_aesgcm",
+      "text": "¡",
+      "mode": 1,
+      "codec": 0,
+      "frame_hex": "00c2a1",
+      "nonce_hex": "a3a3a3a3a3a3a3a3a3a3a303",
+      "wire_hex": "0201a3a3a3a3a3a3a3a3a3a3a303644c947b4ba60766a0a977a0056b7c5cdedff7",
+      "sms": "AgGjo6Ojo6Ojo6OjowNkTJR7S6YHZqCpd6AFa3xc3t/3",
+      "expect": {
+        "status": "decoded",
+        "text": "¡"
+      }
+    },
+    {
+      "name": "copyright_clear",
+      "text": "©",
+      "mode": 0,
+      "codec": 0,
+      "frame_hex": "00c2a9",
+      "wire_hex": "020000c2a9",
+      "sms": "AgAAwqk=",
+      "expect": {
+        "status": "decoded",
+        "text": "©"
+      }
+    },
+    {
+      "name": "copyright_aesgcm",
+      "text": "©",
+      "mode": 1,
+      "codec": 0,
+      "frame_hex": "00c2a9",
+      "nonce_hex": "a4a4a4a4a4a4a4a4a4a4a404",
+      "wire_hex": "0201a4a4a4a4a4a4a4a4a4a4a404cfce15cd4aacfc1c7251a30c31998de3ae5b75",
+      "sms": "AgGkpKSkpKSkpKSkpATPzhXNSqz8HHJRowwxmY3jrlt1",
+      "expect": {
+        "status": "decoded",
+        "text": "©"
+      }
+    },
+    {
+      "name": "greek_word_clear",
+      "text": "Καλημέρα",
+      "mode": 0,
+      "codec": 0,
+      "frame_hex": "00ce9aceb1cebbceb7cebcceadcf81ceb1",
+      "wire_hex": "020000ce9aceb1cebbceb7cebcceadcf81ceb1",
+      "sms": "AgAAzprOsc67zrfOvM6tz4HOsQ==",
+      "expect": {
+        "status": "decoded",
+        "text": "Καλημέρα"
+      }
+    },
+    {
+      "name": "greek_word_aesgcm",
+      "text": "Καλημέρα",
+      "mode": 1,
+      "codec": 0,
+      "frame_hex": "00ce9aceb1cebbceb7cebcceadcf81ceb1",
+      "nonce_hex": "a5a5a5a5a5a5a5a5a5a5a505",
+      "wire_hex": "0201a5a5a5a5a5a5a5a5a5a5a5059cba8ed9fd756e601a92ff72d45bda485a5b1fc075a14bec768a805a5d3d48a328",
+      "sms": "AgGlpaWlpaWlpaWlpQWcuo7Z/XVuYBqS/3LUW9pIWlsfwHWhS+x2ioBaXT1Ioyg=",
+      "expect": {
+        "status": "decoded",
+        "text": "Καλημέρα"
+      }
+    },
+    {
+      "name": "greek_sentence_clear",
+      "text": "Γεια σου κόσμε, φτάσαμε στη γέφυρα",
+      "mode": 0,
+      "codec": 0,
+      "frame_hex": "00ce93ceb5ceb9ceb120cf83cebfcf8520cebacf8ccf83cebcceb52c20cf86cf84ceaccf83ceb1cebcceb520cf83cf84ceb720ceb3ceadcf86cf85cf81ceb1",
+      "wire_hex": "020000ce93ceb5ceb9ceb120cf83cebfcf8520cebacf8ccf83cebcceb52c20cf86cf84ceaccf83ceb1cebcceb520cf83cf84ceb720ceb3ceadcf86cf85cf81ceb1",
+      "sms": "AgAAzpPOtc65zrEgz4POv8+FIM66z4zPg868zrUsIM+Gz4TOrM+DzrHOvM61IM+Dz4TOtyDOs86tz4bPhc+BzrE=",
+      "expect": {
+        "status": "decoded",
+        "text": "Γεια σου κόσμε, φτάσαμε στη γέφυρα"
+      }
+    },
+    {
+      "name": "greek_sentence_aesgcm",
+      "text": "Γεια σου κόσμε, φτάσαμε στη γέφυρα",
+      "mode": 1,
+      "codec": 0,
+      "frame_hex": "00ce93ceb5ceb9ceb120cf83cebfcf8520cebacf8ccf83cebcceb52c20cf86cf84ceaccf83ceb1cebcceb520cf83cf84ceb720ceb3ceadcf86cf85cf81ceb1",
+      "nonce_hex": "a6a6a6a6a6a6a6a6a6a6a606",
+      "wire_hex": "0201a6a6a6a6a6a6a6a6a6a6a606ebe87fabae422c55b941446a379dbedf652cdddd56c88dd9ce01973c7f99f8d0fd4d0969434071b1196e9b704d85c7bc8db56c1cda74896db9992a449009dc1564eccb3ac4f754550378a1be059808",
+      "sms": "AgGmpqampqampqampgbr6H+rrkIsVblBRGo3nb7fZSzd3VbIjdnOAZc8f5n40P1NCWlDQHGxGW6bcE2Fx7yNtWwc2nSJbbmZKkSQCdwVZOzLOsT3VFUDeKG+BZgI",
+      "expect": {
+        "status": "decoded",
+        "text": "Γεια σου κόσμε, φτάσαμε στη γέφυρα"
+      }
+    },
+    {
+      "name": "accents_cafe_clear",
+      "text": "café crème",
+      "mode": 0,
+      "codec": 0,
+      "frame_hex": "00636166c3a9206372c3a86d65",
+      "wire_hex": "020000636166c3a9206372c3a86d65",
+      "sms": "AgAAY2Fmw6kgY3LDqG1l",
+      "expect": {
+        "status": "decoded",
+        "text": "café crème"
+      }
+    },
+    {
+      "name": "accents_cafe_aesgcm",
+      "text": "café crème",
+      "mode": 1,
+      "codec": 0,
+      "frame_hex": "00636166c3a9206372c3a86d65",
+      "nonce_hex": "a7a7a7a7a7a7a7a7a7a7a707",
+      "wire_hex": "0201a7a7a7a7a7a7a7a7a7a7a707e344f99231da3b3b1b87248e0adb9a617d71d1419b8ef1582bc8f8a0aa",
+      "sms": "AgGnp6enp6enp6enpwfjRPmSMdo7OxuHJI4K25phfXHRQZuO8VgryPigqg==",
+      "expect": {
+        "status": "decoded",
+        "text": "café crème"
+      }
+    },
+    {
+      "name": "accents_facade_clear",
+      "text": "naïve façade",
+      "mode": 0,
+      "codec": 0,
+      "frame_hex": "006e61c3af7665206661c3a7616465",
+      "wire_hex": "0200006e61c3af7665206661c3a7616465",
+      "sms": "AgAAbmHDr3ZlIGZhw6dhZGU=",
+      "expect": {
+        "status": "decoded",
+        "text": "naïve façade"
+      }
+    },
+    {
+      "name": "accents_facade_aesgcm",
+      "text": "naïve façade",
+      "mode": 1,
+      "codec": 0,
+      "frame_hex": "006e61c3af7665206661c3a7616465",
+      "nonce_hex": "a8a8a8a8a8a8a8a8a8a8a808",
+      "wire_hex": "0201a8a8a8a8a8a8a8a8a8a8a8088eb981d69bb86d26e42b3d11c912bb63414b1e5306b7d1ea60cd317b12ce32",
+      "sms": "AgGoqKioqKioqKioqAiOuYHWm7htJuQrPRHJErtjQUseUwa30epgzTF7Es4y",
+      "expect": {
+        "status": "decoded",
+        "text": "naïve façade"
+      }
+    },
+    {
+      "name": "emoji_clear",
+      "text": "😀👍",
+      "mode": 0,
+      "codec": 0,
+      "frame_hex": "00f09f9880f09f918d",
+      "wire_hex": "020000f09f9880f09f918d",
+      "sms": "AgAA8J+YgPCfkY0=",
+      "expect": {
+        "status": "decoded",
+        "text": "😀👍"
+      }
+    },
+    {
+      "name": "emoji_aesgcm",
+      "text": "😀👍",
+      "mode": 1,
+      "codec": 0,
+      "frame_hex": "00f09f9880f09f918d",
+      "nonce_hex": "a9a9a9a9a9a9a9a9a9a9a909",
+      "wire_hex": "0201a9a9a9a9a9a9a9a9a9a9a9095b7fedf2dd014b5ae040e317a74edd7b7b4e79931c1728050c",
+      "sms": "AgGpqampqampqampqQlbf+3y3QFLWuBA4xenTt17e055kxwXKAUM",
+      "expect": {
+        "status": "decoded",
+        "text": "😀👍"
+      }
+    },
+    {
+      "name": "mixed_clear",
+      "text": "hello Καλημέρα 😀",
+      "mode": 0,
+      "codec": 0,
+      "frame_hex": "0068656c6c6f20ce9aceb1cebbceb7cebcceadcf81ceb120f09f9880",
+      "wire_hex": "02000068656c6c6f20ce9aceb1cebbceb7cebcceadcf81ceb120f09f9880",
+      "sms": "AgAAaGVsbG8gzprOsc67zrfOvM6tz4HOsSDwn5iA",
+      "expect": {
+        "status": "decoded",
+        "text": "hello Καλημέρα 😀"
+      }
+    },
+    {
+      "name": "mixed_aesgcm",
+      "text": "hello Καλημέρα 😀",
+      "mode": 1,
+      "codec": 0,
+      "frame_hex": "0068656c6c6f20ce9aceb1cebbceb7cebcceadcf81ceb120f09f9880",
+      "nonce_hex": "aaaaaaaaaaaaaaaaaaaaaa0a",
+      "wire_hex": "0201aaaaaaaaaaaaaaaaaaaaaa0a8df5151ab8cd7d224eee1400242da479dfc37b1a55f7bd03f9cfc9b4c4ee7202e9f2781aa084204ea329e73f",
+      "sms": "AgGqqqqqqqqqqqqqqgqN9RUauM19Ik7uFAAkLaR538N7GlX3vQP5z8m0xO5yAunyeBqghCBOoynnPw==",
+      "expect": {
+        "status": "decoded",
+        "text": "hello Καλημέρα 😀"
+      }
+    },
+    {
+      "name": "english_clear",
+      "text": "the weather is getting worse, heading down to the hut",
+      "mode": 0,
+      "codec": 1,
+      "frame_hex": "0181026520ea8a84027220960120cae680036720778894022c2084d78002672007cb9001208103652068db",
+      "wire_hex": "02000181026520ea8a84027220960120cae680036720778894022c2084d78002672007cb9001208103652068db",
+      "sms": "AgABgQJlIOqKhAJyIJYBIMrmgANnIHeIlAIsIITXgAJnIAfLkAEggQNlIGjb",
+      "expect": {
+        "status": "decoded",
+        "text": "the weather is getting worse, heading down to the hut"
+      }
+    },
+    {
+      "name": "english_aesgcm",
+      "text": "the weather is getting worse, heading down to the hut",
+      "mode": 1,
+      "codec": 1,
+      "frame_hex": "0181026520ea8a84027220960120cae680036720778894022c2084d78002672007cb9001208103652068db",
+      "nonce_hex": "ababababababababababab0b",
+      "wire_hex": "0201ababababababababababab0b24035a421df28e6d208f399490f2cb66fbe2e153720c8ef7b8c0f065524653748cb80e95cf7bcd15e225144597013332ea8f5255248d3de979c1d9",
+      "sms": "AgGrq6urq6urq6urqwskA1pCHfKObSCPOZSQ8stm++LhU3IMjve4wPBlUkZTdIy4DpXPe80V4iUURZcBMzLqj1JVJI096XnB2Q==",
+      "expect": {
+        "status": "decoded",
+        "text": "the weather is getting worse, heading down to the hut"
+      }
+    },
+    {
+      "name": "short_ascii_clear",
+      "text": "ok",
+      "mode": 0,
+      "codec": 0,
+      "frame_hex": "006f6b",
+      "wire_hex": "0200006f6b",
+      "sms": "AgAAb2s=",
+      "expect": {
+        "status": "decoded",
+        "text": "ok"
+      }
+    },
+    {
+      "name": "short_ascii_aesgcm",
+      "text": "ok",
+      "mode": 1,
+      "codec": 0,
+      "frame_hex": "006f6b",
+      "nonce_hex": "acacacacacacacacacacac0c",
+      "wire_hex": "0201acacacacacacacacacacac0c6bee1fef4ebe2e2bd855fb7b9fd6d6f638a71b",
+      "sms": "AgGsrKysrKysrKysrAxr7h/vTr4uK9hV+3uf1tb2OKcb",
+      "expect": {
+        "status": "decoded",
+        "text": "ok"
+      }
+    },
+    {
+      "name": "one_letter_clear",
+      "text": "a",
+      "mode": 0,
+      "codec": 0,
+      "frame_hex": "0061",
+      "wire_hex": "02000061",
+      "sms": "AgAAYQ==",
+      "expect": {
+        "status": "decoded",
+        "text": "a"
+      }
+    },
+    {
+      "name": "one_letter_aesgcm",
+      "text": "a",
+      "mode": 1,
+      "codec": 0,
+      "frame_hex": "0061",
+      "nonce_hex": "adadadadadadadadadadad0d",
+      "wire_hex": "0201adadadadadadadadadadad0d0babcf53535fcd69b9006926c5a9f37c0d41",
+      "sms": "AgGtra2tra2tra2trQ0Lq89TU1/NabkAaSbFqfN8DUE=",
+      "expect": {
+        "status": "decoded",
+        "text": "a"
+      }
+    },
+    {
+      "name": "control_byte_clear",
+      "text": "x\u0001y and the rest",
+      "mode": 0,
+      "codec": 0,
+      "frame_hex": "0078017920616e64207468652072657374",
+      "wire_hex": "02000078017920616e64207468652072657374",
+      "sms": "AgAAeAF5IGFuZCB0aGUgcmVzdA==",
+      "expect": {
+        "status": "decoded",
+        "text": "x\u0001y and the rest"
+      }
+    },
+    {
+      "name": "control_byte_aesgcm",
+      "text": "x\u0001y and the rest",
+      "mode": 1,
+      "codec": 0,
+      "frame_hex": "0078017920616e64207468652072657374",
+      "nonce_hex": "aeaeaeaeaeaeaeaeaeaeae0e",
+      "wire_hex": "0201aeaeaeaeaeaeaeaeaeaeae0e9a9c04748139ea96b5c37023895e54a3d35e4d2f6385536763e0e5dbdf2f69f1c1",
+      "sms": "AgGurq6urq6urq6urg6anAR0gTnqlrXDcCOJXlSj015NL2OFU2dj4OXb3y9p8cE=",
+      "expect": {
+        "status": "decoded",
+        "text": "x\u0001y and the rest"
+      }
+    }
+  ],
+  "negative": [
+    {
+      "name": "unknown_codec_aesgcm",
+      "wire_hex": "0201afafafafafafafafafafaf0f8020ea0562f5f328ea6416d10a69b0d7c5a660",
+      "sms": "AgGvr6+vr6+vr6+vrw+AIOoFYvXzKOpkFtEKabDXxaZg",
+      "expect": {
+        "status": "kept"
+      },
+      "note": "codec 0x07 inside a frame the key opens"
+    },
+    {
+      "name": "unknown_codec_clear",
+      "wire_hex": "0200076869",
+      "sms": "AgAHaGk=",
+      "expect": {
+        "status": "kept"
+      },
+      "note": "codec 0x07"
+    },
+    {
+      "name": "unknown_mode",
+      "wire_hex": "0205006869",
+      "sms": "AgUAaGk=",
+      "expect": {
+        "status": "kept"
+      },
+      "note": "mode 0x05"
+    },
+    {
+      "name": "text_codec_bad_utf8",
+      "wire_hex": "020000c328",
+      "sms": "AgAAwyg=",
+      "expect": {
+        "status": "kept"
+      },
+      "note": "codec 0x00 with bytes that are not UTF-8"
+    }
+  ],
+  "legacy": [
+    {
+      "name": "v1_sara_aesgcm",
+      "wire_hex": "01b0b0b0b0b0b0b0b0b0b0b010d7e9a6ab86b39e4b24713f22b99d8640b687",
+      "sms": "AbCwsLCwsLCwsLCwENfppquGs55LJHE/IrmdhkC2hw==",
+      "expect": {
+        "status": "legacy",
+        "text": "¡"
+      },
+      "note": "MeshSat Android up to 2.22.3 sends \"sara\" as SMAZ2 c2 a1 behind 0x01; nothing tells it from \"¡\", and the old rule reads \"¡\""
+    },
+    {
+      "name": "v1_sara_clear",
+      "wire_hex": "01c2a1",
+      "sms": "AcKh",
+      "expect": {
+        "status": "legacy",
+        "text": "¡"
+      },
+      "note": "the same without a key"
+    },
+    {
+      "name": "v1_english_aesgcm",
+      "wire_hex": "01b1b1b1b1b1b1b1b1b1b1b1116594159d4b24febef8bea83b1d4cd2e4f7d35b27b11b63c9c851b3b2366a2a6bd4755b50ffcce0f2cdc524518fc91537b587260fa81f77e34d8f",
+      "sms": "AbGxsbGxsbGxsbGxEWWUFZ1LJP6++L6oOx1M0uT301snsRtjychRs7I2aipr1HVbUP/M4PLNxSRRj8kVN7WHJg+oH3fjTY8=",
+      "expect": {
+        "status": "legacy",
+        "text": "the weather is getting worse, heading down to the hut"
+      },
+      "note": "English through SMAZ2 reads right under the old rule"
+    }
+  ]
+}

@@ -116,31 +116,66 @@ func (tp *TransformPipeline) SMSChatKey(number string) (hexKey, ref string, foun
 	return keys[0].hex, keys[0].ref, true, nil
 }
 
-// SealChatSMS is the on-air text of an SMS sealed with a chat key, in MeshSat
-// Android's order (K/sms/SmsSender.kt): MSVQ-SC when the link's send chain
-// compresses with it, else SMAZ2 when that makes the text shorter; then
-// AES-256-GCM in the encrypt step's own format (12-byte nonce, ciphertext,
-// 16-byte tag); the protocol version byte; base64. The link's other steps
-// do not apply. MeshSat Android's SmsReceiver and OpenChatSMS read it.
+// SealChatSMS is the on-air text of an SMS sealed with a chat key: the app
+// SMS wire v2 (codec.SMSWireV2, r40 review R40-R1). The frame names its codec
+// (smsFrame), AES-256-GCM in the encrypt step's own format (12-byte nonce,
+// ciphertext, 16-byte tag) seals it, version and mode go in front, then
+// base64. The link's other steps do not apply. MeshSat Android's SmsReceiver,
+// MeshSat iOS, the Hub and OpenChatSMS read it.
 func (tp *TransformPipeline) SealChatSMS(text []byte, hexKey, egressChain string) (string, error) {
-	payload := text
-	if step, ok := chainStep(egressChain, "msvqsc"); ok {
-		// Android sends the text as it is when MSVQ-SC cannot encode; the
-		// chain's own fallback (SMAZ2 with the Meshtastic dictionary) would
-		// not read on the phone.
-		if wire, err := tp.msvqscEncode(step, text); err == nil {
-			payload = wire
-		}
-	} else if z := compress.Compress(text, compress.DictDefault); len(z) > 0 && len(z) < len(text) && !readsAsText(z) {
-		// A few bytes of SMAZ2 that read as UTF-8 text by themselves would be
-		// taken for the text on the other end (chatWords); those go as typed.
-		payload = z
-	}
-	sealed, err := tp.applyTransform(chatCipherStep(hexKey), payload)
+	sealed, err := tp.applyTransform(chatCipherStep(hexKey), tp.smsFrame(text, egressChain))
 	if err != nil {
 		return "", err
 	}
-	return base64.StdEncoding.EncodeToString(codec.PrependVersionByte(sealed)), nil
+	wire := append(codec.SMSWireV2Header(codec.SMSModeAESGCM), sealed...)
+	return base64.StdEncoding.EncodeToString(wire), nil
+}
+
+// smsFrame is the codec byte and the body of a v2 SMS, in MeshSat Android's
+// order (SmsSender): on a link whose send chain compresses with MSVQ-SC, its
+// wire, or the text as typed when it cannot encode (Android sends it so, not
+// the chain's SMAZ2 fallback); else SMAZ2 with the default table when that
+// is shorter, else the UTF-8 text as it is.
+func (tp *TransformPipeline) smsFrame(text []byte, egressChain string) []byte {
+	if step, ok := chainStep(egressChain, "msvqsc"); ok {
+		if wire, err := tp.msvqscEncode(step, text); err == nil {
+			return append([]byte{codec.SMSCodecMSVQSC}, wire...)
+		}
+		return append([]byte{codec.SMSCodecText}, text...)
+	}
+	if z := compress.Compress(text, compress.DictDefault); len(z) > 0 && len(z) < len(text) {
+		return append([]byte{codec.SMSCodecSMAZ2}, z...)
+	}
+	return append([]byte{codec.SMSCodecText}, text...)
+}
+
+// smsFrameWords reads a v2 frame. ok is false for a codec this Bridge does
+// not know, or a body that does not read under the codec it names.
+func (tp *TransformPipeline) smsFrameWords(frame []byte) ([]byte, bool) {
+	if len(frame) == 0 {
+		return nil, false
+	}
+	body := frame[1:]
+	switch frame[0] {
+	case codec.SMSCodecText:
+		if !utf8.Valid(body) {
+			return nil, false
+		}
+		return body, true
+	case codec.SMSCodecSMAZ2:
+		words, err := decompressSMAZ2(body)
+		if err != nil || !utf8.Valid(words) {
+			return nil, false
+		}
+		return words, true
+	case codec.SMSCodecMSVQSC:
+		words, err := tp.reverseTransform(TransformSpec{Type: "msvqsc"}, body)
+		if err != nil {
+			return nil, false
+		}
+		return words, true
+	}
+	return nil, false
 }
 
 // chatCipherStep is the link chain's own encrypt step with a chat's key:
@@ -168,6 +203,26 @@ func (tp *TransformPipeline) OpenChatSMS(number, raw string) ([]byte, string, bo
 	if !ok {
 		return nil, "", false
 	}
+	// Version 2 says how to read it. A frame a key opens but whose codec
+	// this Bridge does not know is kept as it came, never guessed at. A
+	// version 1 blob whose nonce happens to start 0x02 0x01 opens nowhere
+	// here and is read below.
+	if mode, payload, v2 := codec.ParseSMSWireV2(blob); v2 && mode == codec.SMSModeAESGCM {
+		for _, k := range keys {
+			frame, err := tp.reverseTransform(chatCipherStep(k.hex), payload)
+			if err != nil {
+				continue
+			}
+			if words, ok := tp.smsFrameWords(frame); ok {
+				return words, k.ref, true
+			}
+			log.Warn().Str("from", number).Hex("codec", frame[:min(1, len(frame))]).
+				Msg("chat keys: an SMS with a codec this Bridge does not read, kept as it came")
+			return []byte(raw), k.ref, true
+		}
+	}
+	// Version 1 and unversioned: the codec is guessed (chatWords), with the
+	// ambiguity that guess cannot escape.
 	for _, k := range keys {
 		if p, ok := tp.openChatBlob(blob, k.hex); ok {
 			return tp.chatWords(p), k.ref, true
