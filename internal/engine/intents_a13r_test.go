@@ -92,8 +92,13 @@ func a13rPair(t *testing.T, h *intentHarness, tx *msgTx) *lxmfPair {
 	return p
 }
 
-// 300 characters go as one link packet (above the 295 of a single packet).
-var linkText = strings.Repeat("l", 300)
+// Every intent's message carries its mid (contract C2), which takes this
+// many bytes of a packet's room for content. [MESHSAT-1641]
+var midExtra = len(lxmf.Pack(lxmf.MidFields([16]byte{}))) - len(lxmf.Pack(lxmf.MapOf()))
+
+// Text that goes as one link packet: above a single packet's room for
+// content and within a link packet's (295 and 319 bytes without the mid).
+var linkText = strings.Repeat("l", lxmf.PacketMaxContent-midExtra+10)
 
 // The store before the write fails (a database refusal): nothing of the
 // message is written, the attempt is not sent, the peer receives nothing.
