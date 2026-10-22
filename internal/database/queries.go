@@ -718,7 +718,12 @@ func (db *DB) UpdateDeliveryStatusByPacket(packetID uint32, status string) error
 
 // InsertMessageWithStatus persists a message with initial delivery status.
 func (db *DB) InsertMessageWithStatus(m *Message, deliveryStatus string) (int64, error) {
-	res, err := db.Exec(`INSERT INTO messages
+	return insertMessage(db, m, deliveryStatus)
+}
+
+// insertMessage is InsertMessageWithStatus on a database or a transaction.
+func insertMessage(ex execer, m *Message, deliveryStatus string) (int64, error) {
+	res, err := ex.Exec(`INSERT INTO messages
 		(packet_id, from_node, to_node, channel, portnum, portnum_name, decoded_text,
 		 rx_snr, rx_time, hop_limit, hop_start, direction, transport, delivery_status, composed_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,

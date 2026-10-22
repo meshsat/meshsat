@@ -7,8 +7,6 @@ package rnsstack
 import (
 	"context"
 	"crypto/ed25519"
-	"crypto/sha256"
-	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -17,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 
 	"meshsat/internal/database"
@@ -250,26 +249,21 @@ func (st *Stack) announcer(ctx context.Context) {
 }
 
 // storeInbound files an inbound LXMF message in the messages table so the
-// existing inbox shows it. From/to are "lxmf:<hash>", transport "reticulum".
-// A message whose sender gave it a mid that was taken in before (a retry
-// with a new LXMF hash, or the same message over another route) is dropped,
-// also after a restart. [MESHSAT-1641]
+// existing inbox shows it, then hands it on. From/to are "lxmf:<hash>",
+// transport "reticulum". A message whose sender gave it a mid is filed with
+// its (origin, mid) in one transaction, and a repeat (a retry with a new
+// LXMF hash, or the same message over another route) is dropped, also after
+// a restart. Nothing is handed on unless the message was filed: a failed
+// write records nothing, so the message can come again and be taken then
+// (r40 review R40-R2). [MESHSAT-1641]
 func (st *Stack) storeInbound(m *lxmf.Message) {
-	if mid, ok := lxmf.MidOf(m.Fields); ok && st.cfg.DB != nil {
-		first, err := st.cfg.DB.ClaimLXMFMid(hex.EncodeToString(m.Source[:]), lxmf.FormatMid(mid), time.Now())
-		if err != nil {
-			log.Warn().Err(err).Msg("lxmf: record message id failed")
-		} else if !first {
-			log.Info().Str("source", hex.EncodeToString(m.Source[:])).Str("mid", lxmf.FormatMid(mid)).
-				Msg("lxmf: repeat of a message already taken in, dropped")
-			return
-		}
-	}
 	text := string(m.Content)
 	if len(m.Title) > 0 {
 		text = string(m.Title) + "\n" + text
 	}
-	st.fileInbound(m, text)
+	if !st.fileInbound(m, text) {
+		return
+	}
 	st.inboundMu.RLock()
 	fn := st.onInbound
 	st.inboundMu.RUnlock()
@@ -278,9 +272,11 @@ func (st *Stack) storeInbound(m *lxmf.Message) {
 	}
 }
 
-func (st *Stack) fileInbound(m *lxmf.Message, text string) {
+// fileInbound writes the message and reports whether it is filed (true
+// without a database, as in tests). false is a repeat or a failed write.
+func (st *Stack) fileInbound(m *lxmf.Message, text string) bool {
 	if st.cfg.DB == nil {
-		return
+		return true
 	}
 	row := &database.Message{
 		PacketID:    uint32(m.Hash[0])<<24 | uint32(m.Hash[1])<<16 | uint32(m.Hash[2])<<8 | uint32(m.Hash[3]),
@@ -293,9 +289,25 @@ func (st *Stack) fileInbound(m *lxmf.Message, text string) {
 		Direction:   "rx",
 		Transport:   "reticulum",
 	}
-	if _, err := st.cfg.DB.InsertMessageWithStatus(row, "received"); err != nil {
-		log.Warn().Err(err).Msg("lxmf: store inbound message failed")
+	source := hex.EncodeToString(m.Source[:])
+	if mid, ok := lxmf.MidOf(m.Fields); ok {
+		inserted, _, err := st.cfg.DB.InsertLXMFMessageOnce(source, lxmf.FormatMid(mid), time.Now(), row, "received")
+		switch {
+		case err != nil:
+			log.Warn().Err(err).Str("source", source).Msg("lxmf: store inbound message failed, nothing recorded")
+			return false
+		case !inserted:
+			log.Info().Str("source", source).Str("mid", lxmf.FormatMid(mid)).
+				Msg("lxmf: repeat of a message already taken in, dropped")
+			return false
+		}
+		return true
 	}
+	if _, err := st.cfg.DB.InsertMessageWithStatus(row, "received"); err != nil {
+		log.Warn().Err(err).Str("source", source).Msg("lxmf: store inbound message failed")
+		return false
+	}
+	return true
 }
 
 // Deliver implements engine.LXMFSender for the delivery ledger: the row's
@@ -327,7 +339,11 @@ func (st *Stack) Deliver(ctx context.Context, del database.MessageDelivery) (str
 	if lp := st.late; lp != nil && del.IntentID != "" {
 		lp.watch(&opts, del.ID, del.ClaimGen)
 	}
-	m, _, err := st.LXMF.SendWith(ctx, dest, []byte(body.Content), []byte(body.Title), lxmf.MidFields(deliveryMid(del, st.LXMF.Hash())), 0, opts)
+	mid, err := st.deliveryMid(del)
+	if err != nil {
+		return "", fmt.Errorf("lxmf: message id: %w", err)
+	}
+	m, _, err := st.LXMF.SendWith(ctx, dest, []byte(body.Content), []byte(body.Title), lxmf.MidFields(mid), 0, opts)
 	if err != nil {
 		if m != nil {
 			return hex.EncodeToString(m.Hash[:]), err
@@ -359,31 +375,25 @@ func (st *Stack) Deliver(ctx context.Context, del database.MessageDelivery) (str
 
 // deliveryMid is the message id a ledger row's LXMF message carries
 // (contract C2): an intent's own id, so every attempt of it is one message;
-// for a row of no intent, a UUIDv7 made from the row (its creation time,
-// and this node's LXMF hash and the row id hashed for the rest), so the
-// worker's retries of the row, each a new LXMF message, are one message too.
-func deliveryMid(del database.MessageDelivery, self [lxmf.DestLen]byte) [16]byte {
+// for a row of no intent, the UUIDv7 the row was given once and keeps (r40
+// review, decision 2), so the worker's retries of the row, each a new LXMF
+// message, are one message too. A stack without a database (tests) mints one
+// per send.
+func (st *Stack) deliveryMid(del database.MessageDelivery) ([16]byte, error) {
 	if del.IntentID != "" {
 		if mid, err := lxmf.ParseMid(del.IntentID); err == nil {
-			return mid
+			return mid, nil
 		}
 	}
-	var mid [16]byte
-	h := sha256.New()
-	h.Write([]byte(lxmf.MidType + " delivery "))
-	h.Write(self[:])
-	_ = binary.Write(h, binary.BigEndian, del.ID)
-	copy(mid[:], h.Sum(nil))
-	var ms uint64
-	if t, err := time.Parse("2006-01-02 15:04:05", del.CreatedAt); err == nil {
-		ms = uint64(t.UnixMilli())
+	if st.cfg.DB == nil || del.ID == 0 {
+		u, err := uuid.NewV7()
+		return u, err
 	}
-	for i := 0; i < 6; i++ {
-		mid[i] = byte(ms >> (40 - 8*i))
+	text, err := st.cfg.DB.EnsureDeliveryMid(del.ID)
+	if err != nil {
+		return [16]byte{}, err
 	}
-	mid[6] = 0x70 | mid[6]&0x0F
-	mid[8] = 0x80 | mid[8]&0x3F
-	return mid
+	return lxmf.ParseMid(text)
 }
 
 // LXMFBody is the JSON payload of a class-lxmf ledger row. Timestamp, in

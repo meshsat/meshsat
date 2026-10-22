@@ -1865,11 +1865,20 @@ var migrations = []string{
 		PRIMARY KEY (origin, mid)
 	);
 	CREATE INDEX IF NOT EXISTS idx_lxmf_mids_received ON lxmf_mids(received_at);`,
+
+	// v81: the LXMF message id of a ledger row that is not a delivery intent's
+	// attempt (r40 review, decision 2): a UUIDv7 assigned once and kept, so every
+	// retry and route of the row's message carries the same id. Rows from before
+	// get theirs once, in postMigration; a later row at its first send
+	// (EnsureDeliveryMid). An intent's attempts carry the intent id. [MESHSAT-1641]
+	`ALTER TABLE message_deliveries ADD COLUMN mid TEXT NOT NULL DEFAULT '';`,
 }
 
 // postMigration is what a migration needs to know that its SQL cannot see:
 // the version the database was at when this start began.
 var postMigration = map[int]func(db *DB, from int) error{
+	// v81: every LXMF row of no intent gets its mid once. [MESHSAT-1641]
+	81: func(db *DB, from int) error { return db.backfillDeliveryMids() },
 	// v79: a ledger whose tables (v62) were made in this same start has no
 	// history a prune could have lost. [MESHSAT-1584]
 	79: func(db *DB, from int) error {
