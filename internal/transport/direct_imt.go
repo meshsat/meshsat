@@ -47,6 +47,7 @@ type DirectIMTTransport struct {
 	connected bool
 	imei      string
 	hwVersion string
+	fwVersion string // from GET firmware, the primary slot; "" until read [MESHSAT-1630]
 	serial    string
 
 	// Signal state
@@ -314,6 +315,12 @@ func (t *DirectIMTTransport) connect() error {
 		t.imei = info.IMEI
 		t.hwVersion = info.HWVersion
 		t.serial = info.SerialNumber
+		if fw, ferr := t.conn.jsprGetFirmware("primary"); ferr != nil {
+			log.Warn().Err(ferr).Msg("imt: failed to read the firmware version")
+		} else {
+			t.fwVersion = fw.Version.String()
+			log.Info().Str("firmware", t.fwVersion).Str("slot", fw.Slot).Msg("imt: firmware")
+		}
 		log.Info().
 			Str("imei", info.IMEI).
 			Str("serial", info.SerialNumber).
@@ -600,11 +607,16 @@ func (t *DirectIMTTransport) GetSystemTime(ctx context.Context) (*IridiumTime, e
 	return nil, fmt.Errorf("imt: system time not available (JSPR protocol)")
 }
 
-// GetFirmwareVersion returns the cached hardware version from JSPR status.
+// GetFirmwareVersion returns the modem's firmware version, read at connect
+// with GET firmware (primary slot). It returned the hardware version from
+// hwInfo, which names no firmware. [MESHSAT-1630]
 func (t *DirectIMTTransport) GetFirmwareVersion(ctx context.Context) (string, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return t.hwVersion, nil
+	if t.fwVersion == "" {
+		return "", fmt.Errorf("imt: firmware version not read")
+	}
+	return t.fwVersion, nil
 }
 
 // Sleep is not supported on IMT — the 9704 has no sleep pin interface.

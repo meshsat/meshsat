@@ -893,7 +893,7 @@ func (c *jsprConn) jsprBegin() error {
 	return nil
 }
 
-// jsprGetHWInfo queries hardware info (IMEI, serial, firmware, board temp).
+// jsprGetHWInfo queries hardware info (IMEI, serial, hardware version, board temp).
 func (c *jsprConn) jsprGetHWInfo() (*jsprHWInfo, error) {
 	resp, err := c.sendRequest("GET", "hwInfo", struct{}{})
 	if err != nil {
@@ -908,6 +908,28 @@ func (c *jsprConn) jsprGetHWInfo() (*jsprHWInfo, error) {
 	}
 	return &info, nil
 }
+
+// jsprGetFirmware reads the firmware of a boot slot ("primary" or "fallback"),
+// as the official C library's rbGetFirmwareVersion does with the primary slot:
+// GET firmware {"slot": "primary"}. hwInfo carries only the hardware version.
+// [MESHSAT-1630]
+func (c *jsprConn) jsprGetFirmware(slot string) (*jsprFirmwareResponse, error) {
+	resp, err := c.sendRequest("GET", "firmware", jsprFirmwareGet{Slot: slot})
+	if err != nil {
+		return nil, err
+	}
+	if resp.Code != jsprCodeOK {
+		return nil, fmt.Errorf("firmware returned code %d", resp.Code)
+	}
+	var fw jsprFirmwareResponse
+	if err := json.Unmarshal(resp.JSON, &fw); err != nil {
+		return nil, err
+	}
+	return &fw, nil
+}
+
+// String is the version as the official C library prints it: vMAJOR.MINOR.PATCH.
+func (v jsprAPIVersion) String() string { return fmt.Sprintf("v%d.%d.%d", v.Major, v.Minor, v.Patch) }
 
 // jsprGetSignal queries constellation/signal state.
 // Uses a 2-second timeout matching the official C library's 1-second timeout
