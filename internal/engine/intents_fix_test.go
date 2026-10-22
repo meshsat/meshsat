@@ -137,6 +137,15 @@ func (h *intentHarness) useLXMF(p *lxmfPair) {
 func TestIntentFix_FreePathDeliversAndTwinsBothArrive(t *testing.T) {
 	h := newIntentHarness(t)
 	p := newLXMFPair(t, []string{"lora_rns"}, []string{"lora_rns"}, "lora_rns", "iridium_0")
+	var midMu sync.Mutex
+	mids := map[string]bool{}
+	p.onMessage = func(m *lxmf.Message) {
+		if mid, ok := lxmf.MidOf(m.Fields); ok {
+			midMu.Lock()
+			mids[lxmf.FormatMid(mid)] = true
+			midMu.Unlock()
+		}
+	}
 	h.useLXMF(p)
 	c := h.contact(directory.Address{Kind: directory.KindReticulum, Value: p.remoteRouter.HashHex()})
 	a := h.submit(c, "twice on purpose", directory.StrategyPrimaryOnly)
@@ -158,6 +167,12 @@ func TestIntentFix_FreePathDeliversAndTwinsBothArrive(t *testing.T) {
 	if n := p.received.Load(); n != 2 {
 		t.Fatalf("the receiver got %d messages; want both", n)
 	}
+	// Each carries its intent's id as the LXMF mid (contract C2). [MESHSAT-1641]
+	midMu.Lock()
+	if len(mids) != 2 || !mids[a] || !mids[b] {
+		t.Fatalf("mids %v; want the intents %s and %s", mids, a, b)
+	}
+	midMu.Unlock()
 	if ha, hb := h.snap(a).Transmissions[0].CorrValue, h.snap(b).Transmissions[0].CorrValue; ha == hb || ha == "" {
 		t.Fatalf("hashes %q %q; want two", ha, hb)
 	}

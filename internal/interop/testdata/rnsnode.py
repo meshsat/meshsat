@@ -21,7 +21,8 @@ Commands (JSON objects):
   {"cmd":"link","dest":HEX}                open an RNS.Link to dest (must be known)
   {"cmd":"link_send","link":HEX,"data":TEXT}  send data on a link, report proof
   {"cmd":"link_close","link":HEX}
-  {"cmd":"send_lxm","dest":HEX,"content":TEXT,"title":TEXT,"method":"opportunistic|direct|auto"}
+  {"cmd":"send_lxm","dest":HEX,"content":TEXT,"title":TEXT,"method":"opportunistic|direct|auto","fields_hex":HEX}
+      fields_hex, optional: the message's fields map as msgpack; lxm_received reports it the same way
   {"cmd":"send_packet","dest":HEX,"data":TEXT}  single encrypted packet to a SINGLE dest, waits for proof
   {"cmd":"set_keepalive","link":HEX,"seconds":N}
   {"cmd":"status"}
@@ -34,6 +35,7 @@ Events: {"event":"ready","identity":HEX,"delivery":HEX,"transport_id":HEX},
 import argparse, json, os, sys, threading, time
 
 import RNS
+import RNS.vendor.umsgpack as umsgpack
 import LXMF
 from LXMF import LXStamper
 
@@ -111,7 +113,7 @@ def main():
         emit(event="lxm_received", hash=message.hash.hex(), source=message.source_hash.hex(),
              content=message.content.decode("utf-8", "replace"), title=message.title.decode("utf-8", "replace"),
              signature_validated=bool(message.signature_validated), stamp_valid=bool(getattr(message, "stamp_valid", False)),
-             method=str(message.method))
+             method=str(message.method), fields_hex=umsgpack.packb(message.fields or {}).hex())
 
     router.register_delivery_callback(on_lxm)
 
@@ -235,8 +237,9 @@ def main():
                         method = LXMF.LXMessage.DIRECT
                 else:
                     method = LXMF.LXMessage.DIRECT if m == "direct" else LXMF.LXMessage.OPPORTUNISTIC
+                fields = umsgpack.unpackb(bytes.fromhex(cmd["fields_hex"])) if cmd.get("fields_hex") else None
                 lxm = LXMF.LXMessage(dest, delivery, cmd.get("content", "").encode("utf-8"),
-                                     title=cmd.get("title", "").encode("utf-8"), desired_method=method)
+                                     title=cmd.get("title", "").encode("utf-8"), fields=fields, desired_method=method)
                 lxm.register_delivery_callback(lambda m: emit(event="lxm_delivered", hash=m.hash.hex()))
                 lxm.register_failed_callback(lambda m: emit(event="lxm_failed", hash=m.hash.hex(), state=m.state))
                 router.handle_outbound(lxm)

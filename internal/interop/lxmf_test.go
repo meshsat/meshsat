@@ -3,7 +3,10 @@ package interop
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -195,5 +198,57 @@ func TestInteropLXMFResourceBothWays(t *testing.T) {
 	rcv := p.wait("lxm_received", nil, 30*time.Second)
 	if rcv["hash"] != hex.EncodeToString(m.Hash[:]) || rcv["signature_validated"] != true || rcv["content"] != big2 {
 		t.Fatalf("python got hash %v valid %v len %d", rcv["hash"], rcv["signature_validated"], len(rcv["content"].(string)))
+	}
+}
+
+// The mid field (contract C2) crosses upstream LXMF both ways byte for byte:
+// stock LXMF keeps the fixture's fields map as sent and the bridge reads
+// the mid from what Python sent. [MESHSAT-1641]
+func TestInteropLXMFMidFieldBothWays(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "hembfixtures", "testdata", "v1", "lxmf_mid_field.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fx struct {
+		FieldsHex string `json:"fields_msgpack_hex"`
+		Mid       string `json:"mid"`
+	}
+	if err := json.Unmarshal(raw, &fx); err != nil {
+		t.Fatal(err)
+	}
+	mid, err := lxmf.ParseMid(fx.Mid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	b, r, got := newLXMFBridge(t, ctx, 0)
+	p := startPeer(t, peerOpts{name: "A", connect: fmt.Sprintf("127.0.0.1:%d", b.port)})
+	waitFor(t, "tcp peer", 10*time.Second, func() bool { return b.tcp.PeerCount() > 0 })
+	p.send(event{"cmd": "announce"})
+	waitFor(t, "bridge learns python delivery dest", 10*time.Second, func() bool { return b.node.Paths().Hops(h16(p.Delivery)) == 1 })
+	if err := r.Announce(); err != nil {
+		t.Fatal(err)
+	}
+	dh := r.HashHex()
+	p.wait("announce", func(e event) bool { return e["dest"] == dh }, 10*time.Second)
+
+	p.send(event{"cmd": "send_lxm", "dest": dh, "content": "with an id", "method": "opportunistic", "fields_hex": fx.FieldsHex})
+	p.wait("lxm_sent", nil, 10*time.Second)
+	select {
+	case m := <-got:
+		if got, ok := lxmf.MidOf(m.Fields); !ok || got != mid || !m.SignatureValid {
+			t.Fatalf("bridge read mid %s %v from %s", lxmf.FormatMid(got), ok, hex.EncodeToString(lxmf.Pack(m.Fields)))
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("bridge did not receive the LXMF message")
+	}
+
+	if _, _, err := r.Send(ctx, h16(p.Delivery), []byte("with an id"), nil, lxmf.MidFields(mid), 0); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	rcv := p.wait("lxm_received", nil, 15*time.Second)
+	if rcv["fields_hex"] != fx.FieldsHex || rcv["signature_validated"] != true {
+		t.Fatalf("python got fields %v, want %s", rcv["fields_hex"], fx.FieldsHex)
 	}
 }

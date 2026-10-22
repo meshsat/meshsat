@@ -1853,6 +1853,18 @@ var migrations = []string{
 	);
 	INSERT OR IGNORE INTO delivery_history_coverage (id, intents_known_from, provenance, recorded_at)
 		VALUES (1, datetime('now', '-1 day'), 'upgraded', datetime('now'));`,
+
+	// v80: the LXMF message ids taken in (HeMB-NG contract C2): an inbound LXMF message
+	// that carries a meshsat.mid/1 id is kept once per (origin, mid), across restarts and
+	// whatever its LXMF hash; origin is the sender's LXMF source hash. Rows go after
+	// LXMFMidRetention. [MESHSAT-1641]
+	`CREATE TABLE IF NOT EXISTS lxmf_mids (
+		origin      TEXT NOT NULL,
+		mid         TEXT NOT NULL,
+		received_at INTEGER NOT NULL,
+		PRIMARY KEY (origin, mid)
+	);
+	CREATE INDEX IF NOT EXISTS idx_lxmf_mids_received ON lxmf_mids(received_at);`,
 }
 
 // postMigration is what a migration needs to know that its SQL cannot see:

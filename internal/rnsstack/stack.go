@@ -7,6 +7,8 @@ package rnsstack
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -249,7 +251,20 @@ func (st *Stack) announcer(ctx context.Context) {
 
 // storeInbound files an inbound LXMF message in the messages table so the
 // existing inbox shows it. From/to are "lxmf:<hash>", transport "reticulum".
+// A message whose sender gave it a mid that was taken in before (a retry
+// with a new LXMF hash, or the same message over another route) is dropped,
+// also after a restart. [MESHSAT-1641]
 func (st *Stack) storeInbound(m *lxmf.Message) {
+	if mid, ok := lxmf.MidOf(m.Fields); ok && st.cfg.DB != nil {
+		first, err := st.cfg.DB.ClaimLXMFMid(hex.EncodeToString(m.Source[:]), lxmf.FormatMid(mid), time.Now())
+		if err != nil {
+			log.Warn().Err(err).Msg("lxmf: record message id failed")
+		} else if !first {
+			log.Info().Str("source", hex.EncodeToString(m.Source[:])).Str("mid", lxmf.FormatMid(mid)).
+				Msg("lxmf: repeat of a message already taken in, dropped")
+			return
+		}
+	}
 	text := string(m.Content)
 	if len(m.Title) > 0 {
 		text = string(m.Title) + "\n" + text
@@ -312,7 +327,7 @@ func (st *Stack) Deliver(ctx context.Context, del database.MessageDelivery) (str
 	if lp := st.late; lp != nil && del.IntentID != "" {
 		lp.watch(&opts, del.ID, del.ClaimGen)
 	}
-	m, _, err := st.LXMF.SendWith(ctx, dest, []byte(body.Content), []byte(body.Title), lxmf.MapOf(), 0, opts)
+	m, _, err := st.LXMF.SendWith(ctx, dest, []byte(body.Content), []byte(body.Title), lxmf.MidFields(deliveryMid(del, st.LXMF.Hash())), 0, opts)
 	if err != nil {
 		if m != nil {
 			return hex.EncodeToString(m.Hash[:]), err
@@ -340,6 +355,35 @@ func (st *Stack) Deliver(ctx context.Context, del database.MessageDelivery) (str
 		}
 	}
 	return hex.EncodeToString(m.Hash[:]), nil
+}
+
+// deliveryMid is the message id a ledger row's LXMF message carries
+// (contract C2): an intent's own id, so every attempt of it is one message;
+// for a row of no intent, a UUIDv7 made from the row (its creation time,
+// and this node's LXMF hash and the row id hashed for the rest), so the
+// worker's retries of the row, each a new LXMF message, are one message too.
+func deliveryMid(del database.MessageDelivery, self [lxmf.DestLen]byte) [16]byte {
+	if del.IntentID != "" {
+		if mid, err := lxmf.ParseMid(del.IntentID); err == nil {
+			return mid
+		}
+	}
+	var mid [16]byte
+	h := sha256.New()
+	h.Write([]byte(lxmf.MidType + " delivery "))
+	h.Write(self[:])
+	_ = binary.Write(h, binary.BigEndian, del.ID)
+	copy(mid[:], h.Sum(nil))
+	var ms uint64
+	if t, err := time.Parse("2006-01-02 15:04:05", del.CreatedAt); err == nil {
+		ms = uint64(t.UnixMilli())
+	}
+	for i := 0; i < 6; i++ {
+		mid[i] = byte(ms >> (40 - 8*i))
+	}
+	mid[6] = 0x70 | mid[6]&0x0F
+	mid[8] = 0x80 | mid[8]&0x3F
+	return mid
 }
 
 // LXMFBody is the JSON payload of a class-lxmf ledger row. Timestamp, in

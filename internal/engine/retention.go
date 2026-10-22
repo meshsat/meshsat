@@ -51,6 +51,13 @@ func prune(db *database.DB, days int) {
 		log.Info().Int64("deleted", n).Msg("delivery intents pruned")
 	}
 
+	// LXMF message ids past their own horizon, whatever the retention days. [MESHSAT-1641]
+	if n, err := db.PruneLXMFMids(time.Now()); err != nil {
+		log.Error().Err(err).Msg("lxmf mid prune failed")
+	} else if n > 0 {
+		log.Info().Int64("deleted", n).Msg("lxmf mids pruned")
+	}
+
 	// Prune sent/expired dead letters (same retention window)
 	dlqDeleted, err := db.PruneDeadLetters(days)
 	if err != nil {
