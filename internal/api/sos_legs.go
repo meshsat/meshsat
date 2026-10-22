@@ -786,7 +786,12 @@ func (s *Server) sosFrame(run sosRun) (frame []byte, v2 bool) {
 			return hubreporter.EncodeSatSOSStart(bridge, sosFrameDevice, lat, lon, words, started, id, run.ID), true
 		}
 	}
-	return hubreporter.EncodeSatSOS(bridge, sosFrameDevice, lat, lon, sosFrameMessage(run.Text, known), started), false
+	// The 0x02 is held to one SMS too: with the words at their longest it
+	// passed 120 bytes once the bridge id was over 31 bytes, and the cellular
+	// link cut it. [HeMB-NG C10 notes]
+	fixed := len(hubreporter.EncodeSatSOS(bridge, sosFrameDevice, lat, lon, "", started))
+	words := sosFrameMessageMaxBytes(run.Text, known, min(sosFrameMessageMax, sosFrameSMSMax-fixed))
+	return hubreporter.EncodeSatSOS(bridge, sosFrameDevice, lat, lon, words, started), false
 }
 
 // sosCancelFrame is the 0x08 cancel of the run (C10); nil without its id.

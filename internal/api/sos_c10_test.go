@@ -568,3 +568,22 @@ func (s *Server) sosCancelLoopRunning(id int64) bool {
 	defer s.sos.mu.Unlock()
 	return s.sos.cancelLoops[id]
 }
+
+// The 0x02 (a Hub without sos_v2) fits one SMS as base64 too: with its words at their longest
+// it passed 120 bytes once the bridge id was over 31 bytes, and the cellular link cut it. Its
+// words are cut, never the identity. [HeMB-NG C10 notes]
+func TestSOSC10_TheLegacyFrameFitsOneSMS(t *testing.T) {
+	s := newTestServerWithDB(t)
+	for _, bridge := range []string{"msa-flaneur", strings.Repeat("b", 31), strings.Repeat("b", 32), strings.Repeat("b", 63)} {
+		s.SetHubBridgeID(bridge)
+		run := sosRun{ID: 1792330000123, Text: "SOS: Κυριάκος Παπαδόπουλος needs help right now on the north face of the ridge"}
+		frame, v2 := s.sosFrame(run)
+		if v2 || len(frame) > sosFrameSMSMax || frame[3] != hubreporter.SatMsgSOS {
+			t.Fatalf("%d-byte bridge id: v2 %v, %d bytes", len(bridge), v2, len(frame))
+		}
+		gotBridge, _, _, _, words, _, err := hubreporter.DecodeSatSOS(frame[4:])
+		if err != nil || gotBridge != bridge || words == "" || !utf8Valid(words) || !strings.HasPrefix(run.Text+", position unknown", words) {
+			t.Fatalf("%d-byte bridge id: bridge %q words %q %v", len(bridge), gotBridge, words, err)
+		}
+	}
+}
