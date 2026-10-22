@@ -98,9 +98,6 @@ func (n *Node) SendDataPrepared(dest [HashLen]byte, plaintext []byte, wantReceip
 	if k == nil || k.Identity == nil {
 		return nil, ErrUnknownDestination
 	}
-	if len(plaintext) > reticulum.EncryptedMDU {
-		return nil, fmt.Errorf("rns: %d bytes exceed the single-packet limit of %d", len(plaintext), reticulum.EncryptedMDU)
-	}
 	var ratchet *ecdh.PublicKey
 	if len(k.Ratchet) == reticulum.RatchetKeyLen && n.now().Before(k.RatchetAt.Add(30*24*time.Hour)) {
 		ratchet, _ = ecdh.X25519().NewPublicKey(k.Ratchet)
@@ -112,6 +109,14 @@ func (n *Node) SendDataPrepared(dest [HashLen]byte, plaintext []byte, wantReceip
 	h := &reticulum.Header{HeaderType: reticulum.HeaderType1, DestType: reticulum.DestSingle, PacketType: reticulum.PacketData,
 		DestHash: dest, Context: reticulum.ContextNone, Data: ct}
 	raw := h.Marshal()
+	// The packet as sent must fit the MTU, as upstream RNS checks it
+	// (Packet.pack). EncryptedMDU (383) is the plaintext that always fits;
+	// LXMF counts on the padding's slack above it for a single-packet
+	// message of up to 295 content bytes (391 of plaintext), so a limit on
+	// the plaintext refused what stock LXMF sends. [MESHSAT-1641, r40 review]
+	if len(raw) > reticulum.MTU {
+		return nil, fmt.Errorf("rns: a %d-byte packet (%d bytes of plaintext) exceeds the MTU of %d", len(raw), len(plaintext), reticulum.MTU)
+	}
 	var r *Receipt
 	if wantReceipt {
 		hops := n.paths.Hops(dest)

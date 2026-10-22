@@ -251,4 +251,24 @@ func TestInteropLXMFMidFieldBothWays(t *testing.T) {
 	if rcv["fields_hex"] != fx.FieldsHex || rcv["signature_validated"] != true {
 		t.Fatalf("python got fields %v, want %s", rcv["fields_hex"], fx.FieldsHex)
 	}
+
+	// The boundary with the mid (r40 review, decision 4): 259 bytes still go
+	// as one packet, 260 over a link, and stock LXMF takes both.
+	for _, c := range []struct {
+		n    int
+		want lxmf.Method
+	}{{259, lxmf.Opportunistic}, {260, lxmf.Direct}} {
+		body := strings.Repeat("b", c.n)
+		_, res, err := r.Send(ctx, h16(p.Delivery), []byte(body), nil, lxmf.MidFields(mid), 0)
+		if err != nil {
+			t.Fatalf("%d bytes: %v", c.n, err)
+		}
+		if res.Method != c.want {
+			t.Fatalf("%d bytes went %v, want %v", c.n, res.Method, c.want)
+		}
+		got := p.wait("lxm_received", func(e event) bool { return e["content"] == body }, 20*time.Second)
+		if got["fields_hex"] != fx.FieldsHex {
+			t.Fatalf("%d bytes: fields %v", c.n, got["fields_hex"])
+		}
+	}
 }

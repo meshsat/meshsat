@@ -92,3 +92,30 @@ func TestParseMid(t *testing.T) {
 		t.Fatalf("%v %s", err, lxmf.FormatMid(m))
 	}
 }
+
+// The mid's room at the packet limits (r40 review, decision 4): with it, 259
+// bytes of content fill a single packet and 260 do not; 283 fill a link
+// packet and 284 do not. Without it the limits are 295 and 319.
+func TestMidRoomAtThePacketLimits(t *testing.T) {
+	var mid [16]byte
+	size := func(n int, fields lxmf.Value) int {
+		m := &lxmf.Message{Content: make([]byte, n), Fields: fields}
+		return m.ContentSize()
+	}
+	for _, c := range []struct {
+		n, limit int
+		fields   lxmf.Value
+		fits     bool
+	}{
+		{259, lxmf.PacketMaxContent, lxmf.MidFields(mid), true},
+		{260, lxmf.PacketMaxContent, lxmf.MidFields(mid), false},
+		{283, lxmf.LinkMaxContent, lxmf.MidFields(mid), true},
+		{284, lxmf.LinkMaxContent, lxmf.MidFields(mid), false},
+		{295, lxmf.PacketMaxContent, lxmf.MapOf(), true},
+		{296, lxmf.PacketMaxContent, lxmf.MapOf(), false},
+	} {
+		if got := size(c.n, c.fields) <= c.limit; got != c.fits {
+			t.Fatalf("%d bytes (content size %d) within %d: %v, want %v", c.n, size(c.n, c.fields), c.limit, got, c.fits)
+		}
+	}
+}
