@@ -59,15 +59,15 @@ func TestCellIntent_EachAnswer(t *testing.T) {
 		t.Fatalf("submits %+v", s)
 	}
 	for _, tc := range []struct {
-		name, dest    string
-		class, reason string
-		retry, spend  bool
+		name, dest           string
+		class, reason        string
+		retry, spend, bearer bool
 	}{
-		{"not on the cell", "2002", IntentNotSent, "not_sent", true, false},
-		{"refused", "4004", IntentNotSent, "not_sent", true, true},
+		{"not on the cell", "2002", IntentNotSent, "not_sent", true, false, false},
+		{"refused", "4004", IntentNotSent, "not_sent", true, true, true},
 	} {
 		o := r.gw.IntentSend(context.Background(), IntentSend{Destination: tc.dest, Text: "x", CorrValue: "c2"})
-		if o.Class != tc.class || o.Reason != tc.reason || o.Retryable != tc.retry || o.ConsumeRetry != tc.spend || o.Receipt != nil {
+		if o.Class != tc.class || o.Reason != tc.reason || o.Retryable != tc.retry || o.ConsumeRetry != tc.spend || o.Receipt != nil || o.BearerRefused != tc.bearer {
 			t.Fatalf("%s: %+v", tc.name, o)
 		}
 	}

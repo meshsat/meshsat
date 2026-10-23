@@ -130,7 +130,7 @@ func (g *TetraGateway) IntentSend(ctx context.Context, s IntentSend) IntentOutco
 	case errors.Is(err, transport.ErrNoRecipient):
 		return IntentOutcome{Class: IntentNotSent, Reason: "skipped_unsupported", Detail: err.Error()}
 	case errors.Is(err, transport.ErrNotSubmitted):
-		return IntentOutcome{Class: IntentNotSent, Retryable: true, ConsumeRetry: true, Reason: "not_sent", Detail: err.Error()}
+		return IntentOutcome{Class: IntentNotSent, Retryable: true, ConsumeRetry: true, Reason: "not_sent", Detail: err.Error(), BearerRefused: true}
 	}
 	// A timeout or a reply that did not come: the radio may have sent it.
 	return IntentOutcome{Class: IntentUnknown, Detail: "may have been sent: " + err.Error()}

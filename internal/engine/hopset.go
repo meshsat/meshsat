@@ -323,6 +323,10 @@ type HopSetManager struct {
 	links     map[string]*hopLink
 	refreshed time.Time
 	seq       uint64 // the arrival order of signs and state changes
+	// gen counts the switches to off; flushMu is held for reading while
+	// outputs run and for writing while the switch moves (R49-S1).
+	gen     uint64
+	flushMu sync.RWMutex
 }
 
 // NewHopSetManager makes a hop set over the links list returns, in mode.
@@ -346,17 +350,22 @@ func (m *HopSetManager) Mode() HopMode {
 // SetMode moves the switch and returns where it was. Turning it off drops
 // every link's state, so watching or gating starts again from nothing;
 // between watch and on the state carries over, so what was watched is what
-// gates.
+// gates. It waits for the outputs already running (audits, events), and
+// turning it off cancels every output prepared before it, so nothing of the
+// hop set's is audited or published once off has returned (R49-S1).
 func (m *HopSetManager) SetMode(mode HopMode) (HopMode, error) {
 	if _, ok := ParseHopMode(string(mode)); !ok {
 		return "", fmt.Errorf("media hopping mode %q: want off, watch or on", mode)
 	}
+	m.flushMu.Lock()
+	defer m.flushMu.Unlock()
 	m.mu.Lock()
 	prev := m.hopMode
 	m.hopMode = mode
 	if mode == HopOff {
 		m.links = map[string]*hopLink{}
 		m.refreshed = time.Time{}
+		m.gen++
 	}
 	m.mu.Unlock()
 	return prev, nil
@@ -438,8 +447,9 @@ func (m *HopSetManager) Start(ctx context.Context) {
 			if m.hopMode != HopOff {
 				out = m.evaluateLocked(m.now())
 			}
+			gen := m.gen
 			m.mu.Unlock()
-			out.flush()
+			m.flush(out, gen)
 		}
 	}
 }
@@ -447,8 +457,23 @@ func (m *HopSetManager) Start(ctx context.Context) {
 // hopOut is what an evaluation emits, run after the lock is released.
 type hopOut []func()
 
-func (o hopOut) flush() {
-	for _, f := range o {
+// flush runs what an evaluation prepared, unless the switch went off since
+// (gen moved): outputs run under flushMu's read side, and SetMode takes the
+// write side, so a switch to off waits for the outputs already running and
+// none prepared before it runs after it returns (R49-S1).
+func (m *HopSetManager) flush(out hopOut, gen uint64) {
+	if len(out) == 0 {
+		return
+	}
+	m.flushMu.RLock()
+	defer m.flushMu.RUnlock()
+	m.mu.Lock()
+	stale := gen != m.gen
+	m.mu.Unlock()
+	if stale {
+		return
+	}
+	for _, f := range out {
 		f()
 	}
 }
@@ -472,8 +497,9 @@ func (m *HopSetManager) Negative(ifaceID, source, key, reason string) {
 	m.seq++
 	l.negatives = append(l.negatives, HopSign{Source: source, Key: key, Reason: reason, At: now, seq: m.seq})
 	out := m.evaluateLocked(now)
+	gen := m.gen
 	m.mu.Unlock()
-	out.flush()
+	m.flush(out, gen)
 }
 
 // Positive implements HopSigns.
@@ -505,8 +531,9 @@ func (m *HopSetManager) Positive(ifaceID, source string) {
 		l.rx = l.rx[cut:]
 	}
 	out := m.evaluateLocked(now)
+	gen := m.gen
 	m.mu.Unlock()
-	out.flush()
+	m.flush(out, gen)
 }
 
 // PaidAttempt implements HopSigns: a send on a paid link while a free link
@@ -536,8 +563,9 @@ func (m *HopSetManager) PaidAttempt(ifaceID string) {
 		detail := fmt.Sprintf("free bearer %s excluded (%s) while a paid attempt goes out on %s", f.id, f.reason, ifaceID)
 		out = append(out, m.emitLocked("hopset_alarm", "HOPSET_ALARM", f, detail)...)
 	}
+	gen := m.gen
 	m.mu.Unlock()
-	out.flush()
+	m.flush(out, gen)
 }
 
 // RouteExcluded is the hop set's own decision, the gate while the switch is
@@ -579,8 +607,9 @@ func (m *HopSetManager) routeExcluded(interfaceID string, deafOtherwise bool) (b
 	case !usable(l):
 		ex, why = true, string(l.state)+": "+l.reason
 	}
+	gen := m.gen
 	m.mu.Unlock()
-	out.flush()
+	m.flush(out, gen)
 	return ex, why
 }
 
@@ -611,8 +640,9 @@ func (m *HopSetManager) Status() HopSetStatus {
 		}
 		st.Links = append(st.Links, ls)
 	}
+	gen := m.gen
 	m.mu.Unlock()
-	out.flush()
+	m.flush(out, gen)
 	return st
 }
 

@@ -77,19 +77,20 @@ func TestSMSIntent_Outcomes(t *testing.T) {
 		class   string
 		charged bool
 		reason  string
+		bearer  bool
 	}{
-		{"accepted", transport.SMSSubmit{Phase: transport.SMSAccepted, Ref: 42}, nil, IntentAccepted, true, ""},
-		{"refused", transport.SMSSubmit{Phase: transport.SMSRefused}, errTest("+CMS ERROR: 500"), IntentNotSent, false, "not_sent"},
-		{"handed_over", transport.SMSSubmit{Phase: transport.SMSHandedOver}, errTest("timeout"), IntentUnknown, false, ""},
-		{"offline", transport.SMSSubmit{}, transport.ErrNotConnected, IntentNotSent, false, "skipped_offline"},
-		{"not_sent", transport.SMSSubmit{}, errTest("no prompt"), IntentNotSent, false, "not_sent"},
+		{"accepted", transport.SMSSubmit{Phase: transport.SMSAccepted, Ref: 42}, nil, IntentAccepted, true, "", false},
+		{"refused", transport.SMSSubmit{Phase: transport.SMSRefused}, errTest("+CMS ERROR: 500"), IntentNotSent, false, "not_sent", false},
+		{"handed_over", transport.SMSSubmit{Phase: transport.SMSHandedOver}, errTest("timeout"), IntentUnknown, false, "", false},
+		{"offline", transport.SMSSubmit{}, transport.ErrNotConnected, IntentNotSent, false, "skipped_offline", false},
+		{"not_sent", transport.SMSSubmit{}, errTest("no prompt"), IntentNotSent, false, "not_sent", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cell := &submitCell{fakeCellTransport: newFakeCellTransport(), res: tc.res, err: tc.err}
 			gw, db := smsIntentGateway(t, cell, CellularConfig{})
 			o := gw.IntentSend(context.Background(), IntentSend{Destination: "+31612345678", Text: "\x01QUJD", Encrypted: true,
 				PlainText: "the words", CorrValue: "abc"})
-			if o.Class != tc.class || o.Charged != tc.charged || o.Reason != tc.reason {
+			if o.Class != tc.class || o.Charged != tc.charged || o.Reason != tc.reason || o.BearerRefused != tc.bearer {
 				t.Fatalf("outcome %+v", o)
 			}
 			if tc.charged && (o.ChargedUnits != 1 || o.ChargeConfirmed || o.AcceptedBy != "carrier") {

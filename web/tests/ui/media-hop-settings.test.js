@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'vitest'
 import MediaHopSettings from '@/components/MediaHopSettings.vue'
-import { bodyText, flush, json, mountRoot, serve, useHarness } from './harness.js'
+import { bodyText, flush, json, mountRoot, serve, tick, useHarness } from './harness.js'
 
 useHarness()
 
@@ -63,6 +63,8 @@ test('save_puts_the_mode', async () => {
   assert.deepEqual(puts, [{ path: '/api/hopset/mode', body: { mode: 'watch' } }])
   assert.match(document.querySelector('[data-testid="hop-save-msg"]').textContent, /Media hopping is watch now/)
   assert.match(bodyText(), /Watch \(now\)/)
+  assert.equal(document.querySelector('[data-testid="hop-unsaved"]'), null)
+  assert.equal(document.querySelector('[data-testid="hop-cancel"]'), null)
 })
 
 test('watch_shows_each_link_with_its_dwell_and_repeats', async () => {
@@ -83,4 +85,32 @@ test('watch_shows_each_link_with_its_dwell_and_repeats', async () => {
   for (const want of ['15 min', '10 s', '10 min', '60 min']) {
     assert.ok(cfgText.includes(want), `config missing ${want}`)
   }
+})
+
+test('unsaved_mode_survives_status_poll', async () => {
+  let reads = 0
+  serve(async url => {
+    const u = new URL(url, 'http://review.local')
+    if (u.pathname.endsWith('/mode')) reads++
+    return json(u.pathname.endsWith('/mode') ? { mode: 'off' } : hopset('off'))
+  })
+  mountRoot(MediaHopSettings)
+  await flush()
+  const watch = document.querySelector('[data-testid="hop-mode-watch"]')
+  watch.checked = true
+  watch.dispatchEvent(new Event('change', { bubbles: true }))
+  await flush()
+  const before = reads
+  assert.equal(await tick(), 5000)
+  assert.equal(await tick(), 5000)
+  assert.ok(reads >= before + 2, `the status was read ${reads - before} times, want two polls`)
+  assert.equal(document.querySelector('[data-testid="hop-mode-watch"]').checked, true)
+  assert.equal(document.querySelector('[data-testid="hop-mode-off"]').checked, false)
+  assert.equal(document.querySelector('[data-testid="hop-save"]').disabled, false)
+  assert.match(document.querySelector('[data-testid="hop-unsaved"]').textContent, /Not saved yet: still off/)
+  document.querySelector('[data-testid="hop-cancel"]').click()
+  await flush()
+  assert.equal(document.querySelector('[data-testid="hop-mode-off"]').checked, true)
+  assert.equal(document.querySelector('[data-testid="hop-save"]').disabled, true)
+  assert.equal(document.querySelector('[data-testid="hop-unsaved"]'), null)
 })

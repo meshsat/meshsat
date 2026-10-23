@@ -73,19 +73,20 @@ func TestIMTIntent_Outcomes(t *testing.T) {
 		err                  error
 		class, reason        string
 		charged, retry, cons bool
+		bearer               bool
 	}{
-		{"acknowledged", transport.IMTSubmit{Phase: transport.IMTAccepted, Status: "mo_ack_received"}, nil, IntentAccepted, "", true, false, false},
-		{"may have left", transport.IMTSubmit{Phase: transport.IMTUnknown, Status: "message_cancelled_in_transit"}, nil, IntentUnknown, "", false, false, false},
-		{"Go stopped waiting", transport.IMTSubmit{Phase: transport.IMTUnknown}, errors.New("MO helper timeout after 3m0s"), IntentUnknown, "", false, false, false},
-		{"no sky", transport.IMTSubmit{Phase: transport.IMTNotSent, Retry: true, Status: "message_cancelled_pre_transit"}, nil, IntentNotSent, "not_sent", false, true, true},
-		{"invalid subscription", transport.IMTSubmit{Phase: transport.IMTNotSent, Status: "subscription_invalid"}, nil, IntentNotSent, "not_sent", false, false, true},
-		{"modem not connected", transport.IMTSubmit{Phase: transport.IMTNotSent, Retry: true}, fmt.Errorf("imt: %w", transport.ErrNotConnected), IntentNotSent, "skipped_offline", false, true, false},
+		{"acknowledged", transport.IMTSubmit{Phase: transport.IMTAccepted, Status: "mo_ack_received"}, nil, IntentAccepted, "", true, false, false, false},
+		{"may have left", transport.IMTSubmit{Phase: transport.IMTUnknown, Status: "message_cancelled_in_transit"}, nil, IntentUnknown, "", false, false, false, false},
+		{"Go stopped waiting", transport.IMTSubmit{Phase: transport.IMTUnknown}, errors.New("MO helper timeout after 3m0s"), IntentUnknown, "", false, false, false, false},
+		{"no sky", transport.IMTSubmit{Phase: transport.IMTNotSent, Retry: true, Status: "message_cancelled_pre_transit"}, nil, IntentNotSent, "not_sent", false, true, true, true},
+		{"invalid subscription", transport.IMTSubmit{Phase: transport.IMTNotSent, Status: "subscription_invalid"}, nil, IntentNotSent, "not_sent", false, false, true, true},
+		{"modem not connected", transport.IMTSubmit{Phase: transport.IMTNotSent, Retry: true}, fmt.Errorf("imt: %w", transport.ErrNotConnected), IntentNotSent, "skipped_offline", false, true, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			sat := &submitSat{res: tc.res, err: tc.err}
 			gw := imtIntentGateway(sat, imtFar)
 			o := gw.IntentSend(context.Background(), IntentSend{Destination: imtFar, Text: "\x01QUJD", Encrypted: true, PlainText: "hi", CorrValue: "c1"})
-			if o.Class != tc.class || o.Reason != tc.reason || o.Charged != tc.charged || o.Retryable != tc.retry || o.ConsumeRetry != tc.cons {
+			if o.Class != tc.class || o.Reason != tc.reason || o.Charged != tc.charged || o.Retryable != tc.retry || o.ConsumeRetry != tc.cons || o.BearerRefused != tc.bearer {
 				t.Fatalf("%+v", o)
 			}
 			if o.Charged && (o.ChargedUnits != 1 || o.ChargeConfirmed || o.AcceptedBy != "satellite_gateway") {

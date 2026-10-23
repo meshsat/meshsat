@@ -27,9 +27,10 @@ type SendOutcome struct {
 	Reason       string                      // the attempt's reason when not sent (oversize, denied, ...)
 	Evidence     []database.DeliveryEvidence // evidence that came back within the call
 	// BearerRefused: the bearer's own device took the send and refused it
-	// or never sent it (an adapter's ErrNotSubmitted), the one not-sent
-	// outcome that is evidence about the link. LXMF's local, destination
-	// and path failures never set it. [MESHSAT-1650, R47-V3]
+	// or never sent it (an adapter's ErrNotSubmitted, a native adapter's
+	// IntentOutcome.BearerRefused), the one not-sent outcome that is
+	// evidence about the link. LXMF's local, destination and path failures
+	// never set it. [MESHSAT-1650, R47-V3, R49-V1]
 	BearerRefused bool
 }
 

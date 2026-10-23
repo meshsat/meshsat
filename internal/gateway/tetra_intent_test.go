@@ -66,7 +66,7 @@ func TestTetraIntent_RefusedAndNoRadio(t *testing.T) {
 	f.mu.Lock()
 	f.refuse = true
 	f.mu.Unlock()
-	if o := g.IntentSend(context.Background(), IntentSend{Destination: "2000", Text: "x", CorrValue: "c1"}); o.Class != IntentNotSent || !o.Retryable || !o.ConsumeRetry || o.Reason != "not_sent" {
+	if o := g.IntentSend(context.Background(), IntentSend{Destination: "2000", Text: "x", CorrValue: "c1"}); o.Class != IntentNotSent || !o.Retryable || !o.ConsumeRetry || o.Reason != "not_sent" || !o.BearerRefused {
 		t.Fatalf("refused by the radio: %+v", o)
 	}
 	// The radio takes it, then reports it not sent (a collision): it may
@@ -81,7 +81,7 @@ func TestTetraIntent_RefusedAndNoRadio(t *testing.T) {
 		t.Fatalf("reported not sent by the radio: %+v", o)
 	}
 	idle := NewTetraGateway(DefaultTetraConfig(), "tetra_0", func() string { return "" })
-	if o := idle.IntentSend(context.Background(), IntentSend{Destination: "2000", Text: "x", CorrValue: "c2"}); o.Class != IntentNotSent || !o.Retryable || o.Reason != "skipped_offline" {
+	if o := idle.IntentSend(context.Background(), IntentSend{Destination: "2000", Text: "x", CorrValue: "c2"}); o.Class != IntentNotSent || !o.Retryable || o.Reason != "skipped_offline" || o.BearerRefused {
 		t.Fatalf("no radio: %+v", o)
 	}
 }

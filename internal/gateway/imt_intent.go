@@ -140,5 +140,5 @@ func (g *IMTGateway) IntentSend(ctx context.Context, s IntentSend) IntentOutcome
 	}
 	g.errors.Add(1)
 	return IntentOutcome{Class: IntentNotSent, Retryable: res.Retry, ConsumeRetry: true, Reason: "not_sent",
-		Detail: "not sent: " + detail}
+		Detail: "not sent: " + detail, BearerRefused: true}
 }

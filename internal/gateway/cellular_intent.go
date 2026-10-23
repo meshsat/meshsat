@@ -170,6 +170,8 @@ func (g *CellularGateway) IntentSend(ctx context.Context, s IntentSend) IntentOu
 		return IntentOutcome{Class: IntentAccepted, AcceptedBy: "carrier", Charged: true, ChargedUnits: 1,
 			Detail: fmt.Sprintf("accepted by the network, reference %d", res.Ref)}
 	case transport.SMSRefused:
+		// The network's refusal may name the number (an unassigned one),
+		// so it is not the bearer's own refusal. [R49-V1]
 		g.errors.Add(1)
 		history("failed")
 		return IntentOutcome{Class: IntentNotSent, Retryable: true, ConsumeRetry: true, Reason: "not_sent",
@@ -194,5 +196,5 @@ func (g *CellularGateway) IntentSend(ctx context.Context, s IntentSend) IntentOu
 	if errors.Is(err, transport.ErrNotConnected) {
 		return IntentOutcome{Class: IntentNotSent, Retryable: true, Reason: "skipped_offline", Detail: detail}
 	}
-	return IntentOutcome{Class: IntentNotSent, Retryable: true, ConsumeRetry: true, Reason: "not_sent", Detail: detail}
+	return IntentOutcome{Class: IntentNotSent, Retryable: true, ConsumeRetry: true, Reason: "not_sent", Detail: detail, BearerRefused: true}
 }

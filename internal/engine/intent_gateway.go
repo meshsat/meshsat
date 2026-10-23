@@ -251,7 +251,7 @@ func (w *DeliveryWorker) sendIntentGateway(ctx context.Context, del database.Mes
 	}
 	o := ad.IntentSend(ctx, send)
 	out := SendOutcome{Class: o.Class, AcceptedBy: o.AcceptedBy, Retryable: o.Retryable, ConsumeRetry: o.ConsumeRetry,
-		Detail: o.Detail, Reason: o.Reason}
+		Detail: o.Detail, Reason: o.Reason, BearerRefused: o.Class == database.ClassNotSent && o.BearerRefused}
 	if o.Charged && tariff != nil {
 		// Billing is a fact of its own (r3 D8): incurred whatever the outcome.
 		// An estimate is the tariff's own count for this submission, its

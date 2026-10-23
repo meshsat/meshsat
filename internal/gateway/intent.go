@@ -90,6 +90,14 @@ type IntentOutcome struct {
 	ConsumeRetry bool
 	Detail       string
 	Reason       string
+	// BearerRefused (not sent only): the bearer's own device or service
+	// took the send and refused it or could not send it (the radio, the
+	// modem, the satellite session, the subscription), whoever it was for.
+	// It is evidence about the link for the hop set. Never set for a link
+	// that was down, a send refused before the call (size, address), an
+	// answer that names the destination (not on the cell) or a network
+	// refusal that may name it. [MESHSAT-1650, R49-V1]
+	BearerRefused bool
 	// Receipt is an answer that came within the call.
 	Receipt *IntentReceipt
 	// Charged: the provider counts this submission, ChargedUnits of the

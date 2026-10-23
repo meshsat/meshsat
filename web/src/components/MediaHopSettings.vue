@@ -12,7 +12,11 @@ const chosen = ref('off')
 const loadError = ref('')
 const saving = ref(false)
 const saveMsg = ref('')
+// edited: the operator picked a position not saved yet. The refresh never
+// overwrites it; a save or Cancel settles it (R49-S2).
+const edited = ref(false)
 let timer = null
+let stopped = false
 
 const modes = [
   { id: 'off', label: 'Off', text: 'Nothing runs. Messages are routed exactly as before media hopping. This is the default.' },
@@ -27,12 +31,23 @@ async function load() {
   try {
     const [m, s] = await Promise.all([api.get('/hopset/mode'), api.get('/hopset')])
     mode.value = m.mode
-    if (!saving.value && !saveMsg.value) chosen.value = m.mode
+    if (!saving.value && !edited.value) chosen.value = m.mode
     st.value = s
     loadError.value = ''
   } catch (e) {
     loadError.value = e.message
   }
+}
+
+function pick(id) {
+  chosen.value = id
+  edited.value = id !== mode.value
+  saveMsg.value = ''
+}
+
+function cancel() {
+  chosen.value = mode.value
+  edited.value = false
 }
 
 async function save() {
@@ -43,6 +58,8 @@ async function save() {
   try {
     const r = await api.put('/hopset/mode', { mode: chosen.value })
     mode.value = r.mode
+    chosen.value = r.mode
+    edited.value = false
     saveMsg.value = `Media hopping is ${r.mode} now.`
     await load()
   } catch (e) {
@@ -71,11 +88,23 @@ function when(t) {
   return t ? new Date(t).toLocaleTimeString() : '-'
 }
 
-onMounted(() => {
-  load()
-  timer = setInterval(load, 5000)
+// The status refreshes every 5 s, one load after the other.
+function schedule() {
+  if (stopped) return
+  timer = setTimeout(async () => {
+    await load()
+    schedule()
+  }, 5000)
+}
+
+onMounted(async () => {
+  await load()
+  schedule()
 })
-onUnmounted(() => clearInterval(timer))
+onUnmounted(() => {
+  stopped = true
+  clearTimeout(timer)
+})
 </script>
 
 <template>
@@ -90,13 +119,15 @@ onUnmounted(() => clearInterval(timer))
       <div v-if="loadError" class="text-[11px] text-red-400">{{ loadError }}</div>
       <div class="space-y-2" data-testid="hop-modes">
         <label v-for="m in modes" :key="m.id" class="flex items-start gap-2 text-[11px] cursor-pointer">
-          <input type="radio" name="hop-mode" :value="m.id" v-model="chosen" class="mt-0.5" :data-testid="'hop-mode-' + m.id" />
+          <input type="radio" name="hop-mode" :value="m.id" :checked="chosen === m.id" @change="pick(m.id)" class="mt-0.5" :data-testid="'hop-mode-' + m.id" />
           <span><span class="text-gray-200">{{ m.label }}</span><span v-if="m.id === mode" class="text-teal-400"> (now)</span>
             <span class="block text-gray-500">{{ m.text }}</span></span>
         </label>
       </div>
       <div class="flex items-center gap-3">
         <button :disabled="saving || chosen === mode" @click="save" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500 disabled:opacity-40" data-testid="hop-save">Save</button>
+        <button v-if="edited" :disabled="saving" @click="cancel" class="px-4 py-2 rounded bg-gray-700 text-gray-200 text-sm hover:bg-gray-600 disabled:opacity-40" data-testid="hop-cancel">Cancel</button>
+        <span v-if="edited" class="text-[11px] text-gray-400" data-testid="hop-unsaved">Not saved yet: still {{ mode }}.</span>
         <span v-if="saveMsg" class="text-[11px] text-amber-300" data-testid="hop-save-msg">{{ saveMsg }}</span>
       </div>
       <p class="text-[11px] text-gray-500">Takes effect at once and stays after a restart. Turning it off forgets what the hop set had seen.</p>

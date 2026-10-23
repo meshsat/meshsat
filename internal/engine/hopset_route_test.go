@@ -527,3 +527,43 @@ func TestHopSetGatewayOOBReceiveClearsSilence(t *testing.T) {
 		t.Fatalf("frames heard %d -> %d after an ordinary frame, want it counted once", after, final)
 	}
 }
+
+// native_gateway_refusal_reaches_hop_set: a native adapter's refusal by the
+// bearer itself (IntentOutcome.BearerRefused, as the TETRA radio's
+// ErrNotSubmitted gives it) reaches the hop set through the worker as a
+// radio sign (R49-V1); a link that was down, a send too long for it and an
+// answer that names the destination leave none.
+func TestHopSetNativeGatewayRefusalReachesHopSet(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		out  gateway.IntentOutcome
+		sign bool
+	}{
+		{"the radio refused it", gateway.IntentOutcome{Class: gateway.IntentNotSent, Retryable: true, ConsumeRetry: true, Reason: "not_sent",
+			Detail: "radio refused", BearerRefused: true}, true},
+		{"no radio", gateway.IntentOutcome{Class: gateway.IntentNotSent, Retryable: true, Reason: "skipped_offline"}, false},
+		{"too long", gateway.IntentOutcome{Class: gateway.IntentNotSent, Reason: "skipped_oversize"}, false},
+		{"not on the cell", gateway.IntentOutcome{Class: gateway.IntentNotSent, Retryable: true, Reason: "not_sent"}, false},
+		{"a refusal that names the number", gateway.IntentOutcome{Class: gateway.IntentNotSent, Retryable: true, ConsumeRetry: true, Reason: "not_sent"}, false},
+		{"taken, with the flag set by mistake", gateway.IntentOutcome{Class: gateway.IntentAccepted, AcceptedBy: "radio", BearerRefused: true}, false},
+	} {
+		h := newIntentHarness(t)
+		out := tc.out
+		radio := &fakeAPRS{answer: func(gateway.IntentSend) gateway.IntentOutcome { return out }}
+		useTetra(t, h, radio, ifaceProv{})
+		m, _ := gatingHopSet(t, h.d, h.db.GetAllInterfaces)
+		h.workers["tetra_0"].hop = &h.d.hop
+		if _, err := h.esc.Submit(h.ctx, IntentRequest{ContactID: h.contact(directory.Address{Kind: directory.KindTETRA, Value: "2000"}),
+			Body: []byte("by tetra"), Strategy: directory.StrategyPrimaryOnly}); err != nil {
+			t.Fatal(err)
+		}
+		h.work("tetra_0")
+		if radio.count() != 1 {
+			t.Fatalf("%s: %d SDS, want 1", tc.name, radio.count())
+		}
+		s := hopState(t, m, "tetra_0")
+		if got := len(s.Signs) == 1 && s.Signs[0].Source == "radio"; got != tc.sign || (!tc.sign && len(s.Signs) != 0) {
+			t.Errorf("%s: tetra_0 signs %+v, want a radio sign %v", tc.name, s.Signs, tc.sign)
+		}
+	}
+}

@@ -91,7 +91,7 @@ func (g *CellGateway) IntentSend(ctx context.Context, s IntentSend) IntentOutcom
 	case errors.Is(err, transport.ErrNoRecipient):
 		return IntentOutcome{Class: IntentNotSent, Reason: "skipped_unsupported", Detail: err.Error()}
 	case errors.Is(err, transport.ErrNotSubmitted):
-		return IntentOutcome{Class: IntentNotSent, Retryable: true, ConsumeRetry: true, Reason: "not_sent", Detail: err.Error()}
+		return IntentOutcome{Class: IntentNotSent, Retryable: true, ConsumeRetry: true, Reason: "not_sent", Detail: err.Error(), BearerRefused: true}
 	}
 	// A submit_sm whose answer never came: the phone may have it.
 	return IntentOutcome{Class: IntentUnknown, Detail: "may have been sent: " + err.Error()}

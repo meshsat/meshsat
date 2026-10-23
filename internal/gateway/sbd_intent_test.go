@@ -127,22 +127,23 @@ func TestSBDIntent_EachKindOfSession(t *testing.T) {
 		retry   bool
 		reason  string
 		charged bool
+		bearer  bool
 	}{
-		{"taken", ok, nil, IntentAccepted, false, "", true},
-		{"the line is down", nil, fmt.Errorf("x: %w", transport.ErrNotConnected), IntentNotSent, true, "skipped_offline", false},
-		{"failed before the SBDIX", nil, fmt.Errorf("%w: AT+SBDWB failed", transport.ErrNotSubmitted), IntentNotSent, true, "not_sent", false},
-		{"no network service", &transport.SatResult{MOStatus: 32}, nil, IntentNotSent, true, "not_sent", false},
-		{"access denied", &transport.SatResult{MOStatus: 15}, nil, IntentNotSent, false, "not_sent", false},
-		{"the session did not complete", &transport.SatResult{MOStatus: 13}, nil, IntentUnknown, false, "", false},
-		{"the node could not settle it", &transport.SatResult{MOStatus: 0}, fmt.Errorf("SBDIX failed: %w", transport.ErrOutcomeUnknown), IntentUnknown, false, "", false},
-		{"an error at the SBDIX", nil, errors.New("SBDIX failed: read timeout"), IntentUnknown, false, "", false},
+		{"taken", ok, nil, IntentAccepted, false, "", true, false},
+		{"the line is down", nil, fmt.Errorf("x: %w", transport.ErrNotConnected), IntentNotSent, true, "skipped_offline", false, false},
+		{"failed before the SBDIX", nil, fmt.Errorf("%w: AT+SBDWB failed", transport.ErrNotSubmitted), IntentNotSent, true, "not_sent", false, true},
+		{"no network service", &transport.SatResult{MOStatus: 32}, nil, IntentNotSent, true, "not_sent", false, true},
+		{"access denied", &transport.SatResult{MOStatus: 15}, nil, IntentNotSent, false, "not_sent", false, true},
+		{"the session did not complete", &transport.SatResult{MOStatus: 13}, nil, IntentUnknown, false, "", false, false},
+		{"the node could not settle it", &transport.SatResult{MOStatus: 0}, fmt.Errorf("SBDIX failed: %w", transport.ErrOutcomeUnknown), IntentUnknown, false, "", false, false},
+		{"an error at the SBDIX", nil, errors.New("SBDIX failed: read timeout"), IntentUnknown, false, "", false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			sat := &scriptSat{results: []*transport.SatResult{tc.res}, errs: []error{tc.err}}
 			gw := sbdIntentGW(t, IridiumConfig{}, sat)
 			o := gw.IntentSend(context.Background(), IntentSend{Destination: sbdDest, Text: "hello", CorrValue: "c1"})
-			if o.Class != tc.class || o.Retryable != tc.retry || o.Reason != tc.reason || o.Charged != tc.charged {
-				t.Fatalf("%+v; want class %s retry %v reason %q charged %v", o, tc.class, tc.retry, tc.reason, tc.charged)
+			if o.Class != tc.class || o.Retryable != tc.retry || o.Reason != tc.reason || o.Charged != tc.charged || o.BearerRefused != tc.bearer {
+				t.Fatalf("%+v; want class %s retry %v reason %q charged %v bearer refused %v", o, tc.class, tc.retry, tc.reason, tc.charged, tc.bearer)
 			}
 			if tc.class == IntentAccepted && o.AcceptedBy != "satellite_gateway" {
 				t.Fatalf("accepted by %q", o.AcceptedBy)

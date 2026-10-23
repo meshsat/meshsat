@@ -2,6 +2,8 @@ package engine
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -188,5 +190,107 @@ func TestHopSwitchOffRoutesAsBefore(t *testing.T) {
 	m.SetReceiveChecker(jamDeaf{deaf: map[string]bool{"iridium_0": true}})
 	if got := fr.Resolve("sat"); got != "iridium_1" {
 		t.Errorf("off, deaf primary: resolved %s, want iridium_1 as before (MESHSAT-857)", got)
+	}
+}
+
+// off_transition_quiesces_outputs: once SetMode(off) returns, nothing of
+// the hop set's is audited or published (R49-S1). Outputs prepared before
+// it are cancelled; outputs already running finish first, and SetMode waits
+// for them; inputs racing the switch leave nothing after it.
+func TestHopSwitchOffTransitionQuiescesOutputs(t *testing.T) {
+	counts := func(r *hopRig) (int, int) { r.mu.Lock(); defer r.mu.Unlock(); return len(r.audits), len(r.events) }
+
+	// Prepared before off, flushed after: cancelled.
+	r := newHopRig(t, threeFree...)
+	r.m.Negative("mesh_0", "delivery", "!0000abcd", "no_ack")
+	r.m.Negative("mesh_0", "delivery", "!0000beef", "no_ack")
+	r.after(11 * time.Second)
+	r.m.mu.Lock()
+	out := r.m.evaluateLocked(r.now)
+	gen := r.m.gen
+	r.m.mu.Unlock()
+	if len(out) == 0 {
+		t.Fatal("setup: the exclusion prepared no output")
+	}
+	a0, e0 := counts(r)
+	r.m.SetMode(HopOff)
+	r.m.flush(out, gen)
+	if a, e := counts(r); a != a0 || e != e0 {
+		t.Fatalf("an output prepared before off ran after it: audits %d -> %d, events %d -> %d", a0, a, e0, e)
+	}
+
+	// Running when off is asked for: SetMode waits for it to finish.
+	r2 := newHopRig(t, threeFree...)
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	r2.m.SetAudit(func(typ, id, _ string) {
+		if typ == "hopset_excluded" {
+			once.Do(func() { close(entered); <-release })
+		}
+		r2.mu.Lock()
+		r2.audits = append(r2.audits, typ+" "+id)
+		r2.mu.Unlock()
+	})
+	r2.m.Negative("mesh_0", "delivery", "!0000abcd", "no_ack")
+	r2.m.Negative("mesh_0", "delivery", "!0000beef", "no_ack")
+	r2.after(11 * time.Second)
+	go r2.m.Status()
+	<-entered
+	switched := make(chan struct{})
+	go func() { r2.m.SetMode(HopOff); close(switched) }()
+	select {
+	case <-switched:
+		t.Fatal("SetMode(off) returned while an output was still running")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	<-switched
+	a1, e1 := counts(r2)
+	if e1 == 0 {
+		t.Fatal("the running flush's event did not finish before off returned")
+	}
+	time.Sleep(50 * time.Millisecond)
+	if a, e := counts(r2); a != a1 || e != e1 {
+		t.Fatalf("after off returned: audits %d -> %d, events %d -> %d", a1, a, e1, e)
+	}
+
+	// Inputs racing the switch: nothing after off returns.
+	var mu sync.Mutex
+	now := time.Date(2026, 10, 23, 14, 0, 0, 0, time.UTC)
+	r3 := newHopRig(t, threeFree...)
+	r3.m.clock = func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+	r3.m.SetMode(HopWatch)
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	for i, id := range []string{"mesh_0", "aprs_0", "tetra_0"} {
+		wg.Add(1)
+		go func(i int, id string) {
+			defer wg.Done()
+			for k := 0; ; k++ {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				r3.m.Negative(id, "delivery", fmt.Sprintf("dest-%d-%d", i, k), "no_ack")
+				mu.Lock()
+				now = now.Add(time.Second)
+				mu.Unlock()
+				r3.m.Status()
+				r3.m.Positive(id, "rx")
+			}
+		}(i, id)
+	}
+	time.Sleep(30 * time.Millisecond)
+	r3.m.SetMode(HopOff)
+	a2, e2 := counts(r3)
+	time.Sleep(30 * time.Millisecond)
+	close(stop)
+	wg.Wait()
+	if a, e := counts(r3); a != a2 || e != e2 {
+		t.Fatalf("racing inputs after off returned: audits %d -> %d, events %d -> %d", a2, a, e2, e)
+	}
+	if a2 == 0 {
+		t.Fatal("setup: watching audited nothing before off")
 	}
 }
