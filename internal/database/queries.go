@@ -805,13 +805,24 @@ func (db *DB) InsertSignalHistory(source string, timestamp int64, value float64)
 	return err
 }
 
-// GetLatestSignal returns the most recent non-zero signal reading from the last 10 minutes.
-func (db *DB) GetLatestSignal(source string) (*SignalHistoryPoint, error) {
-	cutoff := time.Now().Unix() - 600 // 10 minutes ago
+// GetLatestSignal returns the most recent reading of any of the sources
+// from the last 10 minutes, a zero included: a modem that lost its
+// satellite reads 0 now, not the last time it had bars. (The API's
+// between-passes fallback is GetLatestSignalMulti.) [MESHSAT-1653]
+func (db *DB) GetLatestSignal(sources ...string) (*SignalHistoryPoint, error) {
+	if len(sources) == 0 {
+		return nil, fmt.Errorf("no sources")
+	}
+	args := make([]interface{}, 0, len(sources)+1)
+	for _, s := range sources {
+		args = append(args, s)
+	}
+	args = append(args, time.Now().Unix()-600)
 	var p SignalHistoryPoint
-	err := db.Get(&p,
-		`SELECT * FROM signal_history WHERE source = ? AND value > 0 AND timestamp >= ?
-		 ORDER BY timestamp DESC LIMIT 1`, source, cutoff)
+	err := db.Get(&p, fmt.Sprintf(
+		`SELECT * FROM signal_history WHERE source IN (%s) AND timestamp >= ?
+		 ORDER BY timestamp DESC LIMIT 1`, strings.TrimSuffix(strings.Repeat("?,", len(sources)), ",")),
+		args...)
 	if err != nil {
 		return nil, err
 	}

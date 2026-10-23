@@ -10,13 +10,19 @@ import (
 
 // HealthScore represents the composite health of a transport interface.
 type HealthScore struct {
-	InterfaceID string  `json:"interface_id"`
-	Score       int     `json:"score"`        // 0-100
-	Signal      int     `json:"signal"`       // 0-100 normalized signal
-	SuccessRate float64 `json:"success_rate"` // delivery success ratio
-	Latency     int     `json:"latency_ms"`   // avg delivery latency
-	Cost        int     `json:"cost_score"`   // 100 = free, 0 = expensive
-	Available   bool    `json:"available"`    // interface online?
+	InterfaceID string `json:"interface_id"`
+	Score       int    `json:"score"`  // 0-100
+	Signal      int    `json:"signal"` // 0-100 normalized signal
+	// SignalSource is where Signal came from ("sbd", "imt", "cellular"),
+	// empty when the link has no signal input or no fresh reading.
+	SignalSource string  `json:"signal_source,omitempty"`
+	SuccessRate  float64 `json:"success_rate"` // delivery success ratio
+	// Samples is how many finished deliveries SuccessRate rests on (24 h);
+	// 0 means no data, and the rate then reads 1.0 by design.
+	Samples   int  `json:"samples"`
+	Latency   int  `json:"latency_ms"` // avg delivery latency
+	Cost      int  `json:"cost_score"` // 100 = free, 0 = expensive
+	Available bool `json:"available"`  // interface online?
 }
 
 // SpectrumChecker checks if an interface is currently jammed.
@@ -82,11 +88,11 @@ func (h *HealthScorer) Score(interfaceID string) HealthScore {
 	}
 	hs.Available = iface.Enabled
 
-	// Signal: get latest signal value from signal_history, normalize to 0-100
-	hs.Signal = h.getSignalScore(interfaceID)
+	// Signal: the link's modem reading, normalized to 0-100
+	hs.Signal, hs.SignalSource = h.getSignalScore(iface.ChannelType)
 
 	// Success rate: sent / (sent + failed) from message_deliveries in last 24h
-	hs.SuccessRate = h.getSuccessRate(interfaceID)
+	hs.SuccessRate, hs.Samples = h.getSuccessRate(interfaceID)
 
 	// Latency: average time from queued to sent in last 24h
 	hs.Latency = h.getAvgLatency(interfaceID)
@@ -138,23 +144,44 @@ func (h *HealthScorer) ScoreAll() []HealthScore {
 	return scores
 }
 
-func (h *HealthScorer) getSignalScore(interfaceID string) int {
-	point, err := h.db.GetLatestSignal(interfaceID)
-	if err != nil {
-		return 0
+// getSignalScore reads the link's modem signal from where it is recorded,
+// never under the interface id (nothing writes that): the SignalRecorder
+// writes bars per modem in signal_history ("sbd", or "iridium" before the
+// modem split, and "imt"), the cellular recorder writes
+// cellular_signal_history. The GSS rows there are session outcomes, not
+// bars. A link with no signal input, or no reading in ten minutes, scores
+// 0 with no source. [MESHSAT-1653]
+func (h *HealthScorer) getSignalScore(channelType string) (int, string) {
+	var bars float64
+	var source string
+	switch channelType {
+	case "iridium", "iridium_imt":
+		sources := []string{"sbd", "iridium"}
+		if channelType == "iridium_imt" {
+			sources = []string{"imt"}
+		}
+		p, err := h.db.GetLatestSignal(sources...)
+		if err != nil {
+			return 0, ""
+		}
+		bars, source = p.Value, p.Source
+	case "cellular", "sms":
+		p, err := h.db.GetLatestCellularSignal()
+		if err != nil {
+			return 0, ""
+		}
+		bars, source = float64(p.Bars), "cellular"
+	default:
+		return 0, ""
 	}
-	// signal_history value is typically 0-5 bars; normalize to 0-100
-	val := int(point.Value * 20)
-	if val > 100 {
-		val = 100
-	}
-	if val < 0 {
-		val = 0
-	}
-	return val
+	// bars are 0-5; normalize to 0-100
+	return min(max(int(bars*20), 0), 100), source
 }
 
-func (h *HealthScorer) getSuccessRate(interfaceID string) float64 {
+// getSuccessRate is sent / (sent + failed) over 24 h and how many
+// deliveries it rests on; with none it is 1.0 (a quiet link isn't a
+// failing one).
+func (h *HealthScorer) getSuccessRate(interfaceID string) (float64, int) {
 	cutoff := time.Now().Add(-24 * time.Hour).UTC().Format("2006-01-02 15:04:05")
 	var sent, failed int
 	_ = h.db.QueryRow(
@@ -166,9 +193,9 @@ func (h *HealthScorer) getSuccessRate(interfaceID string) float64 {
 
 	total := sent + failed
 	if total == 0 {
-		return 1.0 // no data = assume healthy
+		return 1.0, 0 // no data = assume healthy
 	}
-	return float64(sent) / float64(total)
+	return float64(sent) / float64(total), total
 }
 
 func (h *HealthScorer) getAvgLatency(interfaceID string) int {
@@ -189,14 +216,17 @@ func (h *HealthScorer) getAvgLatency(interfaceID string) int {
 }
 
 // channelCostScore returns a cost score based on channel type.
-// 100 = free, 0 = expensive.
+// 100 = free, 0 = expensive. The metered links are the ones the intent
+// engine bills (Iridium SBD and IMT, cellular SMS); every other radio is
+// free, the MeshSat 2G cell included (our own network). [MESHSAT-1653]
 func channelCostScore(channelType string) int {
 	switch channelType {
-	case "mesh", "mqtt", "webhook", "tetra":
+	case "mesh", "mqtt", "webhook", "tetra", "aprs", "ax25", "zigbee", "ble", "tcp",
+		"lxmf", "hf", "tak", "hub", "cell", "rnode", "udp", "auto", "kiss":
 		return 100
-	case "cellular", "sms", "cell":
+	case "cellular", "sms":
 		return 60
-	case "iridium":
+	case "iridium", "iridium_imt":
 		return 30
 	default:
 		return 50
