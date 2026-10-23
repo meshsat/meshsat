@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -27,6 +28,17 @@ func (r *hopRig) ReceiveDeaf(id string) bool        { return r.deaf[id] }
 
 func newHopRig(t *testing.T, links ...string) *hopRig {
 	t.Helper()
+	return newHopRigCfg(t, DefaultHopSetConfig(), links...)
+}
+
+// readmit and window are the defaults' re-admission dwell and sign window.
+var (
+	readmit = DefaultHopSetConfig().ReadmitDwell
+	window  = DefaultHopSetConfig().TriggerWindow
+)
+
+func newHopRigCfg(t *testing.T, cfg HopSetConfig, links ...string) *hopRig {
+	t.Helper()
 	r := &hopRig{now: time.Date(2026, 10, 23, 14, 0, 0, 0, time.UTC), jam: map[string]bool{}, deaf: map[string]bool{}}
 	var ifaces []database.Interface
 	for _, l := range links { // "id:type"
@@ -38,7 +50,7 @@ func newHopRig(t *testing.T, links ...string) *hopRig {
 		}
 		ifaces = append(ifaces, database.Interface{ID: id, ChannelType: ct, Enabled: true})
 	}
-	r.m = NewHopSetManager(DefaultHopSetConfig(), func() ([]database.Interface, error) { return ifaces, nil }, true)
+	r.m = NewHopSetManager(cfg, func() ([]database.Interface, error) { return ifaces, nil }, true)
 	r.m.clock = func() time.Time { return r.now }
 	r.m.SetSpectrum(r)
 	r.m.SetReceiveChecker(r)
@@ -123,7 +135,7 @@ func TestHopSetSuspectClears(t *testing.T) {
 		t.Fatalf("positive after the sign: %s, want admitted", s.State)
 	}
 	r.m.Negative("tetra_0", "radio", "not_submitted", "refused")
-	r.after(121 * time.Second)
+	r.after(window + time.Second)
 	if s := r.state(t, "tetra_0"); s.State != HopAdmitted {
 		t.Fatalf("sign aged out: %s, want admitted", s.State)
 	}
@@ -146,7 +158,7 @@ func excludeMesh(t *testing.T, r *hopRig) {
 // recovering link carries no ordinary traffic until it is admitted.
 func TestHopSetReadmission(t *testing.T) {
 	r := newHopRig(t, threeFree...)
-	excludeMesh(t, r)
+	excludeMesh(t, r)        // exclusion 1
 	for i := 0; i < 3; i++ { // an hour, in three evaluations
 		r.after(20 * time.Minute)
 		if s := r.state(t, "mesh_0"); s.State != HopExcluded || !r.excluded("mesh_0") {
@@ -158,22 +170,131 @@ func TestHopSetReadmission(t *testing.T) {
 		t.Fatalf("after a positive sign: %s excluded=%v, want recovering and not yet tried", s.State, r.excluded("mesh_0"))
 	}
 	r.after(2 * time.Minute)
-	r.m.Negative("mesh_0", "radio", "duty_cycle", "DUTY_CYCLE_LIMIT")
-	if !r.excluded("mesh_0") {
-		t.Fatalf("negative while recovering: %s, want excluded", r.state(t, "mesh_0").State)
+	r.m.Negative("mesh_0", "radio", "duty_cycle", "DUTY_CYCLE_LIMIT") // exclusion 2, over an hour after 1
+	if s := r.state(t, "mesh_0"); !r.excluded("mesh_0") || s.ReadmitAfter != readmit.String() {
+		t.Fatalf("negative while recovering: %s readmit %s, want excluded with the base dwell %v", s.State, s.ReadmitAfter, readmit)
 	}
-	r.after(3 * time.Minute) // the duty-cycle sign ages out of the window at 120 s
+	r.after(time.Second)
 	r.m.Positive("mesh_0", "rx")
 	r.after(4 * time.Minute)
-	if s := r.state(t, "mesh_0"); s.State != HopRecovering {
-		t.Fatalf("4 min recovering: %s, want still recovering", s.State)
-	}
 	if !r.excluded("mesh_0") {
 		t.Fatal("tried 4 min into recovering, before the re-admit dwell")
 	}
-	r.after(61 * time.Second)
+	r.after(readmit - 4*time.Minute + time.Second)
 	if s := r.state(t, "mesh_0"); s.State != HopAdmitted || r.excluded("mesh_0") {
-		t.Fatalf("5 min recovering: %s, want admitted", s.State)
+		t.Fatalf("%v recovering: %s, want admitted", readmit, s.State)
+	}
+	// Exclusion 3, within the hour of 2: the next recovery takes twice as
+	// long (D-10).
+	r.m.Negative("mesh_0", "delivery", "c", "no_ack")
+	r.m.Negative("mesh_0", "delivery", "d", "no_ack")
+	r.after(11 * time.Second)
+	if s := r.state(t, "mesh_0"); s.State != HopExcluded || s.ReadmitAfter != (2*readmit).String() || s.Flaps != 1 {
+		t.Fatalf("repeat within the hour: %s readmit %s flaps %d, want excluded, %v, 1", s.State, s.ReadmitAfter, s.Flaps, 2*readmit)
+	}
+	r.after(time.Second)
+	r.m.Positive("mesh_0", "rx")
+	r.after(readmit + time.Minute)
+	if s := r.state(t, "mesh_0"); s.State != HopRecovering || !r.excluded("mesh_0") {
+		t.Fatalf("%v recovering after a repeat: %s, want still recovering (dwell doubled)", readmit+time.Minute, s.State)
+	}
+	r.after(readmit)
+	if s := r.state(t, "mesh_0"); s.State != HopAdmitted || r.excluded("mesh_0") {
+		t.Fatalf("%v recovering after a repeat: %s, want admitted", 2*readmit+time.Minute, s.State)
+	}
+}
+
+// The re-admission dwell doubles for each exclusion within an hour of the
+// one before, up to the cap, and starts again from the base once an hour
+// passes between exclusions (as route flap damping does, D-10).
+func TestHopSetReadmitDoublesUpToTheCapThenResets(t *testing.T) {
+	r := newHopRig(t, threeFree...)
+	var dwells []string
+	for i := 0; i < 5; i++ {
+		r.m.Negative("mesh_0", "delivery", fmt.Sprintf("a%d", i), "no_ack")
+		r.m.Negative("mesh_0", "delivery", fmt.Sprintf("b%d", i), "no_ack")
+		r.after(11 * time.Second)
+		s := r.state(t, "mesh_0")
+		if s.State != HopExcluded {
+			t.Fatalf("cycle %d: %s, want excluded", i, s.State)
+		}
+		dwells = append(dwells, s.ReadmitAfter)
+		r.after(time.Second)
+		r.m.Positive("mesh_0", "rx")
+		d, _ := time.ParseDuration(s.ReadmitAfter)
+		r.after(d + time.Second)
+		if s := r.state(t, "mesh_0"); s.State != HopAdmitted {
+			t.Fatalf("cycle %d: %s after its %v dwell, want admitted", i, s.State, d)
+		}
+	}
+	want := []string{"10m0s", "20m0s", "40m0s", "1h0m0s", "10m0s"}
+	if strings.Join(dwells, ",") != strings.Join(want, ",") {
+		t.Fatalf("dwells %v, want %v", dwells, want)
+	}
+}
+
+// The radio's own refusals at least a minute apart are separate signs; two
+// in quick succession are one (D-10).
+func TestHopSetRepeatedRadioRefusalsCount(t *testing.T) {
+	r := newHopRig(t, threeFree...)
+	r.m.Negative("tetra_0", "radio", "not_submitted", "refused")
+	r.after(30 * time.Second)
+	r.m.Negative("tetra_0", "radio", "not_submitted", "refused")
+	r.after(11 * time.Second)
+	if s := r.state(t, "tetra_0"); s.State != HopSuspect {
+		t.Fatalf("two refusals 30 s apart: %s, want suspect (one sign)", s.State)
+	}
+	r.after(20 * time.Second) // the third refusal comes 61 s after the first
+	r.m.Negative("tetra_0", "radio", "not_submitted", "refused")
+	r.after(11 * time.Second)
+	if s := r.state(t, "tetra_0"); s.State != HopExcluded {
+		t.Fatalf("refusals 61 s apart: %s, want excluded (two signs)", s.State)
+	}
+}
+
+// hearEvery feeds the link a frame every gap for span; the clock ends at
+// the last frame.
+func hearEvery(r *hopRig, id string, gap, span time.Duration) {
+	for d := time.Duration(0); d < span; d += gap {
+		if d > 0 {
+			r.after(gap)
+		}
+		r.m.Positive(id, "rx")
+	}
+}
+
+// A link that usually hears traffic every minute and hears nothing for 10
+// minutes has a silence sign: one sign, suspect; with a delivery failure,
+// two, excluded. The next frame heard ends it. A short burst followed by
+// the link's usual quiet is not silence (D-10).
+func TestHopSetSilenceSign(t *testing.T) {
+	r := newHopRig(t, threeFree...)
+	hearEvery(r, "mesh_0", time.Minute, 70*time.Minute)
+	r.after(9 * time.Minute)
+	if s := r.state(t, "mesh_0"); len(s.Signs) != 0 {
+		t.Fatalf("9 min quiet: signs %+v, want none yet", s.Signs)
+	}
+	r.after(time.Minute)
+	s := r.state(t, "mesh_0")
+	if s.State != HopSuspect || len(s.Signs) != 1 || s.Signs[0].Source != "silence" {
+		t.Fatalf("10 min quiet: %s signs %+v, want suspect on a silence sign", s.State, s.Signs)
+	}
+	r.m.Negative("mesh_0", "delivery", "!0000abcd", "no_ack")
+	r.after(11 * time.Second)
+	if s := r.state(t, "mesh_0"); s.State != HopExcluded {
+		t.Fatalf("silence + a delivery failure: %s, want excluded", s.State)
+	}
+	r.m.Positive("mesh_0", "rx")
+	if s := r.state(t, "mesh_0"); s.State != HopRecovering || len(s.Signs) != 0 {
+		t.Fatalf("a frame heard: %s signs %+v, want recovering with no signs", s.State, s.Signs)
+	}
+
+	// A TETRA test burst: 20 frames in 10 minutes, then the usual quiet.
+	r2 := newHopRig(t, threeFree...)
+	hearEvery(r2, "tetra_0", 30*time.Second, 10*time.Minute)
+	r2.after(30 * time.Minute)
+	if s := r2.state(t, "tetra_0"); len(s.Signs) != 0 {
+		t.Fatalf("quiet after a burst: signs %+v, want none", s.Signs)
 	}
 }
 
@@ -262,7 +383,7 @@ func TestHopSetEveryNetStateChangeIsAudited(t *testing.T) {
 	excludeMesh(t, r)                                 // suspect, excluded
 	r.after(time.Second)
 	r.m.Positive("mesh_0", "rx") // recovering
-	r.after(5*time.Minute + time.Second)
+	r.after(readmit + time.Second)
 	r.state(t, "mesh_0") // admitted
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -411,7 +532,7 @@ func TestHopSetEventsAndAlarm(t *testing.T) {
 	r.m.PaidAttempt("aprs_0") // free: no alarm
 	r.after(time.Second)
 	r.m.Positive("mesh_0", "rx")
-	r.after(5*time.Minute + time.Second)
+	r.after(readmit + time.Second)
 	r.state(t, "mesh_0")
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -463,7 +584,9 @@ func TestHopSetGatingFlag(t *testing.T) {
 // recovering one (a positive sign since its exclusion) before the excluded
 // one, whatever their positive signs' order.
 func TestHopSetFloorPrefersRecoveringOnATie(t *testing.T) {
-	r := newHopRig(t, "mesh_0:mesh", "aprs_0:aprs", "tetra_0:tetra")
+	cfg := DefaultHopSetConfig()
+	cfg.TriggerWindow, cfg.ReadmitDwell = 2*time.Minute, 5*time.Minute // a tie needs the signs to age out first
+	r := newHopRigCfg(t, cfg, "mesh_0:mesh", "aprs_0:aprs", "tetra_0:tetra")
 	excludeMesh(t, r) // t=11: mesh excluded (aprs, tetra usable)
 	r.after(time.Second)
 	r.m.Positive("mesh_0", "rx") // mesh recovering, no signs
@@ -499,5 +622,20 @@ func TestHopSetRetentionAndDownChangesAreAudited(t *testing.T) {
 	}
 	if !got["hopset_down aprs_0"] || !got["hopset_retained mesh_0"] {
 		t.Fatalf("audits %v, want hopset_down aprs_0 and hopset_retained mesh_0", r.audits)
+	}
+}
+
+// The defaults are the owner's ruling (design D-10, 23 Oct 2026).
+func TestHopSetDefaultsAreTheRuling(t *testing.T) {
+	c := DefaultHopSetConfig()
+	got := []time.Duration{c.TriggerWindow, c.DropDwell, c.ReadmitDwell, c.ReadmitMax, c.FlapMemory, c.RadioRepeat, c.SilenceAfter, c.AlarmEvery}
+	want := []time.Duration{15 * time.Minute, 10 * time.Second, 10 * time.Minute, time.Hour, time.Hour, time.Minute, 10 * time.Minute, 10 * time.Minute}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("setting %d = %v, want %v", i, got[i], want[i])
+		}
+	}
+	if c.MinSet != 2 {
+		t.Errorf("MinSet = %d, want 2", c.MinSet)
 	}
 }

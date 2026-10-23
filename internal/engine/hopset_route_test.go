@@ -69,7 +69,7 @@ func TestHopSetGatesTheIntents(t *testing.T) {
 	// mesh hears traffic again and stays clean for the re-admit dwell.
 	*now = now.Add(time.Minute)
 	m.Positive("mesh_0", "rx")
-	*now = now.Add(5*time.Minute + time.Second)
+	*now = now.Add(DefaultHopSetConfig().ReadmitDwell + time.Second)
 	if s := hopState(t, m, "mesh_0"); s.State != HopAdmitted {
 		t.Fatalf("mesh_0 %s, want re-admitted", s.State)
 	}
@@ -113,7 +113,7 @@ func TestHopSetGatesTheRetryFailover(t *testing.T) {
 
 	now = now.Add(time.Minute)
 	m.Positive("cellular_0", "rx")
-	now = now.Add(5*time.Minute + time.Second)
+	now = now.Add(DefaultHopSetConfig().ReadmitDwell + time.Second)
 	row2 := queueOnAPRS(t, h, ruleID, `["mesh_0"]`)
 	w.handleFailure(row2, errNoAckFromPeer)
 	if n := len(deliveriesOn(t, h, "cellular_0")); n != 1 {
@@ -227,7 +227,7 @@ func TestHopSetNextRouteUsesReadmitted(t *testing.T) {
 	excludeMeshHop(t, m, now)
 	*now = now.Add(time.Second)
 	m.Positive("mesh_0", "rx")
-	*now = now.Add(5*time.Minute + time.Second)
+	*now = now.Add(DefaultHopSetConfig().ReadmitDwell + time.Second)
 	if s := hopState(t, m, "mesh_0"); s.State != HopAdmitted {
 		t.Fatalf("mesh_0 %s, want re-admitted", s.State)
 	}
