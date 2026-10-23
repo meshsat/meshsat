@@ -107,3 +107,26 @@ func TestSubmitSMS_LocalQueueFailureIsNotRadioEvidence(t *testing.T) {
 		}
 	}
 }
+
+// sms_prompt_timeout_is_radio_evidence: a modem that never gives AT+CMGS
+// its prompt, with the port up, runs the wait to its deadline: not sent,
+// marked as the modem's failure. This is the deadline's branch, not the
+// prompt's read failure above (R51-T1).
+func TestSubmitSMS_PromptTimeoutIsRadioEvidence(t *testing.T) {
+	prev := smsPromptTimeout
+	smsPromptTimeout = 200 * time.Millisecond
+	defer func() { smsPromptTimeout = prev }()
+	m := &submitModem{silentPrompt: true}
+	tr := runSubmitCell(t, m)
+	start := time.Now()
+	res, err := tr.SubmitSMS(context.Background(), "+31612345678", "x")
+	if took := time.Since(start); took > 5*time.Second {
+		t.Fatalf("the wait took %s; want the prompt's deadline (%s), not a fixed one", took, smsPromptTimeout)
+	}
+	if res.Phase != SMSNotSent || err == nil || !strings.Contains(err.Error(), "timeout waiting for > prompt") || strings.Contains(err.Error(), "read failed") {
+		t.Fatalf("phase %d, %v; want not sent at the prompt's deadline", res.Phase, err)
+	}
+	if !errors.Is(err, ErrModemFailed) {
+		t.Fatalf("%v: the prompt's timeout is not marked as the modem's failure", err)
+	}
+}

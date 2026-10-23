@@ -25,7 +25,9 @@ type submitModem struct {
 	inBody     bool
 	afterBody  string // "" = the port fails after the body
 	failPrompt bool
-	readErr    bool
+	// silentPrompt: the modem never answers AT+CMGS, and the port stays up.
+	silentPrompt bool
+	readErr      bool
 	// The text contract: cscs is the character set the modem reports
 	// ("" = IRA), cscsRefuse makes it refuse AT+CSCS=, cscsStuck keeps the
 	// reported set whatever is written; dcs is AT+CSMP?'s coding.
@@ -52,6 +54,8 @@ func (m *submitModem) Write(b []byte) (int, error) {
 	case bytes.HasPrefix(b, []byte("AT+CMGS=")):
 		if m.failPrompt {
 			m.readErr = true
+		} else if m.silentPrompt {
+			// No "> " and no error: the wait runs to its deadline.
 		} else {
 			m.inBody = true
 			m.reply = append(m.reply, "\r\n> "...)

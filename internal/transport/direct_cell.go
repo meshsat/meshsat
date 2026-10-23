@@ -1290,6 +1290,10 @@ var smsSubmitTimeout = cellSMSSendTimeout + 15*time.Second
 // its Ctrl-Z; a package var so a test can see the no-answer path.
 var smsAnswerTimeout = cellSMSSendTimeout
 
+// smsPromptTimeout is how long AT+CMGS waits for the modem's "> " prompt;
+// a package var so a test can reach the timeout. [R51-T1]
+var smsPromptTimeout = 10 * time.Second
+
 // SubmitSMS sends one SMS of at most 160 characters, as SendSMS does, but
 // never cuts the text and says how far the submission got. A command still
 // queued when the caller gives up (behind a busy one) never starts: that
@@ -1437,7 +1441,7 @@ func (t *DirectCellTransport) cmgs(sp serial.Port, to, text string, intent bool,
 	}
 
 	// Wait for ">" prompt
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(smsPromptTimeout)
 	sp.SetReadTimeout(50 * time.Millisecond)
 	buf := make([]byte, 256)
 	var resp strings.Builder
