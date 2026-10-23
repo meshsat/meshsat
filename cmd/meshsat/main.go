@@ -1825,8 +1825,32 @@ func main() {
 	// admitted route is excluded (it still sends), a group with no usable
 	// member online (its first enabled member holds the deliveries), a
 	// direct interface target, and HeMB bond allocation. [MESHSAT-1650]
-	dispatcher.SetRouteGate(healthScorer)
-	failoverResolver.SetRouteGate(healthScorer)
+	//
+	// The hop set (slice (b) of media hopping) keeps per link a state built
+	// from contact-independent evidence. MESHSAT_HOPSET=true makes it that
+	// gate in place of the scorer (design D-7); otherwise it observes, and
+	// GET /api/hopset shows what it would decide. [MESHSAT-1650]
+	hopSet := engine.NewHopSetManager(engine.DefaultHopSetConfig(), db.GetAllInterfaces, engine.HopSetGating())
+	if spectrumMon != nil {
+		hopSet.SetSpectrum(spectrumMon)
+	}
+	if signingService != nil {
+		hopSet.SetAudit(func(eventType, ifaceID, detail string) {
+			signingService.AuditEvent(eventType, &ifaceID, nil, nil, nil, detail)
+		})
+	}
+	hopSet.SetPublisher(hemb.GlobalEventBus.Publish)
+	dispatcher.SetHopSigns(hopSet)
+	proc.SetHopSigns(hopSet)
+	srv.SetHopSet(hopSet)
+	go hopSet.Start(ctx)
+	var routeGate engine.RouteGate = healthScorer
+	if hopSet.Gating() {
+		routeGate = hopSet
+		log.Info().Msg("hop set: gating routes (MESHSAT_HOPSET=true)")
+	}
+	dispatcher.SetRouteGate(routeGate)
+	failoverResolver.SetRouteGate(routeGate)
 	srv.SetAccessEvaluator(accessEval)
 	srv.SetRegistry(registry)
 	srv.SetTLEManager(tleMgr)
@@ -3324,6 +3348,7 @@ func main() {
 			},
 		})
 		healthScorer.SetReceiveChecker(rxWatchdog)
+		hopSet.SetReceiveChecker(rxWatchdog)
 		go rxWatchdog.Run(ctx)
 		log.Info().Int("silence_min", cfg.APRSRxWatchdogMin).Msg("aprs receive watchdog enabled")
 	}
@@ -3367,6 +3392,7 @@ func main() {
 			checkers = append(checkers, rxWatchdog)
 		}
 		healthScorer.SetReceiveChecker(checkers)
+		hopSet.SetReceiveChecker(checkers)
 		if smsBudget != nil {
 			// No interface ids: a low bundle turns the chip amber, it must not score the SMS lane 0. [MESHSAT-1161]
 			devHealth.RegisterExternal("sms_credit", nil, smsBudget.HealthStatus)

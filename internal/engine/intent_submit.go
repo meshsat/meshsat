@@ -819,13 +819,40 @@ func (e *Escalator) MeshRoutingReceipt(ifaceID string, msg transport.MeshMessage
 		Source: source, Event: fmt.Sprintf("routing:%d:%s", reason, name), Trust: "unauthenticated",
 		CorrKind: meshCorrKind, CorrValue: fmt.Sprintf("%08x", msg.RequestID), CorrScope: ifaceID, CorrPeer: fmt.Sprintf("!%08x", msg.From),
 	}
+	var dest, class string
 	stored, err := e.db.RecordEvidence(ev, meshCorrWindowS, func(t database.DeliveryTransmission) (string, string, string, string) {
-		return classifyMeshReceipt(t, ev)
+		event, src, trust, completes := classifyMeshReceipt(t, ev)
+		dest, class = t.CorrPeer, event
+		return event, src, trust, completes
 	})
 	if err != nil {
 		return
 	}
 	if stored.Matched {
+		e.hopMeshReceipt(ifaceID, source, reason, name, dest, class)
 		e.Notify(stored.IntentID)
+	}
+}
+
+// hopMeshReceipt turns a matched routing answer into the hop set's
+// evidence: the destination's acknowledgement, or a relay's, says the link
+// carries; our own radio giving up on a packet (no answer, too many
+// retries, a timeout) is a delivery sign keyed by the destination; our own
+// radio refusing for the duty cycle is the radio's sign. A destination's
+// own NAK, or a refusal that sent nothing for a reason that isn't the
+// band's (a missing key), says nothing about the link. [MESHSAT-1650]
+func (e *Escalator) hopMeshReceipt(ifaceID, source string, reason uint32, name, dest, class string) {
+	h := hopSigns(&e.d.hop)
+	if h == nil {
+		return
+	}
+	switch {
+	case class == "ack" || class == "relay_ack":
+		h.Positive(ifaceID, class)
+	case source != meshOwnRadio:
+	case reason == transport.RoutingErrorDutyCycle:
+		h.Negative(ifaceID, "radio", "duty_cycle", name)
+	case reason == transport.RoutingErrorTimeout, reason == transport.RoutingErrorMaxRetransmit, reason == transport.RoutingErrorNoResponse:
+		h.Negative(ifaceID, "delivery", dest, name)
 	}
 }

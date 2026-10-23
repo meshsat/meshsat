@@ -56,6 +56,7 @@ type Server struct {
 	sos           SOSState
 	webHandler    http.Handler
 	healthScorer  *engine.HealthScorer
+	hopSet        *engine.HopSetManager // the hop set (media hopping, slice (b)) [MESHSAT-1650]
 	geofenceMon   *engine.GeofenceMonitor
 	deadman       *engine.DeadManSwitch
 	burstQueue    *engine.BurstQueue
@@ -335,6 +336,11 @@ func (s *Server) SetRoutingIdentity(id *routing.Identity) {
 // SetHealthScorer sets the health scorer for interface health endpoints.
 func (s *Server) SetHealthScorer(hs *engine.HealthScorer) {
 	s.healthScorer = hs
+}
+
+// SetHopSet sets the hop set GET /api/hopset reads. [MESHSAT-1650]
+func (s *Server) SetHopSet(h *engine.HopSetManager) {
+	s.hopSet = h
 }
 
 // SetGeofenceMonitor sets the geofence monitor for geofence API endpoints.
@@ -746,6 +752,7 @@ func (s *Server) Router() http.Handler {
 		r.Post("/interfaces/{id}/enable", s.handleEnableInterface)
 		r.Post("/interfaces/{id}/disable", s.handleDisableInterface)
 		r.Get("/interfaces/health", s.handleGetHealthScores)
+		r.Get("/hopset", s.handleGetHopSet)
 		r.Get("/devices", s.handleGetDevices)
 		r.Get("/devices/usb", s.handleGetUSBDevices)
 		r.Get("/devices/usb/events", s.handleUSBDeviceEvents)

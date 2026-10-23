@@ -38,6 +38,9 @@ type Processor struct {
 	// request (an acknowledgement or a NAK): the delivery intents'
 	// evidence for a mesh attempt. Nil = none. [MESHSAT-1581]
 	routingReceipt atomic.Pointer[func(ifaceID string, msg transport.MeshMessage)]
+	// hop takes the hop set's passive evidence: a link that just received
+	// a frame carries. Nil = none. [MESHSAT-1650]
+	hop atomic.Pointer[hopSink]
 	// geofence checks every mesh position against the zones. [MESHSAT-1414]
 	geofence   *GeofenceMonitor
 	db         *database.DB
@@ -161,6 +164,15 @@ func (p *Processor) SetOOBInbound(fn func(ctx context.Context, ifaceID, fromAddr
 	p.oobMu.Lock()
 	p.oobInbound = fn
 	p.oobMu.Unlock()
+}
+
+// SetHopSigns sets where the hop set's passive evidence goes; nil = nowhere.
+func (p *Processor) SetHopSigns(h HopSigns) {
+	if h == nil {
+		p.hop.Store(nil)
+		return
+	}
+	p.hop.Store(&hopSink{h})
 }
 
 // SetRoutingReceiptHook hands every ROUTING_APP answer from the mesh to fn
@@ -629,6 +641,14 @@ func (p *Processor) handleMessage(event transport.MeshEvent) {
 	// the OOB classifier so management frames on the air show up too.
 	// [MESHSAT-826]
 	p.packets.Add(meshRXRecord(p.mesh, &msg))
+
+	// A packet heard over the air (not our own radio's answer to us) says
+	// the mesh carries: the hop set's passive sign. [MESHSAT-1650]
+	if msg.From != msg.To && (msg.RxTime != 0 || msg.RxSNR != 0) {
+		if h := hopSigns(&p.hop); h != nil {
+			h.Positive("mesh_0", "rx")
+		}
+	}
 
 	// An acknowledgement or NAK that names a request: evidence for a
 	// delivery intent's mesh attempt, matched by its request_id.
@@ -1281,6 +1301,11 @@ func (p *Processor) StartGatewayReceiver(ctx context.Context, gw gateway.Gateway
 				// table. Plain messages (a configured plaintext peer, the Hub's
 				// SMS number) skip the chain as before. [MESHSAT-1128]
 				sourceIface := msg.Source + "_0"
+				// A frame received on the link: the hop set's passive sign.
+				// [MESHSAT-1650]
+				if h := hopSigns(&p.hop); h != nil {
+					h.Positive(sourceIface, "rx")
+				}
 				decodedText := msg.Text
 				dropped := false
 				// An SMS one of its chat's keys opens (sms:<from>, then sms:*)

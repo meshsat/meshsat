@@ -137,6 +137,10 @@ type Dispatcher struct {
 	// gate is asked before each delivery is sent (SetSendGate); the workers
 	// read it through this pointer, so one set later reaches them all.
 	gate atomic.Pointer[SendGate]
+	// hop takes the evidence the hop set decides on (nil = none); the
+	// workers hold a pointer to it, so a sink set after Start still
+	// reaches them. [MESHSAT-1650]
+	hop atomic.Pointer[hopSink]
 
 	mu sync.RWMutex
 }
@@ -351,6 +355,26 @@ func (d *Dispatcher) routeExcluded(interfaceID string) (bool, string) {
 	return g.RouteExcluded(interfaceID)
 }
 
+// SetHopSigns sets where the hop set's evidence goes; nil = nowhere.
+func (d *Dispatcher) SetHopSigns(h HopSigns) {
+	if h == nil {
+		d.hop.Store(nil)
+		return
+	}
+	d.hop.Store(&hopSink{h})
+}
+
+// hopSigns is the hop set's sink, or nil.
+func hopSigns(p *atomic.Pointer[hopSink]) HopSigns {
+	if p == nil {
+		return nil
+	}
+	if s := p.Load(); s != nil {
+		return s.HopSigns
+	}
+	return nil
+}
+
 // Escalator returns the owner of delivery intents, or nil.
 func (d *Dispatcher) Escalator() *Escalator { return d.escalator }
 
@@ -501,6 +525,7 @@ func (d *Dispatcher) startInterfaceWorkers(ctx context.Context) {
 			custodyMgr:      d.custodyMgr,
 			failover:        d.failover,
 			gate:            &d.gate,
+			hop:             &d.hop,
 			intents:         d.escalator,
 			hubRoute:        d.hubRoute,
 			cancel:          workerCancel,
@@ -573,6 +598,7 @@ func (d *Dispatcher) StartWorker(ctx context.Context, ifaceID string, channelTyp
 		custodyMgr:      d.custodyMgr,
 		failover:        d.failover,
 		gate:            &d.gate,
+		hop:             &d.hop,
 		intents:         d.escalator,
 		hubRoute:        d.hubRoute,
 		cancel:          workerCancel,
@@ -1685,6 +1711,7 @@ type DeliveryWorker struct {
 	custodyMgr      *CustodyManager           // DTN custody transfer (MESHSAT-408)
 	failover        *FailoverResolver         // next group member when a bearer gets no ack [MESHSAT-1021]
 	gate            *atomic.Pointer[SendGate] // the dispatcher's send gate (nil = none) [MESHSAT-1446]
+	hop             *atomic.Pointer[hopSink]  // the hop set's evidence sink (nil = none) [MESHSAT-1650]
 	intents         *Escalator                // owner of delivery intents (nil = none) [MESHSAT-1581]
 	hubRoute        *hubRouteRef              // the Hub app route's adapter, the dispatcher's [MESHSAT-1584]
 	cancel          context.CancelFunc        // per-worker cancellation
@@ -1763,6 +1790,14 @@ func (w *DeliveryWorker) deliver(ctx context.Context, del database.MessageDelive
 		}
 		if del.CreatedAt == "" {
 			del.CreatedAt = fresh.CreatedAt // for the event's latency_ms only [MESHSAT-826]
+		}
+	}
+
+	// A send on a paid link is the hop set's alarm input: free bearers
+	// excluded while paid attempts go out. [MESHSAT-1650]
+	if isPaidInterface(w.channelID) {
+		if h := hopSigns(w.hop); h != nil {
+			h.PaidAttempt(w.channelID)
 		}
 	}
 
@@ -2374,8 +2409,27 @@ func deliveryAge(createdAt string) (time.Duration, bool) {
 	return 0, false
 }
 
+// hopFailure turns a failed send into the hop set's evidence: a peer that
+// never acknowledged is a delivery sign keyed by the destination (one
+// silent contact is one sign, never two), and a send the radio refused or
+// never made is the radio's own sign. Other failures say nothing about the
+// link. [MESHSAT-1650]
+func (w *DeliveryWorker) hopFailure(del database.MessageDelivery, err error) {
+	h := hopSigns(w.hop)
+	if h == nil || err == nil {
+		return
+	}
+	switch {
+	case errors.Is(err, transport.ErrNoAck):
+		h.Negative(w.channelID, "delivery", del.Destination, "no_ack")
+	case errors.Is(err, transport.ErrNotSubmitted):
+		h.Negative(w.channelID, "radio", "not_submitted", "the radio did not send it")
+	}
+}
+
 func (w *DeliveryWorker) handleFailure(del database.MessageDelivery, deliveryErr error) {
 	errMsg := deliveryErr.Error()
+	w.hopFailure(del, deliveryErr)
 
 	// A satellite session whose outcome never reached this Bridge: its
 	// answer did not come back (the link to the MeshSat node dropped under

@@ -929,6 +929,23 @@ func (s *Server) handleGetHealthScores(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, scores)
 }
 
+// handleGetHopSet returns the hop set: per link its state, the evidence it
+// rests on, and whether the hop set gates routes or only observes.
+// @Summary Get the hop set
+// @Description Media hopping, slice (b): per link (interface) the hop set's state (admitted, suspect, excluded, recovering), whether it is down (deaf) or retained by the floor, the contact-independent signs against it, its last positive sign, and whether the hop set is the route gate (MESHSAT_HOPSET=true) or only observes. [MESHSAT-1650]
+// @Tags interfaces
+// @Produce json
+// @Success 200 {object} engine.HopSetStatus
+// @Failure 503 {object} map[string]string
+// @Router /api/hopset [get]
+func (s *Server) handleGetHopSet(w http.ResponseWriter, r *http.Request) {
+	if s.hopSet == nil {
+		writeError(w, http.StatusServiceUnavailable, "hop set not available")
+		return
+	}
+	writeJSON(w, http.StatusOK, s.hopSet.Status())
+}
+
 // reloadAccessRules refreshes the in-memory access rules after CRUD mutations.
 func (s *Server) reloadAccessRules() {
 	if s.accessEval != nil {
