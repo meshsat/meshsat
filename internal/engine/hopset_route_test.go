@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,7 +23,7 @@ import (
 func gatingHopSet(t *testing.T, d *Dispatcher, list func() ([]database.Interface, error)) (*HopSetManager, *time.Time) {
 	t.Helper()
 	now := time.Date(2026, 10, 23, 14, 0, 0, 0, time.UTC)
-	m := NewHopSetManager(DefaultHopSetConfig(), list, true)
+	m := NewHopSetManager(DefaultHopSetConfig(), list, HopOn)
 	m.clock = func() time.Time { return now }
 	d.SetHopSigns(m)
 	d.SetRouteGate(m)
@@ -84,7 +85,7 @@ func TestHopSetGatesTheIntents(t *testing.T) {
 func TestHopSetGatesTheRetryFailover(t *testing.T) {
 	h, ruleID := noAckHarness(t)
 	now := time.Date(2026, 10, 23, 14, 0, 0, 0, time.UTC)
-	m := NewHopSetManager(DefaultHopSetConfig(), h.db.GetAllInterfaces, true)
+	m := NewHopSetManager(DefaultHopSetConfig(), h.db.GetAllInterfaces, HopOn)
 	m.clock = func() time.Time { return now }
 	h.failover.SetRouteGate(m)
 	w := noAckWorker(h)
@@ -290,7 +291,7 @@ func TestHopSetFedByIntentSends(t *testing.T) {
 func TestHopSetPaidAlarmOnTheLegacyForward(t *testing.T) {
 	h, _ := noAckHarness(t)
 	now := time.Date(2026, 10, 23, 14, 0, 0, 0, time.UTC)
-	m := NewHopSetManager(DefaultHopSetConfig(), h.db.GetAllInterfaces, true)
+	m := NewHopSetManager(DefaultHopSetConfig(), h.db.GetAllInterfaces, HopOn)
 	m.clock = func() time.Time { return now }
 	var audits []string
 	m.SetAudit(func(typ, id, _ string) { audits = append(audits, typ+" "+id) })
@@ -365,5 +366,164 @@ func TestHopSetPaidAlarmOnlyOnARealSubmission(t *testing.T) {
 	h.work("cellular_0")
 	if f.count() != 1 || alarms() != 1 {
 		t.Fatalf("sent: %d sends, %d alarms; want 1 and 1 (intents %s, %s)", f.count(), alarms(), sub.Intents[0].ID, sub2.Intents[0].ID)
+	}
+}
+
+// intent_non_bearer_refusal_is_not_radio_evidence: LXMF's local, destination
+// and path failures leave no radio sign (R47-V3); the bearer's own refusal
+// (a mesh ErrNotSubmitted) still is one.
+func TestHopSetIntentNonBearerRefusalIsNotRadioEvidence(t *testing.T) {
+	for _, e := range []error{lxmf.ErrNotPrepared, lxmf.ErrUnknownDestination, lxmf.ErrNoPath, lxmf.ErrLinkFailed,
+		fmt.Errorf("lxmf: interface: %w", transport.ErrNotSubmitted)} {
+		h := newIntentHarness(t)
+		m, _ := gatingHopSet(t, h.d, h.db.GetAllInterfaces)
+		h.workers["lxmf_0"].hop = &h.d.hop
+		h.lx.results = []error{e}
+		h.submit(h.contact(lxmfAddr(0), meshAddr(1)), "via lxmf", directory.StrategyOrderedFallback)
+		if h.work("lxmf_0") == 0 || h.lx.n() != 1 {
+			t.Fatalf("%v: the LXMF attempt did not run", e)
+		}
+		if s := hopState(t, m, "lxmf_0"); len(s.Signs) != 0 {
+			t.Errorf("%v: lxmf_0 signs %+v, want none", e, s.Signs)
+		}
+	}
+	h := newIntentHarness(t)
+	m, _ := gatingHopSet(t, h.d, h.db.GetAllInterfaces)
+	h.workers["mesh_0"].hop = &h.d.hop
+	h.mesh.err = fmt.Errorf("radio refused: %w", transport.ErrNotSubmitted)
+	h.submit(h.contact(meshAddr(0), lxmfAddr(1)), "via mesh", directory.StrategyOrderedFallback)
+	h.work("mesh_0")
+	if s := hopState(t, m, "mesh_0"); len(s.Signs) != 1 || s.Signs[0].Source != "radio" {
+		t.Fatalf("the radio's own refusal: signs %+v, want one radio sign", s.Signs)
+	}
+}
+
+// unsent_paid_legacy_delivery_does_not_raise_alarm: a legacy paid delivery
+// whose gateway is not found never reached a modem, so it raises no alarm
+// (R47-V6); the next one that does reach its gateway raises one.
+func TestHopSetUnsentPaidLegacyDeliveryDoesNotRaiseAlarm(t *testing.T) {
+	h, _ := noAckHarness(t)
+	h.addInterface(t, "iridium_0", "iridium", true)
+	now := time.Date(2026, 10, 23, 14, 0, 0, 0, time.UTC)
+	m := NewHopSetManager(DefaultHopSetConfig(), h.db.GetAllInterfaces, HopOn)
+	m.clock = func() time.Time { return now }
+	var audits []string
+	m.SetAudit(func(typ, id, _ string) { audits = append(audits, typ+" "+id) })
+	h.dispatch.SetHopSigns(m)
+	m.Negative("aprs_0", "delivery", "a", "no_ack")
+	m.Negative("aprs_0", "delivery", "b", "no_ack")
+	now = now.Add(11 * time.Second)
+	if s := hopState(t, m, "aprs_0"); s.State != HopExcluded {
+		t.Fatalf("setup: aprs_0 %s, want excluded", s.State)
+	}
+	alarms := func() int {
+		n := 0
+		for _, a := range audits {
+			if a == "hopset_alarm aprs_0" {
+				n++
+			}
+		}
+		return n
+	}
+	send := func(channel, chanType string) {
+		row := database.MessageDelivery{MsgRef: "paid-" + channel, Channel: channel, Status: "queued", Priority: 10,
+			Payload: []byte("hello"), TextPreview: "hello", MaxRetries: 3, Visited: "[]", QoSLevel: 1, Destination: "+31600000001"}
+		id, err := h.db.InsertDelivery(row)
+		if err != nil {
+			t.Fatal(err)
+		}
+		row.ID = id
+		w := newTestWorker(h, channel, chanType)
+		w.hop = &h.dispatch.hop
+		w.deliver(context.Background(), row)
+	}
+	send("iridium_0", "iridium")
+	if n := alarms(); n != 0 {
+		t.Fatalf("no gateway for iridium_0: %d alarms (%v), want none", n, audits)
+	}
+	send("cellular_0", "cellular")
+	if n := alarms(); n != 1 {
+		t.Fatalf("a forward to the cellular gateway: %d alarms (%v), want 1", n, audits)
+	}
+	// A gateway found by its type (the legacy lookup) is a submission too.
+	h.addInterface(t, "sms_0", "sms", true)
+	h.gwProv.gwSlice = append(h.gwProv.gwSlice, &mockGateway{typ: "sms_0"})
+	now = now.Add(DefaultHopSetConfig().AlarmEvery + time.Second)
+	send("sms_0", "sms")
+	if n := alarms(); n != 2 {
+		t.Fatalf("a forward to the gateway found by type: %d alarms (%v), want 2", n, audits)
+	}
+}
+
+// gateway_oob_receive_clears_silence: a management frame the OOB handler
+// consumes is still a frame heard on the link, so it ends that link's
+// silence (R48-S2), and it is counted once.
+func TestHopSetGatewayOOBReceiveClearsSilence(t *testing.T) {
+	p, db, _, gw := newInboundAuthHarness(t, "aprs_0", "aprs", "[]")
+	var mu sync.Mutex
+	now := time.Date(2026, 10, 23, 14, 0, 0, 0, time.UTC)
+	m := NewHopSetManager(DefaultHopSetConfig(), p.db.GetAllInterfaces, HopOn)
+	m.clock = func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+	advance := func(d time.Duration) { mu.Lock(); now = now.Add(d); mu.Unlock() }
+	p.SetHopSigns(m)
+	consumed := make(chan string, 1)
+	p.SetOOBInbound(func(ctx context.Context, ifaceID, fromAddr, text string) bool {
+		if text != "management frame" {
+			return false
+		}
+		consumed <- ifaceID
+		return true
+	})
+	for i := 0; i < 70; i++ {
+		m.Positive("aprs_0", "rx")
+		advance(time.Minute)
+	}
+	advance(10 * time.Minute)
+	if s := hopState(t, m, "aprs_0"); len(s.Signs) != 1 || s.Signs[0].Source != "silence" {
+		t.Fatalf("setup: aprs_0 signs %+v, want one silence sign", s.Signs)
+	}
+	m.mu.Lock()
+	before := 0
+	for _, r := range m.links["aprs_0"].rx {
+		before += r.n
+	}
+	m.mu.Unlock()
+
+	gw.ch <- gateway.InboundMessage{Source: "aprs", FromAddr: "MSPRLX-10", Text: "management frame"}
+	select {
+	case id := <-consumed:
+		if id != "aprs_0" {
+			t.Fatalf("OOB handler saw %q, want aprs_0", id)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the OOB handler never saw the frame")
+	}
+	s := hopState(t, m, "aprs_0")
+	if len(s.Signs) != 0 || s.State != HopAdmitted {
+		t.Fatalf("after a consumed management frame: %s signs %+v, want admitted with no silence sign", s.State, s.Signs)
+	}
+	m.mu.Lock()
+	after := 0
+	for _, r := range m.links["aprs_0"].rx {
+		after += r.n
+	}
+	m.mu.Unlock()
+	if after != before+1 {
+		t.Fatalf("frames heard %d -> %d, want the frame counted once", before, after)
+	}
+
+	// An ordinary frame, which the OOB handler passes on, is counted once too.
+	advance(time.Minute)
+	if persisted, _ := deliver(t, p, db, gw, gateway.InboundMessage{Source: "aprs", FromAddr: "MSPRLX-10", Text: "hello"}); len(persisted) == 0 {
+		t.Fatal("the ordinary frame was not persisted")
+	}
+	m.mu.Lock()
+	final := 0
+	for _, r := range m.links["aprs_0"].rx {
+		final += r.n
+	}
+	m.mu.Unlock()
+	if final != after+1 {
+		t.Fatalf("frames heard %d -> %d after an ordinary frame, want it counted once", after, final)
 	}
 }

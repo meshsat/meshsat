@@ -1827,10 +1827,21 @@ func main() {
 	// direct interface target, and HeMB bond allocation. [MESHSAT-1650]
 	//
 	// The hop set (slice (b) of media hopping) keeps per link a state built
-	// from contact-independent evidence. MESHSAT_HOPSET=true makes it that
-	// gate in place of the scorer (design D-7); otherwise it observes, and
-	// GET /api/hopset shows what it would decide. [MESHSAT-1650]
-	hopSet := engine.NewHopSetManager(engine.DefaultHopSetConfig(), db.GetAllInterfaces, engine.HopSetGating())
+	// from contact-independent evidence. The media hopping switch (Settings >
+	// Media Hopping, system_config media_hop_mode) is off by default: then
+	// nothing runs, the intents read no gate and a group skips a deaf
+	// receiver only, as before media hopping. Watch keeps the state and shows
+	// it on GET /api/hopset without routing on it; on makes the hop set the
+	// gate (design D-7). [MESHSAT-1650]
+	hopMode := engine.HopOff
+	if v, err := db.GetSystemConfig(engine.HopModeKey); err == nil {
+		if m, ok := engine.ParseHopMode(v); ok {
+			hopMode = m
+		} else {
+			log.Warn().Str("value", v).Msg("media hopping: stored mode not off, watch or on; off")
+		}
+	}
+	hopSet := engine.NewHopSetManager(engine.DefaultHopSetConfig(), db.GetAllInterfaces, hopMode)
 	if spectrumMon != nil {
 		hopSet.SetSpectrum(spectrumMon)
 	}
@@ -1845,13 +1856,9 @@ func main() {
 	proc.SetHopSigns(hopSet)
 	srv.SetHopSet(hopSet)
 	go hopSet.Start(ctx)
-	var routeGate engine.RouteGate = healthScorer
-	if hopSet.Gating() {
-		routeGate = hopSet
-		log.Info().Msg("hop set: gating routes (MESHSAT_HOPSET=true)")
-	}
-	dispatcher.SetRouteGate(routeGate)
-	failoverResolver.SetRouteGate(routeGate)
+	log.Info().Str("mode", string(hopMode)).Msg("media hopping")
+	dispatcher.SetRouteGate(hopSet.IntentGate())
+	failoverResolver.SetRouteGate(hopSet.GroupGate())
 	srv.SetAccessEvaluator(accessEval)
 	srv.SetRegistry(registry)
 	srv.SetTLEManager(tleMgr)

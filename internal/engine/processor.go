@@ -1275,14 +1275,20 @@ func (p *Processor) StartGatewayReceiver(ctx context.Context, gw gateway.Gateway
 				if fromAddr == "" {
 					fromAddr = msg.Source
 				}
+				sourceIface := msg.Source + "_0"
+				// A frame received on the link, a management frame included:
+				// the hop set's passive sign, taken once and before the OOB
+				// classifier can consume the frame (R48-S2). [MESHSAT-1650]
+				if h := hopSigns(&p.hop); h != nil {
+					h.Positive(sourceIface, "rx")
+				}
 				// OOB management frames are classified before anything else
 				// sees the text: decode a copy through the interface's
 				// ingress transforms, look for the sentinel, consume on
 				// match. Not a frame: everything below runs unchanged.
 				// [MESHSAT-756]
 				if oob := p.oobHandler(); oob != nil {
-					oobIface := msg.Source + "_0"
-					if oob(ctx, oobIface, msg.FromAddr, p.DecodeIngress(oobIface, msg.Text)) {
+					if oob(ctx, sourceIface, msg.FromAddr, p.DecodeIngress(sourceIface, msg.Text)) {
 						continue
 					}
 				}
@@ -1300,12 +1306,6 @@ func (p *Processor) StartGatewayReceiver(ctx context.Context, gw gateway.Gateway
 				// and never reaches the rules, the booth screen or the message
 				// table. Plain messages (a configured plaintext peer, the Hub's
 				// SMS number) skip the chain as before. [MESHSAT-1128]
-				sourceIface := msg.Source + "_0"
-				// A frame received on the link: the hop set's passive sign.
-				// [MESHSAT-1650]
-				if h := hopSigns(&p.hop); h != nil {
-					h.Positive(sourceIface, "rx")
-				}
 				decodedText := msg.Text
 				dropped := false
 				// An SMS one of its chat's keys opens (sms:<from>, then sms:*)

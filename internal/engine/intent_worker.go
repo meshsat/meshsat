@@ -179,14 +179,15 @@ func (w *DeliveryWorker) deliverIntent(ctx context.Context, del database.Message
 }
 
 // hopIntentOutcome turns an intent send's outcome into the hop set's
-// evidence, as hopFailure does for the legacy rows: nothing left the device
-// though the bearer was there and a retry is spent (every adapter's
-// ErrNotSubmitted) is the radio's sign. A link that was down, an oversize
-// or unsupported send, and the pre-send refusals (which never get here)
-// say nothing about the band. A missing receipt is the Escalator's to
-// report (hopReceiptEnded). [MESHSAT-1650, R46-V3]
+// evidence, as hopFailure does for the legacy rows: the bearer's own device
+// took the send and refused it or never sent it (an adapter's
+// ErrNotSubmitted, SendOutcome.BearerRefused) is the radio's sign. A link
+// that was down, an oversize or unsupported send, LXMF's local, destination
+// and path failures, and the pre-send refusals (which never get here) say
+// nothing about the band. A missing receipt is the Escalator's to report
+// (hopReceiptEnded). [MESHSAT-1650, R46-V3, R47-V3]
 func (w *DeliveryWorker) hopIntentOutcome(out SendOutcome) {
-	if out.Class != database.ClassNotSent || !out.ConsumeRetry || out.Reason != "not_sent" {
+	if !out.BearerRefused {
 		return
 	}
 	if h := hopSigns(w.hop); h != nil {

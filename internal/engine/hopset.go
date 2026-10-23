@@ -4,9 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,9 +17,10 @@ import (
 
 // The hop set is slice (b) of media hopping (MEDIA_HOP_DESIGN section 4.3):
 // per link a state built from contact-independent evidence only, so one
-// silent contact never takes a bearer out of use. Behind MESHSAT_HOPSET the
-// manager is the route gate (design D-7); without it it only observes, and
-// GET /api/hopset shows what it would decide. [MESHSAT-1650]
+// silent contact never takes a bearer out of use. The media hopping switch
+// (HopMode, off by default) decides whether it runs at all, only watches
+// (GET /api/hopset shows what it would decide) or is the route gate (design
+// D-7). [MESHSAT-1650]
 //
 // The rules, in order:
 //   - A negative sign makes an admitted link suspect. A sign is RF-side (a
@@ -121,12 +120,34 @@ func DefaultHopSetConfig() HopSetConfig {
 	}
 }
 
-// HopSetGating reports MESHSAT_HOPSET (default false): true makes the hop
-// set the route gate; false leaves the slice (a) gate in place and the hop
-// set observing.
-func HopSetGating() bool {
-	v, _ := strconv.ParseBool(os.Getenv("MESHSAT_HOPSET"))
-	return v
+// HopMode is the media hopping switch (Settings > Media Hopping), kept in
+// system_config under HopModeKey. Off is the default.
+//   - off: nothing runs. No signs are kept, nothing is audited or published,
+//     the delivery intents read no gate and a failover group skips a deaf
+//     receiver only, as before media hopping.
+//   - watch: the hop set keeps its state, audits and publishes what it
+//     would decide; routing stays as with off.
+//   - on: the hop set is the route gate for the intents and the groups.
+//
+// [MESHSAT-1650]
+type HopMode string
+
+const (
+	HopOff   HopMode = "off"
+	HopWatch HopMode = "watch"
+	HopOn    HopMode = "on"
+
+	// HopModeKey is the system_config key of the switch.
+	HopModeKey = "media_hop_mode"
+)
+
+// ParseHopMode reads a stored or requested mode; false for anything else.
+func ParseHopMode(v string) (HopMode, bool) {
+	switch m := HopMode(strings.ToLower(strings.TrimSpace(v))); m {
+	case HopOff, HopWatch, HopOn:
+		return m, true
+	}
+	return HopOff, false
 }
 
 // hopPaid lists the channel types the hop set covers and whether each is
@@ -171,6 +192,7 @@ type HopLinkStatus struct {
 
 // HopSetStatus is GET /api/hopset.
 type HopSetStatus struct {
+	Mode   HopMode         `json:"mode"`
 	Gating bool            `json:"gating"`
 	Config map[string]any  `json:"config"`
 	Links  []HopLinkStatus `json:"links"`
@@ -188,7 +210,7 @@ type hopLink struct {
 	negatives       []HopSign
 	lastPositive    time.Time
 	lastPositiveSeq uint64
-	rxTimes         []time.Time   // frames heard, the last 90 min, for the silence sign
+	rx              []rxMark      // frames heard, the last 90 min, for the silence sign
 	lastExcluded    time.Time     // when the link was last excluded
 	flaps           int           // exclusions within FlapMemory of the one before
 	readmit         time.Duration // this exclusion's re-admission dwell
@@ -225,24 +247,35 @@ func (l *hopLink) distinct(repeat time.Duration) int {
 	return n
 }
 
+// rxMark counts the frames a link heard in one second. Receive history is
+// kept as one mark per second for 90 minutes: bounded by time, so a busy
+// link never loses the earlier part of its hour to a count cap (R48-S1).
+type rxMark struct {
+	at time.Time // the latest frame heard in this second
+	n  int       // frames heard in this second
+}
+
+// lastRx is when the link last heard a frame.
+func (l *hopLink) lastRx() time.Time { return l.rx[len(l.rx)-1].at }
+
 // busy reports whether the link usually hears traffic about every
 // minute: at least 30 frames in the hour before its last one, in at least
 // 5 of that hour's 10-minute stretches. A short burst followed by its usual
 // quiet is not busy.
 func (l *hopLink) busy() bool {
-	if len(l.rxTimes) == 0 {
+	if len(l.rx) == 0 {
 		return false
 	}
-	last := l.rxTimes[len(l.rxTimes)-1]
+	last := l.lastRx()
 	from := last.Add(-time.Hour)
 	n := 0
 	buckets := map[int]bool{}
-	for _, t := range l.rxTimes {
-		if t.Before(from) {
+	for _, r := range l.rx {
+		if r.at.Before(from) {
 			continue
 		}
-		n++
-		buckets[int(last.Sub(t)/(10*time.Minute))] = true
+		n += r.n
+		buckets[int(last.Sub(r.at)/(10*time.Minute))] = true
 	}
 	return n >= 30 && len(buckets) >= 5
 }
@@ -279,7 +312,7 @@ func (l *hopLink) summary() string {
 type HopSetManager struct {
 	mu        sync.Mutex
 	cfg       HopSetConfig
-	gating    bool
+	hopMode   HopMode
 	clock     func() time.Time
 	list      func() ([]database.Interface, error)
 	spectrum  JamVerdicter
@@ -292,13 +325,60 @@ type HopSetManager struct {
 	seq       uint64 // the arrival order of signs and state changes
 }
 
-// NewHopSetManager makes a hop set over the links list returns.
-func NewHopSetManager(cfg HopSetConfig, list func() ([]database.Interface, error), gating bool) *HopSetManager {
-	return &HopSetManager{cfg: cfg, gating: gating, list: list, links: map[string]*hopLink{}}
+// NewHopSetManager makes a hop set over the links list returns, in mode.
+func NewHopSetManager(cfg HopSetConfig, list func() ([]database.Interface, error), mode HopMode) *HopSetManager {
+	if _, ok := ParseHopMode(string(mode)); !ok {
+		mode = HopOff
+	}
+	return &HopSetManager{cfg: cfg, hopMode: mode, list: list, links: map[string]*hopLink{}}
 }
 
-// Gating reports whether the hop set is the route gate.
-func (m *HopSetManager) Gating() bool { return m.gating }
+// Gating reports whether the hop set is the route gate (mode on).
+func (m *HopSetManager) Gating() bool { return m.Mode() == HopOn }
+
+// Mode is the switch's position.
+func (m *HopSetManager) Mode() HopMode {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.hopMode
+}
+
+// SetMode moves the switch and returns where it was. Turning it off drops
+// every link's state, so watching or gating starts again from nothing;
+// between watch and on the state carries over, so what was watched is what
+// gates.
+func (m *HopSetManager) SetMode(mode HopMode) (HopMode, error) {
+	if _, ok := ParseHopMode(string(mode)); !ok {
+		return "", fmt.Errorf("media hopping mode %q: want off, watch or on", mode)
+	}
+	m.mu.Lock()
+	prev := m.hopMode
+	m.hopMode = mode
+	if mode == HopOff {
+		m.links = map[string]*hopLink{}
+		m.refreshed = time.Time{}
+	}
+	m.mu.Unlock()
+	return prev, nil
+}
+
+// IntentGate is the gate the delivery intents read: the hop set while the
+// switch is on, none otherwise, as before media hopping.
+func (m *HopSetManager) IntentGate() RouteGate { return hopGate{m: m} }
+
+// GroupGate is the gate a failover group reads: the hop set while the switch
+// is on, otherwise a deaf receiver only, as before media hopping
+// (MESHSAT-857).
+func (m *HopSetManager) GroupGate() RouteGate { return hopGate{m: m, deafOtherwise: true} }
+
+type hopGate struct {
+	m             *HopSetManager
+	deafOtherwise bool
+}
+
+func (g hopGate) RouteExcluded(interfaceID string) (bool, string) {
+	return g.m.routeExcluded(interfaceID, g.deafOtherwise)
+}
 
 // SetSpectrum sets the jam verdicts the hop set reads.
 func (m *HopSetManager) SetSpectrum(sv JamVerdicter) {
@@ -354,7 +434,10 @@ func (m *HopSetManager) Start(ctx context.Context) {
 			return
 		case <-t.C:
 			m.mu.Lock()
-			out := m.evaluateLocked(m.now())
+			var out hopOut
+			if m.hopMode != HopOff {
+				out = m.evaluateLocked(m.now())
+			}
 			m.mu.Unlock()
 			out.flush()
 		}
@@ -373,6 +456,10 @@ func (o hopOut) flush() {
 // Negative implements HopSigns.
 func (m *HopSetManager) Negative(ifaceID, source, key, reason string) {
 	m.mu.Lock()
+	if m.hopMode == HopOff {
+		m.mu.Unlock()
+		return
+	}
 	now := m.now()
 	l := m.linkLocked(ifaceID, now)
 	if l == nil {
@@ -392,6 +479,10 @@ func (m *HopSetManager) Negative(ifaceID, source, key, reason string) {
 // Positive implements HopSigns.
 func (m *HopSetManager) Positive(ifaceID, source string) {
 	m.mu.Lock()
+	if m.hopMode == HopOff {
+		m.mu.Unlock()
+		return
+	}
 	now := m.now()
 	l := m.linkLocked(ifaceID, now)
 	if l == nil {
@@ -401,15 +492,17 @@ func (m *HopSetManager) Positive(ifaceID, source string) {
 	m.seq++
 	l.lastPositive, l.lastPositiveSeq = now, m.seq
 	if source == "rx" {
-		l.rxTimes = append(l.rxTimes, now)
+		if k := len(l.rx); k > 0 && l.rx[k-1].at.Unix() == now.Unix() {
+			l.rx[k-1].at = now
+			l.rx[k-1].n++
+		} else {
+			l.rx = append(l.rx, rxMark{at: now, n: 1})
+		}
 		cut := 0
-		for cut < len(l.rxTimes) && now.Sub(l.rxTimes[cut]) > 90*time.Minute {
+		for cut < len(l.rx) && now.Sub(l.rx[cut].at) > 90*time.Minute {
 			cut++
 		}
-		if len(l.rxTimes)-cut > 512 {
-			cut = len(l.rxTimes) - 512
-		}
-		l.rxTimes = l.rxTimes[cut:]
+		l.rx = l.rx[cut:]
 	}
 	out := m.evaluateLocked(now)
 	m.mu.Unlock()
@@ -421,6 +514,10 @@ func (m *HopSetManager) Positive(ifaceID, source string) {
 // rise", once per AlarmEvery per free link.
 func (m *HopSetManager) PaidAttempt(ifaceID string) {
 	m.mu.Lock()
+	if m.hopMode == HopOff {
+		m.mu.Unlock()
+		return
+	}
 	now := m.now()
 	l := m.linkLocked(ifaceID, now)
 	if l == nil || !l.paid {
@@ -443,12 +540,29 @@ func (m *HopSetManager) PaidAttempt(ifaceID string) {
 	out.flush()
 }
 
-// RouteExcluded implements RouteGate: a link is tried when it is usable
-// (admitted, suspect, or kept by the floor) and not down. A recovering link
-// waits for its re-admission. A link outside the hop set is gated by its
-// deaf check only, as the slice (a) gate had it.
+// RouteExcluded is the hop set's own decision, the gate while the switch is
+// on: a link is tried when it is usable (admitted, suspect, or kept by the
+// floor) and not down. A recovering link waits for its re-admission. A link
+// outside the hop set is gated by its deaf check only, as the slice (a) gate
+// had it. With the switch off it decides nothing; IntentGate and GroupGate
+// are what the router reads.
 func (m *HopSetManager) RouteExcluded(interfaceID string) (bool, string) {
+	return m.routeExcluded(interfaceID, false)
+}
+
+// routeExcluded decides under one lock, so a switch moved meanwhile never
+// mixes two modes: with the switch on the hop set decides; otherwise a
+// deaf receiver when deafOtherwise, else nothing.
+func (m *HopSetManager) routeExcluded(interfaceID string, deafOtherwise bool) (bool, string) {
 	m.mu.Lock()
+	if m.hopMode != HopOn {
+		rc := m.receive
+		m.mu.Unlock()
+		if deafOtherwise && rc != nil && rc.ReceiveDeaf(interfaceID) {
+			return true, "deaf"
+		}
+		return false, ""
+	}
 	out := m.evaluateLocked(m.now())
 	l := m.links[interfaceID]
 	var ex bool
@@ -473,8 +587,11 @@ func (m *HopSetManager) RouteExcluded(interfaceID string) (bool, string) {
 // Status is GET /api/hopset.
 func (m *HopSetManager) Status() HopSetStatus {
 	m.mu.Lock()
-	out := m.evaluateLocked(m.now())
-	st := HopSetStatus{Gating: m.gating, Config: map[string]any{
+	var out hopOut
+	if m.hopMode != HopOff {
+		out = m.evaluateLocked(m.now())
+	}
+	st := HopSetStatus{Mode: m.hopMode, Gating: m.hopMode == HopOn, Config: map[string]any{
 		"trigger_window_s": m.cfg.TriggerWindow.Seconds(), "drop_dwell_s": m.cfg.DropDwell.Seconds(),
 		"readmit_dwell_s": m.cfg.ReadmitDwell.Seconds(), "readmit_max_s": m.cfg.ReadmitMax.Seconds(),
 		"flap_memory_s": m.cfg.FlapMemory.Seconds(), "radio_repeat_s": m.cfg.RadioRepeat.Seconds(),
@@ -594,10 +711,10 @@ func (m *HopSetManager) evaluateLocked(now time.Time) hopOut {
 		// A link that usually hears traffic every minute and has heard
 		// nothing for SilenceAfter has a silence sign, read afresh like
 		// the spectrum's: the next frame heard ends it (D-10).
-		if l.busy() && now.Sub(l.rxTimes[len(l.rxTimes)-1]) >= m.cfg.SilenceAfter {
+		if l.busy() && now.Sub(l.lastRx()) >= m.cfg.SilenceAfter {
 			m.seq++
 			l.negatives = append(l.negatives, HopSign{Source: "silence", Key: "rx",
-				Reason: "nothing heard for " + now.Sub(l.rxTimes[len(l.rxTimes)-1]).Round(time.Second).String(), At: now, seq: m.seq})
+				Reason: "nothing heard for " + now.Sub(l.lastRx()).Round(time.Second).String(), At: now, seq: m.seq})
 		}
 		l.deaf = m.receive != nil && m.receive.ReceiveDeaf(l.id)
 		l.absent = false
@@ -764,7 +881,7 @@ func (l *hopLink) label() string {
 }
 
 func (m *HopSetManager) mode() string {
-	if m.gating {
+	if m.hopMode == HopOn {
 		return "gating"
 	}
 	return "observing"

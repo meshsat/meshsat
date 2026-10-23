@@ -26,6 +26,11 @@ type SendOutcome struct {
 	Detail       string
 	Reason       string                      // the attempt's reason when not sent (oversize, denied, ...)
 	Evidence     []database.DeliveryEvidence // evidence that came back within the call
+	// BearerRefused: the bearer's own device took the send and refused it
+	// or never sent it (an adapter's ErrNotSubmitted), the one not-sent
+	// outcome that is evidence about the link. LXMF's local, destination
+	// and path failures never set it. [MESHSAT-1650, R47-V3]
+	BearerRefused bool
 }
 
 // Correlation ties later evidence to one transmission: the evidence must
@@ -67,7 +72,7 @@ func LegacyOutcome(err error) SendOutcome {
 	case errors.Is(err, transport.ErrNoRecipient):
 		return SendOutcome{Class: database.ClassNotSent, Detail: err.Error(), Reason: "not_sent"}
 	case errors.Is(err, transport.ErrNotSubmitted):
-		return SendOutcome{Class: database.ClassNotSent, Retryable: true, ConsumeRetry: true, Detail: err.Error(), Reason: "not_sent"}
+		return SendOutcome{Class: database.ClassNotSent, Retryable: true, ConsumeRetry: true, Detail: err.Error(), Reason: "not_sent", BearerRefused: true}
 	}
 	return SendOutcome{Class: database.ClassUnknown, Detail: err.Error()}
 }
@@ -105,7 +110,9 @@ func lxmfOutcome(hash string, err error) SendOutcome {
 	case errors.Is(err, lxmf.ErrStampCostTooHigh), errors.Is(err, lxmf.ErrTooLarge):
 		return SendOutcome{Class: database.ClassNotSent, Detail: err.Error(), Reason: "not_sent"}
 	}
+	// No LXMF failure is a bearer's refusal: the router is not a radio.
 	o := LegacyOutcome(err)
+	o.BearerRefused = false
 	return o
 }
 

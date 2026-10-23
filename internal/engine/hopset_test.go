@@ -50,7 +50,7 @@ func newHopRigCfg(t *testing.T, cfg HopSetConfig, links ...string) *hopRig {
 		}
 		ifaces = append(ifaces, database.Interface{ID: id, ChannelType: ct, Enabled: true})
 	}
-	r.m = NewHopSetManager(cfg, func() ([]database.Interface, error) { return ifaces, nil }, true)
+	r.m = NewHopSetManager(cfg, func() ([]database.Interface, error) { return ifaces, nil }, HopOn)
 	r.m.clock = func() time.Time { return r.now }
 	r.m.SetSpectrum(r)
 	r.m.SetReceiveChecker(r)
@@ -299,6 +299,74 @@ func TestHopSetSilenceSign(t *testing.T) {
 }
 
 // The floor exception to the dwell: when the floor needs a link, a
+// silence_history_survives_receive_volume: a link that hears 20 frames a
+// minute, three of them in one second, keeps its whole hour (R48-S1), so
+// ten quiet minutes are still a silence sign; the history is one mark per
+// second, bounded by time and counting every frame.
+func TestHopSetSilenceHistorySurvivesReceiveVolume(t *testing.T) {
+	r := newHopRig(t, threeFree...)
+	for i := 0; i < 70; i++ {
+		start := r.now
+		for k := 0; k < 3; k++ {
+			r.m.Positive("mesh_0", "rx")
+		}
+		for j := 0; j < 17; j++ {
+			r.after(3 * time.Second)
+			r.m.Positive("mesh_0", "rx")
+		}
+		r.now = start.Add(time.Minute)
+	}
+	r.m.mu.Lock()
+	l := r.m.links["mesh_0"]
+	marks, frames := len(l.rx), 0
+	for _, m := range l.rx {
+		frames += m.n
+	}
+	first := l.rx[0].at
+	r.m.mu.Unlock()
+	if marks != 70*18 || frames != 70*20 || r.now.Sub(first) < 69*time.Minute {
+		t.Fatalf("history: %d marks, %d frames, from %s before now; want 1260, 1400, the whole 70 min", marks, frames, r.now.Sub(first))
+	}
+	r.after(9 * time.Minute)
+	if s := r.state(t, "mesh_0"); len(s.Signs) != 0 {
+		t.Fatalf("9 min quiet: signs %+v, want none yet", s.Signs)
+	}
+	r.after(time.Minute)
+	if s := r.state(t, "mesh_0"); s.State != HopSuspect || len(s.Signs) != 1 || s.Signs[0].Source != "silence" {
+		t.Fatalf("10 min quiet after a busy hour: %s signs %+v, want suspect on a silence sign", s.State, s.Signs)
+	}
+	// Another 100 minutes of the same traffic: the history stays within 90
+	// minutes, one mark per second at most.
+	for i := 0; i < 100; i++ {
+		start := r.now
+		for j := 0; j < 20; j++ {
+			r.m.Positive("mesh_0", "rx")
+			r.after(time.Second)
+		}
+		r.now = start.Add(time.Minute)
+	}
+	r.m.mu.Lock()
+	n, span := len(r.m.links["mesh_0"].rx), r.m.links["mesh_0"].lastRx().Sub(r.m.links["mesh_0"].rx[0].at)
+	r.m.mu.Unlock()
+	if n > 90*60 || span > 90*time.Minute {
+		t.Fatalf("history after 170 min: %d marks over %s, want at most 5400 over 90 min", n, span)
+	}
+
+	// Ten bursts of three frames, each in one second, six minutes apart:
+	// 30 frames in six stretches make a busy link though they are ten marks.
+	r3 := newHopRig(t, threeFree...)
+	for i := 0; i < 10; i++ {
+		for k := 0; k < 3; k++ {
+			r3.m.Positive("tetra_0", "rx")
+		}
+		r3.after(6 * time.Minute)
+	}
+	r3.after(4 * time.Minute)
+	if s := r3.state(t, "tetra_0"); len(s.Signs) != 1 || s.Signs[0].Source != "silence" {
+		t.Fatalf("30 frames in bursts, then 10 min quiet: signs %+v, want a silence sign", s.Signs)
+	}
+}
+
 // recovering one is kept before an excluded one with the same evidence.
 func TestHopSetRecoveringKeptByTheFloor(t *testing.T) {
 	r := newHopRig(t, "mesh_0:mesh", "aprs_0:aprs", "cellular_0:cellular")
@@ -568,15 +636,21 @@ func TestHopSetOutsideLinkDeafOnly(t *testing.T) {
 	}
 }
 
-// MESHSAT_HOPSET defaults to observing; true makes the hop set the gate.
-func TestHopSetGatingFlag(t *testing.T) {
-	t.Setenv("MESHSAT_HOPSET", "")
-	if HopSetGating() {
-		t.Error("gating with the flag unset")
+// The switch reads off, watch and on in any case; anything else is refused,
+// and a bad mode at construction is off.
+func TestHopSetModeParse(t *testing.T) {
+	for in, want := range map[string]HopMode{"off": HopOff, "watch": HopWatch, "on": HopOn, " On ": HopOn, "WATCH": HopWatch} {
+		if m, ok := ParseHopMode(in); !ok || m != want {
+			t.Errorf("ParseHopMode(%q) = %q %v, want %q", in, m, ok, want)
+		}
 	}
-	t.Setenv("MESHSAT_HOPSET", "true")
-	if !HopSetGating() {
-		t.Error("not gating with MESHSAT_HOPSET=true")
+	for _, in := range []string{"", "true", "gate", "1"} {
+		if m, ok := ParseHopMode(in); ok || m != HopOff {
+			t.Errorf("ParseHopMode(%q) = %q %v, want off, false", in, m, ok)
+		}
+	}
+	if m := NewHopSetManager(DefaultHopSetConfig(), nil, "bogus").Mode(); m != HopOff {
+		t.Errorf("a bad mode at construction: %q, want off", m)
 	}
 }
 

@@ -67,3 +67,4 @@ make build-with-web
 | `MESHSAT_CELLULAR_PORT` | `auto` | Serial port or `auto` |
 | `MESHSAT_RETENTION_DAYS` | `30` | Message/telemetry retention |
 | `MESHSAT_PAID_RATE_LIMIT` | `60` | Min seconds between paid sends |
+| `MESHSAT_IRIDIUM_EPOCH` | `2025-02-14T18:14:17Z` | Origin of Iridium system time (RFC 3339) for the 9603's network time and position stamps; ERA3 by default, set only when Iridium announces a new era |

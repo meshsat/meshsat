@@ -2068,10 +2068,7 @@ func (w *DeliveryWorker) deliver(ctx context.Context, del database.MessageDelive
 			}, del.MsgRef))
 		}
 	} else {
-		// Gateway delivery: find the gateway and forward. A forward on a
-		// paid link is a real submission attempt: the hop set's alarm input
-		// (free bearers excluded while paid attempts go out). [MESHSAT-1650]
-		w.hopPaidAttempt()
+		// Gateway delivery: find the gateway and forward.
 		deliveryErr = w.forwardToGatewaySealed(ctx, del, encrypted, chatTexts)
 	}
 
@@ -2199,8 +2196,14 @@ func (w *DeliveryWorker) forwardToGatewaySealed(ctx context.Context, del databas
 			Msg("resolved per-rule SMS destinations from contacts")
 	}
 
+	// A forward to a resolved gateway on a paid link is a real submission
+	// attempt: the hop set's alarm input (free bearers excluded while paid
+	// attempts go out), raised just before the call and never when no
+	// gateway is found. [MESHSAT-1650, R47-V6]
+	//
 	// v0.3.0: try interface ID-based lookup first (e.g. "iridium_0", "mqtt_0")
 	if gw := w.gwProv.GatewayByInterfaceID(w.channelID); gw != nil {
+		w.hopPaidAttempt()
 		return gw.Forward(ctx, msg)
 	}
 
@@ -2212,6 +2215,7 @@ func (w *DeliveryWorker) forwardToGatewaySealed(ctx context.Context, del databas
 			continue
 		}
 		if gw.Type() == w.channelID {
+			w.hopPaidAttempt()
 			return gw.Forward(ctx, msg)
 		}
 	}

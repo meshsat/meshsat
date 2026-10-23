@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -930,9 +931,9 @@ func (s *Server) handleGetHealthScores(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleGetHopSet returns the hop set: per link its state, the evidence it
-// rests on, and whether the hop set gates routes or only observes.
+// rests on, and the media hopping switch's position.
 // @Summary Get the hop set
-// @Description Media hopping, slice (b): per link (interface) the hop set's state (admitted, suspect, excluded, recovering), whether it is down (deaf) or retained by the floor, the contact-independent signs against it, its last positive sign, and whether the hop set is the route gate (MESHSAT_HOPSET=true) or only observes. [MESHSAT-1650]
+// @Description Media hopping, slice (b): per link (interface) the hop set's state (admitted, suspect, excluded, recovering), whether it is usable, down (deaf or absent) or retained by the floor, its re-admission dwell and repeat count, the contact-independent signs against it and its last positive sign, plus the switch (mode off, watch or on; gating only when on). With the switch off it lists no links. [MESHSAT-1650]
 // @Tags interfaces
 // @Produce json
 // @Success 200 {object} engine.HopSetStatus
@@ -944,6 +945,71 @@ func (s *Server) handleGetHopSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, s.hopSet.Status())
+}
+
+// hopModeBody is the media hopping switch on the API.
+type hopModeBody struct {
+	Mode engine.HopMode `json:"mode" example:"off"`
+}
+
+// handleGetHopMode returns the media hopping switch.
+// @Summary Get the media hopping switch
+// @Description The media hopping switch (Settings > Media Hopping), off by default: off = nothing runs and routing is as before media hopping; watch = the hop set keeps and shows its state without routing on it; on = the hop set gates the delivery intents and the failover groups. [MESHSAT-1650]
+// @Tags interfaces
+// @Produce json
+// @Success 200 {object} hopModeBody
+// @Failure 503 {object} map[string]string
+// @Router /api/hopset/mode [get]
+func (s *Server) handleGetHopMode(w http.ResponseWriter, r *http.Request) {
+	if s.hopSet == nil {
+		writeError(w, http.StatusServiceUnavailable, "hop set not available")
+		return
+	}
+	writeJSON(w, http.StatusOK, hopModeBody{Mode: s.hopSet.Mode()})
+}
+
+// handlePutHopMode moves the media hopping switch: stored first, then
+// applied at once, no restart; the change is audited.
+// @Summary Set the media hopping switch
+// @Description Sets the media hopping switch to off, watch or on. The mode is stored in system_config (media_hop_mode) and applied at once; it survives a restart. Turning it off drops the hop set's state; watch to on keeps it. The change is written to the audit log. [MESHSAT-1650]
+// @Tags interfaces
+// @Accept json
+// @Produce json
+// @Param body body hopModeBody true "off, watch or on"
+// @Success 200 {object} hopModeBody
+// @Failure 400 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Router /api/hopset/mode [put]
+func (s *Server) handlePutHopMode(w http.ResponseWriter, r *http.Request) {
+	if s.hopSet == nil {
+		writeError(w, http.StatusServiceUnavailable, "hop set not available")
+		return
+	}
+	var req hopModeBody
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	mode, ok := engine.ParseHopMode(string(req.Mode))
+	if !ok {
+		writeError(w, http.StatusBadRequest, "mode must be off, watch or on")
+		return
+	}
+	if err := s.db.SetSystemConfig(engine.HopModeKey, string(mode)); err != nil {
+		writeError(w, http.StatusInternalServerError, "could not store the mode")
+		return
+	}
+	prev, err := s.hopSet.SetMode(mode)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if s.signing != nil && prev != mode {
+		s.signing.AuditEvent("media_hop_mode", nil, nil, nil, nil, fmt.Sprintf("media hopping %s -> %s", prev, mode))
+	}
+	log.Info().Str("from", string(prev)).Str("to", string(mode)).Msg("media hopping: switch moved")
+	writeJSON(w, http.StatusOK, hopModeBody{Mode: mode})
 }
 
 // reloadAccessRules refreshes the in-memory access rules after CRUD mutations.

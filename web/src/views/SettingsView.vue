@@ -5,6 +5,7 @@ import { useMeshsatStore } from '@/stores/meshsat'
 import ConfigSection from '@/components/ConfigSection.vue'
 import TimeSyncPanel from '@/components/TimeSyncPanel.vue'
 import TetraSettings from '@/components/TetraSettings.vue'
+import MediaHopSettings from '@/components/MediaHopSettings.vue'
 import api from '@/api/client'
 
 const store = useMeshsatStore()
@@ -38,6 +39,7 @@ const allTabs = [
   { id: 'remote_mgmt',   label: 'Remote Mgmt',   tier: 'engineer' },
   { id: 'network',       label: 'Network',       tier: 'engineer' },
   { id: 'routing',       label: 'Routing',       tier: 'engineer' },
+  { id: 'media_hop',     label: 'Media Hopping', tier: 'engineer' },
   { id: 'config_mgmt',   label: 'Export/Import', tier: 'engineer' },
   { id: 'about',         label: 'About',         tier: 'engineer' },
   { id: 'devices',       label: 'Devices',       tier: 'engineer' }
@@ -2161,6 +2163,8 @@ onUnmounted(() => {
     </div>
 
     <TetraSettings v-if="activeTab === 'tetra'" />
+
+    <MediaHopSettings v-if="activeTab === 'media_hop'" />
 
     <div v-if="activeTab === 'cellular'">
       <!-- Modem Status (read-only) -->

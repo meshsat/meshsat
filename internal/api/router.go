@@ -753,6 +753,8 @@ func (s *Server) Router() http.Handler {
 		r.Post("/interfaces/{id}/disable", s.handleDisableInterface)
 		r.Get("/interfaces/health", s.handleGetHealthScores)
 		r.Get("/hopset", s.handleGetHopSet)
+		r.Get("/hopset/mode", s.handleGetHopMode)
+		r.Put("/hopset/mode", s.handlePutHopMode)
 		r.Get("/devices", s.handleGetDevices)
 		r.Get("/devices/usb", s.handleGetUSBDevices)
 		r.Get("/devices/usb/events", s.handleUSBDeviceEvents)
