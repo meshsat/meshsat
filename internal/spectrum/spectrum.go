@@ -21,7 +21,12 @@ type Band struct {
 	FreqHigh    int    // Hz
 	BinSize     int    // Hz per FFT bin
 	InterfaceID string // e.g. "mesh_0", "ax25_0"
-	Label       string // human-readable label
+	// AlsoFor names another link on the same radio, which the band's
+	// verdict covers too (the 2 m radio is both ax25_0 and the APRS
+	// gateway's aprs_0, the one delivery intents ride). A string, not a
+	// list, so a Band stays comparable. [MESHSAT-1650]
+	AlsoFor string
+	Label   string // human-readable label
 
 	// CropPad widens the requested scan by N bins on each side and
 	// drops those bins from the returned slice so the operator only
@@ -47,6 +52,15 @@ type Band struct {
 	// and still needs flatness >= 0.60, which structured LoRa never
 	// reaches (measured 0.16 on both kits). [MESHSAT-1203]
 	OwnTraffic bool
+}
+
+// covers reports whether the band's verdict speaks for the link: the one
+// it is bound to, or another link on the same radio (AlsoFor).
+func (b Band) covers(interfaceID string) bool {
+	if interfaceID == "" {
+		return false
+	}
+	return b.InterfaceID == interfaceID || b.AlsoFor == interfaceID
 }
 
 // InterferenceDwell returns how long an interference candidate must hold
@@ -152,6 +166,7 @@ var DefaultBands = []Band{
 		FreqHigh:    144900000,
 		BinSize:     12500,
 		InterfaceID: "ax25_0",
+		AlsoFor:     "aprs_0",
 		Label:       "APRS 144.8 MHz",
 	},
 	{
@@ -238,9 +253,12 @@ type BandStatus struct {
 	BaselineStd  float64       `json:"baseline_std"`
 	BaselineMad  float64       `json:"baseline_mad"`
 	Since        time.Time     `json:"since"`
-	Consecutive  int           `json:"consecutive_samples"`
-	FreqLow      int           `json:"freq_low"`
-	FreqHigh     int           `json:"freq_high"`
+	// CheckedAt is when a scan last classified the band; a verdict
+	// older than VerdictMaxAge says nothing. [MESHSAT-1650]
+	CheckedAt   time.Time `json:"checked_at,omitempty"`
+	Consecutive int       `json:"consecutive_samples"`
+	FreqLow     int       `json:"freq_low"`
+	FreqHigh    int       `json:"freq_high"`
 
 	// CalibrationStartedAt is non-zero only for the band whose 30 s
 	// calibration window is currently running. The UI derives a
@@ -458,7 +476,11 @@ const (
 	// Units: absolute dB as reported by rtl_power_fftw.
 	// Calibrate empirically on a quiet site; these are conservative
 	// defaults based on residential Leiden observation.
-	PowerFloorLoRa  = -50.0 // LoRa 868 ISM
+	PowerFloorLoRa = -50.0 // LoRa 868 ISM
+	// The mesh band (869.3-869.75) is read by the same tuner a megahertz
+	// up, so it takes the 868 band's floor; it fell to the -45 dB default
+	// and was 5 dB less sensitive than its neighbour. [MESHSAT-1650]
+	PowerFloorMesh  = PowerFloorLoRa
 	PowerFloorAPRS  = -60.0 // VHF 2 m
 	PowerFloorGPS   = -50.0 // L1 — normally below noise, jammer clearly above
 	PowerFloorLTE20 = -40.0 // DL carrier already ~-70 to -110; jammer >>baseline+20
@@ -484,6 +506,8 @@ func PowerFloorForBand(band string) float64 {
 	switch band {
 	case "lora_868":
 		return PowerFloorLoRa
+	case "mesh_869":
+		return PowerFloorMesh
 	case "aprs_144":
 		return PowerFloorAPRS
 	case "gps_l1":

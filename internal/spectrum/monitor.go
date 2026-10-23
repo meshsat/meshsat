@@ -434,18 +434,43 @@ func (m *SpectrumMonitor) Status() []BandStatus {
 	return result
 }
 
-// IsJammed returns true if the interface associated with the given ID
-// is currently in a jammed state.
-func (m *SpectrumMonitor) IsJammed(interfaceID string) bool {
+// VerdictMaxAge is how old a band's last classification may be and still
+// say something: ten scan intervals. Past it, or while the monitor is off
+// or suspended, the verdict is unknown. [MESHSAT-1650]
+var VerdictMaxAge = 10 * ScanInterval
+
+// JamVerdict says whether a band that covers the link (bound to it, or
+// naming it in AlsoFor) is jammed, and whether that is known: a band
+// classified within VerdictMaxAge by a running, unsuspended monitor. A
+// link no band covers is unknown. [MESHSAT-1650]
+func (m *SpectrumMonitor) JamVerdict(interfaceID string) (jammed, known bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-
-	for _, bs := range m.status {
-		if bs.InterfaceID == interfaceID && bs.State == StateJamming {
-			return true
+	if !m.enabled || m.suspended {
+		return false, false
+	}
+	now := time.Now()
+	for _, b := range m.bands {
+		if !b.covers(interfaceID) {
+			continue
+		}
+		bs := m.status[b.Name]
+		if bs == nil || bs.CheckedAt.IsZero() || now.Sub(bs.CheckedAt) > VerdictMaxAge {
+			continue
+		}
+		known = true
+		if bs.State == StateJamming {
+			return true, true
 		}
 	}
-	return false
+	return false, known
+}
+
+// IsJammed reports a known jam on the link; a stale or unknown verdict is
+// not one.
+func (m *SpectrumMonitor) IsJammed(interfaceID string) bool {
+	jammed, known := m.JamVerdict(interfaceID)
+	return jammed && known
 }
 
 // Enabled reports whether RTL-SDR monitoring is active. It can flip
@@ -965,6 +990,7 @@ func (m *SpectrumMonitor) scanAllBands(ctx context.Context) {
 		now := time.Now()
 		m.mu.Lock()
 		bs := m.status[band.Name]
+		bs.CheckedAt = now
 		bs.PowerDB = avg
 		bs.LastOccupancy = occupancy
 		bs.LastFlatness = flatness
