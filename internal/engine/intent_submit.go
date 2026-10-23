@@ -192,11 +192,12 @@ func (e *Escalator) create(sub database.DeliverySubmission, intents []database.N
 // that admits; ALL_BEARERS every route that admits.
 //
 // excluded names the routes whose link is jammed or deaf now (the route
-// gate): ORDERED_FALLBACK starts on the first admitted route not excluded,
-// ALL_BEARERS sends on the admitted routes not excluded, and either falls
-// back to every admitted route when all of them are, since a verdict can
-// be wrong and the message must still leave. PRIMARY_ONLY is the
-// operator's choice of route and ignores it. [MESHSAT-1650]
+// gate). ORDERED_FALLBACK starts on the first admitted route not excluded,
+// or on the first admitted route when every one is excluded; ALL_BEARERS
+// sends on the admitted routes not excluded, or on every admitted route
+// when every one is. A verdict can be wrong and the message must still
+// leave. PRIMARY_ONLY is the operator's choice of route and ignores the
+// gate. [MESHSAT-1650]
 func firstRound(plan []database.RoutePlanEntry, effective directory.Strategy, excluded map[int]bool) []database.RoutePlanEntry {
 	var first []database.RoutePlanEntry
 	switch effective {

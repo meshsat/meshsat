@@ -118,3 +118,56 @@ func TestScanStampsTheVerdict(t *testing.T) {
 		t.Fatalf("after a quiet scan: jammed=%v known=%v, want known clear", jammed, known)
 	}
 }
+
+// The verdict's age limit is the classifier's own recovery dwell: a jam
+// cannot clear faster than RecoveryPersistenceSec of clear scans, so holding
+// a verdict that long after its last scan says no more than the classifier
+// already does. One limit for the monitor and every consumer. [MESHSAT-1650]
+func TestJamVerdictAgeBoundary(t *testing.T) {
+	if VerdictMaxAge != RecoveryPersistenceSec*time.Second {
+		t.Fatalf("VerdictMaxAge = %v, want the recovery dwell %v", VerdictMaxAge, RecoveryPersistenceSec*time.Second)
+	}
+	m := NewSpectrumMonitor(nil, DefaultBands)
+	setVerdict(m, "mesh_869", StateJamming, time.Now().Add(-VerdictMaxAge+time.Second))
+	if jammed, known := m.JamVerdict(MeshInterfaceID); !jammed || !known {
+		t.Errorf("1 s inside the limit: jammed=%v known=%v, want a known jam", jammed, known)
+	}
+	setVerdict(m, "mesh_869", StateJamming, time.Now().Add(-VerdictMaxAge-time.Second))
+	if _, known := m.JamVerdict(MeshInterfaceID); known {
+		t.Error("1 s past the limit: still known")
+	}
+}
+
+// A reader whose round takes longer than half the limit (the rtl_power_fftw
+// rollback path) gets two of its own rounds, so a band scanned once a round
+// does not flicker to unknown between its scans.
+func TestJamVerdictSlowReaderGetsTwoRounds(t *testing.T) {
+	m := NewSpectrumMonitor(nil, DefaultBands)
+	m.mu.Lock()
+	m.lastRound = 40 * time.Second
+	m.mu.Unlock()
+	setVerdict(m, "mesh_869", StateJamming, time.Now().Add(-50*time.Second))
+	if jammed, known := m.JamVerdict(MeshInterfaceID); !jammed || !known {
+		t.Errorf("50 s old with 40 s rounds: jammed=%v known=%v, want a known jam", jammed, known)
+	}
+	setVerdict(m, "mesh_869", StateJamming, time.Now().Add(-81*time.Second))
+	if _, known := m.JamVerdict(MeshInterfaceID); known {
+		t.Error("81 s old with 40 s rounds: still known")
+	}
+}
+
+// A completed round records how long it took.
+func TestScanRecordsItsRound(t *testing.T) {
+	m := NewSpectrumMonitor(fixedScanner{}, DefaultBands[1:2])
+	m.mu.Lock()
+	m.enabled = true
+	m.baseline["mesh_869"] = &Baseline{Mean: -63}
+	m.mu.Unlock()
+	m.scanAllBands(context.Background())
+	m.mu.RLock()
+	r := m.lastRound
+	m.mu.RUnlock()
+	if r <= 0 {
+		t.Errorf("lastRound = %v after a round", r)
+	}
+}

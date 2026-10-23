@@ -32,6 +32,9 @@ type SpectrumMonitor struct {
 	eventBus *hemb.EventBus
 	cancel   context.CancelFunc
 	enabled  bool
+	// lastRound is how long the last completed scan of every band took;
+	// JamVerdict gives a slow reader two of its own rounds. [MESHSAT-1650]
+	lastRound time.Duration
 
 	// History persistence. Optional — if nil, monitor runs as before
 	// and the detail/prefill features degrade gracefully. Assigned via
@@ -435,9 +438,15 @@ func (m *SpectrumMonitor) Status() []BandStatus {
 }
 
 // VerdictMaxAge is how old a band's last classification may be and still
-// say something: ten scan intervals. Past it, or while the monitor is off
-// or suspended, the verdict is unknown. [MESHSAT-1650]
-var VerdictMaxAge = 10 * ScanInterval
+// say something: the classifier's own recovery dwell, since a jam cannot
+// clear faster than RecoveryPersistenceSec of clear scans, so holding a
+// verdict that long after its last scan says no more than the classifier
+// already does. One limit for the monitor and every consumer of its
+// verdicts. A reader whose round takes longer than half of it (the
+// rtl_power_fftw rollback path) gets two of its own rounds instead. Past
+// the limit, or while the monitor is off or suspended, the verdict is
+// unknown. [MESHSAT-1650]
+var VerdictMaxAge = RecoveryPersistenceSec * time.Second
 
 // JamVerdict says whether a band that covers the link (bound to it, or
 // naming it in AlsoFor) is jammed, and whether that is known: a band
@@ -450,12 +459,16 @@ func (m *SpectrumMonitor) JamVerdict(interfaceID string) (jammed, known bool) {
 		return false, false
 	}
 	now := time.Now()
+	maxAge := VerdictMaxAge
+	if 2*m.lastRound > maxAge {
+		maxAge = 2 * m.lastRound
+	}
 	for _, b := range m.bands {
 		if !b.covers(interfaceID) {
 			continue
 		}
 		bs := m.status[b.Name]
-		if bs == nil || bs.CheckedAt.IsZero() || now.Sub(bs.CheckedAt) > VerdictMaxAge {
+		if bs == nil || bs.CheckedAt.IsZero() || now.Sub(bs.CheckedAt) > maxAge {
 			continue
 		}
 		known = true
@@ -916,6 +929,14 @@ func (m *SpectrumMonitor) calibrate(ctx context.Context, band Band) *Baseline {
 }
 
 func (m *SpectrumMonitor) scanAllBands(ctx context.Context) {
+	start := time.Now()
+	defer func() {
+		if ctx.Err() == nil { // a cut-short round is no measure
+			m.mu.Lock()
+			m.lastRound = time.Since(start)
+			m.mu.Unlock()
+		}
+	}()
 	for _, band := range m.bands {
 		if ctx.Err() != nil {
 			return
