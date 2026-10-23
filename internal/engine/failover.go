@@ -40,11 +40,14 @@ type FailoverResolver struct {
 	faultMu    sync.RWMutex
 	faultedIDs map[string]bool // interface IDs with injected faults
 
-	// checkMu guards the two checkers: main sets them after the
-	// dispatchers that call Resolve have started. [MESHSAT-1650]
-	checkMu  sync.RWMutex
-	receive  ReceiveChecker  // deaf receivers are skipped by Resolve (nil = ignore)
-	spectrum SpectrumChecker // jammed bands are skipped by Resolve (nil = ignore)
+	// gate is the one decision about which links are not tried now (a
+	// jammed band, a deaf receiver): main sets the same gate the delivery
+	// intents read, so a group and an intent never disagree about a link.
+	// Resolve and ResolveExcluding both read it; nil = none. gateMu guards
+	// it, since main sets it after the dispatchers have started.
+	// [MESHSAT-857, MESHSAT-1650]
+	gateMu sync.RWMutex
+	gate   RouteGate
 
 	// gwOnline reports a member whose gateway is connected even though the
 	// interface manager never binds it to a device. The APRS gateway (and
@@ -74,39 +77,27 @@ func NewFailoverResolver(db *database.DB, ifaceMgr *InterfaceManager) *FailoverR
 	return &FailoverResolver{db: db, ifaceMgr: ifaceMgr, faultedIDs: make(map[string]bool)}
 }
 
-// SetReceiveChecker makes Resolve skip a group member whose receiver is
-// known to be deaf (the APRS receive watchdog, the device health ladder),
-// so a booth relay configured "APRS first, SMS when APRS is down" really
-// moves to SMS while the APRS interface still reads online. [MESHSAT-857]
-func (fr *FailoverResolver) SetReceiveChecker(rc ReceiveChecker) {
-	fr.checkMu.Lock()
-	fr.receive = rc
-	fr.checkMu.Unlock()
+// SetRouteGate sets the gate that decides which members Resolve and
+// ResolveExcluding skip: a member whose receiver is deaf (the APRS receive
+// watchdog, the device health ladder), so a booth relay configured "APRS
+// first, SMS when APRS is down" really moves to SMS while the APRS
+// interface still reads online (MESHSAT-857), and a member whose band is
+// jammed (MESHSAT-1650).
+func (fr *FailoverResolver) SetRouteGate(g RouteGate) {
+	fr.gateMu.Lock()
+	fr.gate = g
+	fr.gateMu.Unlock()
 }
 
-// SetSpectrumChecker makes Resolve skip a group member whose band the
-// spectrum monitor calls jammed, as it skips a deaf one; the rules said
-// "jammed -> failover" and nothing did it. [MESHSAT-1650]
-func (fr *FailoverResolver) SetSpectrumChecker(sc SpectrumChecker) {
-	fr.checkMu.Lock()
-	fr.spectrum = sc
-	fr.checkMu.Unlock()
-}
-
-// jammed reports whether the spectrum checker marks the interface jammed.
-func (fr *FailoverResolver) jammed(ifaceID string) bool {
-	fr.checkMu.RLock()
-	sc := fr.spectrum
-	fr.checkMu.RUnlock()
-	return sc != nil && sc.IsJammed(ifaceID)
-}
-
-// deaf reports whether the receive checker marks the interface deaf.
-func (fr *FailoverResolver) deaf(ifaceID string) bool {
-	fr.checkMu.RLock()
-	rc := fr.receive
-	fr.checkMu.RUnlock()
-	return rc != nil && rc.ReceiveDeaf(ifaceID)
+// excluded asks the gate about a member.
+func (fr *FailoverResolver) excluded(ifaceID string) (bool, string) {
+	fr.gateMu.RLock()
+	g := fr.gate
+	fr.gateMu.RUnlock()
+	if g == nil {
+		return false, ""
+	}
+	return g.RouteExcluded(ifaceID)
 }
 
 // InjectFault marks an interface as faulted. SelectBearers will skip it.
@@ -171,14 +162,9 @@ func (fr *FailoverResolver) Resolve(targetID string) string {
 			continue
 		}
 		if fr.online(m.InterfaceID, status.State) {
-			if fr.deaf(m.InterfaceID) {
-				log.Warn().Str("group", group.ID).Str("member", m.InterfaceID).
-					Int("priority", m.Priority).Msg("failover: member online but its receiver is deaf, skipping")
-				continue
-			}
-			if fr.jammed(m.InterfaceID) {
-				log.Warn().Str("group", group.ID).Str("member", m.InterfaceID).
-					Int("priority", m.Priority).Msg("failover: member online but its band is jammed, skipping")
+			if ex, why := fr.excluded(m.InterfaceID); ex {
+				log.Warn().Str("group", group.ID).Str("member", m.InterfaceID).Str("why", why).
+					Int("priority", m.Priority).Msg("failover: member online but excluded, skipping")
 				continue
 			}
 			log.Debug().Str("group", group.ID).Str("resolved", m.InterfaceID).
@@ -226,9 +212,13 @@ func (fr *FailoverResolver) ResolveExcluding(targetID, exclude string) string {
 		if err != nil {
 			continue
 		}
-		if fr.online(m.InterfaceID, status.State) && !fr.deaf(m.InterfaceID) {
-			return m.InterfaceID
+		if !fr.online(m.InterfaceID, status.State) {
+			continue
 		}
+		if ex, _ := fr.excluded(m.InterfaceID); ex {
+			continue
+		}
+		return m.InterfaceID
 	}
 	return ""
 }

@@ -153,6 +153,9 @@ type deafChecker map[string]bool
 
 func (d deafChecker) ReceiveDeaf(ifaceID string) bool { return d[ifaceID] }
 
+// RouteExcluded makes it a route gate too.
+func (d deafChecker) RouteExcluded(ifaceID string) (bool, string) { return d[ifaceID], "deaf" }
+
 func TestFailoverResolver_DeafPrimarySkipped(t *testing.T) {
 	fr, ifaceMgr, db := setupFailoverTest(t)
 	db.InsertFailoverGroup(&database.FailoverGroup{ID: "peer_link", Label: "APRS first, SMS fallback", Mode: "priority"})
@@ -169,19 +172,19 @@ func TestFailoverResolver_DeafPrimarySkipped(t *testing.T) {
 	}
 
 	// A deaf primary is skipped although its interface state is online.
-	fr.SetReceiveChecker(deafChecker{"iridium_0": true})
+	fr.SetRouteGate(deafChecker{"iridium_0": true})
 	if got := fr.Resolve("peer_link"); got != "iridium_1" {
 		t.Errorf("deaf primary: expected iridium_1, got %s", got)
 	}
 
 	// Both deaf: nothing online is usable, the first enabled member holds the deliveries.
-	fr.SetReceiveChecker(deafChecker{"iridium_0": true, "iridium_1": true})
+	fr.SetRouteGate(deafChecker{"iridium_0": true, "iridium_1": true})
 	if got := fr.Resolve("peer_link"); got != "iridium_0" {
 		t.Errorf("all deaf: expected iridium_0 (first enabled fallback), got %s", got)
 	}
 
 	// Recovery: the primary hears again and takes over.
-	fr.SetReceiveChecker(deafChecker{})
+	fr.SetRouteGate(deafChecker{})
 	if got := fr.Resolve("peer_link"); got != "iridium_0" {
 		t.Errorf("recovered: expected iridium_0, got %s", got)
 	}
@@ -208,11 +211,11 @@ func TestFailoverResolver_GatewayOnlineMember(t *testing.T) {
 		t.Errorf("gateway-backed primary: expected iridium_0, got %s", got)
 	}
 	// Deaf still loses, and a disconnected gateway falls back.
-	fr.SetReceiveChecker(deafChecker{"iridium_0": true})
+	fr.SetRouteGate(deafChecker{"iridium_0": true})
 	if got := fr.Resolve("peer_link"); got != "iridium_1" {
 		t.Errorf("deaf gateway-backed primary: expected iridium_1, got %s", got)
 	}
-	fr.SetReceiveChecker(deafChecker{})
+	fr.SetRouteGate(deafChecker{})
 	connected["iridium_0"] = false
 	if got := fr.Resolve("peer_link"); got != "iridium_1" {
 		t.Errorf("disconnected gateway: expected iridium_1, got %s", got)

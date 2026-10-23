@@ -18,6 +18,9 @@ type jamChecker map[string]bool
 
 func (j jamChecker) IsJammed(id string) bool { return j[id] }
 
+// RouteExcluded makes it a route gate too.
+func (j jamChecker) RouteExcluded(id string) (bool, string) { return j[id], "jammed" }
+
 func firstRowChannel(t *testing.T, h *intentHarness, id string) string {
 	t.Helper()
 	s := h.snap(id)
@@ -128,12 +131,45 @@ func TestFailoverResolver_JammedPrimarySkipped(t *testing.T) {
 	ifaceMgr.states["iridium_0"].state = StateOnline
 	ifaceMgr.states["iridium_1"].state = StateOnline
 	ifaceMgr.mu.Unlock()
-	fr.SetSpectrumChecker(jamChecker{"iridium_0": true})
+	fr.SetRouteGate(jamChecker{"iridium_0": true})
 	if got := fr.Resolve("sat"); got != "iridium_1" {
 		t.Errorf("jammed primary: resolved %s, want iridium_1", got)
 	}
-	fr.SetSpectrumChecker(jamChecker{})
+	fr.SetRouteGate(jamChecker{})
 	if got := fr.Resolve("sat"); got != "iridium_0" {
 		t.Errorf("jam over: resolved %s, want iridium_0", got)
+	}
+}
+
+// failover_retry_skips_known_jammed_member: the retry path's failover
+// (ResolveExcluding, which the delivery worker uses when a peer never
+// acknowledged) skips a jammed member as Resolve does. With no other member
+// left it answers nothing, and the message takes an ordinary retry.
+// [MESHSAT-1650]
+func TestFailoverRetrySkipsKnownJammedMember(t *testing.T) {
+	h, ruleID := noAckHarness(t)
+	h.failover.SetRouteGate(jamChecker{"cellular_0": true})
+	if got := h.failover.ResolveExcluding("peer_link", "aprs_0"); got != "" {
+		t.Errorf("ResolveExcluding gave %q, a jammed member", got)
+	}
+	row := queueOnAPRS(t, h, ruleID, `["mesh_0"]`)
+	noAckWorker(h).handleFailure(row, errNoAckFromPeer)
+	got, err := h.db.GetDelivery(row.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != "retry" || got.Retries != 1 {
+		t.Errorf("jammed fallback: status %q retries %d, want an ordinary retry", got.Status, got.Retries)
+	}
+	if n := len(deliveriesOn(t, h, "cellular_0")); n != 0 {
+		t.Fatalf("%d deliveries moved onto the jammed member", n)
+	}
+
+	// The jam is over: the next unacknowledged text moves as before.
+	h.failover.SetRouteGate(jamChecker{})
+	row2 := queueOnAPRS(t, h, ruleID, `["mesh_0"]`)
+	noAckWorker(h).handleFailure(row2, errNoAckFromPeer)
+	if n := len(deliveriesOn(t, h, "cellular_0")); n != 1 {
+		t.Errorf("jam over: %d deliveries on cellular_0, want 1", n)
 	}
 }
