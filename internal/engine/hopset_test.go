@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -141,17 +142,20 @@ func excludeMesh(t *testing.T, r *hopRig) {
 
 // An excluded link recovers only on a positive sign, never on time alone;
 // it is admitted after the re-admit dwell, and a negative sign while
-// recovering sends it back.
+// recovering sends it back. recovery_dwell_gates_ordinary_traffic: a
+// recovering link carries no ordinary traffic until it is admitted.
 func TestHopSetReadmission(t *testing.T) {
 	r := newHopRig(t, threeFree...)
 	excludeMesh(t, r)
-	r.after(time.Hour)
-	if !r.excluded("mesh_0") {
-		t.Fatal("re-admitted after an hour with no positive sign")
+	for i := 0; i < 3; i++ { // an hour, in three evaluations
+		r.after(20 * time.Minute)
+		if s := r.state(t, "mesh_0"); s.State != HopExcluded || !r.excluded("mesh_0") {
+			t.Fatalf("%d min with no positive sign: %s excluded=%v, want still excluded", 20*(i+1), s.State, r.excluded("mesh_0"))
+		}
 	}
 	r.m.Positive("mesh_0", "rx")
-	if s := r.state(t, "mesh_0"); s.State != HopRecovering || r.excluded("mesh_0") {
-		t.Fatalf("after a positive sign: %s excluded=%v, want recovering and tried", s.State, r.excluded("mesh_0"))
+	if s := r.state(t, "mesh_0"); s.State != HopRecovering || !r.excluded("mesh_0") {
+		t.Fatalf("after a positive sign: %s excluded=%v, want recovering and not yet tried", s.State, r.excluded("mesh_0"))
 	}
 	r.after(2 * time.Minute)
 	r.m.Negative("mesh_0", "radio", "duty_cycle", "DUTY_CYCLE_LIMIT")
@@ -164,9 +168,113 @@ func TestHopSetReadmission(t *testing.T) {
 	if s := r.state(t, "mesh_0"); s.State != HopRecovering {
 		t.Fatalf("4 min recovering: %s, want still recovering", s.State)
 	}
+	if !r.excluded("mesh_0") {
+		t.Fatal("tried 4 min into recovering, before the re-admit dwell")
+	}
 	r.after(61 * time.Second)
 	if s := r.state(t, "mesh_0"); s.State != HopAdmitted || r.excluded("mesh_0") {
 		t.Fatalf("5 min recovering: %s, want admitted", s.State)
+	}
+}
+
+// The floor exception to the dwell: when the floor needs a link, a
+// recovering one is kept before an excluded one with the same evidence.
+func TestHopSetRecoveringKeptByTheFloor(t *testing.T) {
+	r := newHopRig(t, "mesh_0:mesh", "aprs_0:aprs", "cellular_0:cellular")
+	excludeMesh(t, r)
+	r.after(time.Second)
+	r.m.Positive("mesh_0", "rx") // mesh_0 recovering, signs cleared
+	r.m.Negative("aprs_0", "delivery", "a", "no_ack")
+	r.m.Negative("aprs_0", "delivery", "b", "no_ack")
+	r.after(11 * time.Second)
+	// aprs_0 would be excluded and leave no free link usable: the floor
+	// keeps one, and the recovering mesh_0 (no signs) is the least bad.
+	if s := r.state(t, "mesh_0"); s.State != HopRecovering || !s.Retained || r.excluded("mesh_0") {
+		t.Fatalf("mesh_0 %s retained=%v excluded=%v, want recovering, kept by the floor, tried", s.State, s.Retained, r.excluded("mesh_0"))
+	}
+	if !r.excluded("aprs_0") {
+		t.Fatalf("aprs_0 %s, want excluded", r.state(t, "aprs_0").State)
+	}
+}
+
+// cleared_signs_stay_cleared: signs a positive sign answered never count
+// again, not toward a later exclusion, not in the summary, not in the
+// floor's ranking.
+func TestHopSetClearedSignsStayCleared(t *testing.T) {
+	r := newHopRig(t, threeFree...)
+	r.m.Negative("mesh_0", "delivery", "a", "no_ack")
+	r.m.Negative("mesh_0", "delivery", "b", "no_ack")
+	r.m.Positive("mesh_0", "rx") // answers both
+	r.m.Negative("mesh_0", "delivery", "c", "no_ack")
+	r.after(30 * time.Second)
+	s := r.state(t, "mesh_0")
+	if s.State != HopSuspect || r.excluded("mesh_0") || len(s.Signs) != 1 || s.Signs[0].Key != "c" {
+		t.Fatalf("mesh_0 %s excluded=%v signs %+v, want suspect on the one unanswered sign", s.State, r.excluded("mesh_0"), s.Signs)
+	}
+}
+
+// absent_device_does_not_support_floor: a device known to be absent is
+// down, out of use and not counted for the floor, so the last free link
+// that is actually there is kept. An unknown answer is not absence.
+func TestHopSetAbsentDeviceDoesNotSupportFloor(t *testing.T) {
+	r := newHopRig(t, threeFree...)
+	r.m.SetAvailability(func(id string) (bool, bool) {
+		switch id {
+		case "tetra_0":
+			return false, true // the radio is known to be gone
+		case "aprs_0":
+			return false, false // nothing known
+		}
+		return true, true
+	})
+	r.m.Negative("mesh_0", "delivery", "a", "no_ack")
+	r.m.Negative("mesh_0", "delivery", "b", "no_ack")
+	r.m.Negative("aprs_0", "delivery", "a", "no_ack")
+	r.m.Negative("aprs_0", "delivery", "b", "no_ack")
+	r.m.Negative("aprs_0", "radio", "x", "refused")
+	r.after(11 * time.Second)
+	if ex, why := r.m.RouteExcluded("tetra_0"); !ex || why != "absent" {
+		t.Fatalf("tetra_0: excluded=%v %q, want absent", ex, why)
+	}
+	if s := r.state(t, "aprs_0"); s.Absent {
+		t.Fatal("aprs_0 absent on an unknown answer")
+	}
+	// A device-less link is never absent, whatever the answer.
+	r2 := newHopRig(t, "lxmf_0:lxmf", "hub:hub", "mesh_0:mesh")
+	r2.m.SetAvailability(func(string) (bool, bool) { return false, true })
+	if r2.state(t, "lxmf_0").Absent || r2.state(t, "hub").Absent || !r2.state(t, "mesh_0").Absent {
+		t.Fatal("device-less links marked absent, or the mesh not")
+	}
+	if s := r.state(t, "mesh_0"); r.excluded("mesh_0") || !s.Retained {
+		t.Fatalf("mesh_0 %s retained=%v, want kept as the last free link actually there", s.State, s.Retained)
+	}
+	if !r.excluded("aprs_0") {
+		t.Fatalf("aprs_0 %s, want excluded (more signs than mesh_0)", r.state(t, "aprs_0").State)
+	}
+}
+
+// every_net_state_change_is_audited: suspicion and clearance too, once
+// each, after the floor.
+func TestHopSetEveryNetStateChangeIsAudited(t *testing.T) {
+	r := newHopRig(t, threeFree...)
+	r.m.Negative("mesh_0", "delivery", "a", "no_ack") // suspect
+	r.m.Positive("mesh_0", "rx")                      // admitted
+	excludeMesh(t, r)                                 // suspect, excluded
+	r.after(time.Second)
+	r.m.Positive("mesh_0", "rx") // recovering
+	r.after(5*time.Minute + time.Second)
+	r.state(t, "mesh_0") // admitted
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var got []string
+	for _, a := range r.audits {
+		if strings.HasSuffix(a, " mesh_0") {
+			got = append(got, strings.TrimSuffix(a, " mesh_0"))
+		}
+	}
+	want := []string{"hopset_suspect", "hopset_admitted", "hopset_suspect", "hopset_excluded", "hopset_recovering", "hopset_admitted"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("audits %v, want %v", got, want)
 	}
 }
 
@@ -348,5 +456,48 @@ func TestHopSetGatingFlag(t *testing.T) {
 	t.Setenv("MESHSAT_HOPSET", "true")
 	if !HopSetGating() {
 		t.Error("not gating with MESHSAT_HOPSET=true")
+	}
+}
+
+// Between two links out of use with the same evidence, the floor keeps the
+// recovering one (a positive sign since its exclusion) before the excluded
+// one, whatever their positive signs' order.
+func TestHopSetFloorPrefersRecoveringOnATie(t *testing.T) {
+	r := newHopRig(t, "mesh_0:mesh", "aprs_0:aprs", "tetra_0:tetra")
+	excludeMesh(t, r) // t=11: mesh excluded (aprs, tetra usable)
+	r.after(time.Second)
+	r.m.Positive("mesh_0", "rx") // mesh recovering, no signs
+	r.after(time.Second)
+	r.m.Positive("tetra_0", "rx") // tetra's positive is the newer
+	r.after(time.Second)
+	r.m.Negative("tetra_0", "delivery", "a", "no_ack")
+	r.m.Negative("tetra_0", "delivery", "b", "no_ack")
+	r.after(11 * time.Second) // tetra excluded; the floor keeps mesh (no signs)
+	if s := r.state(t, "mesh_0"); !s.Retained {
+		t.Fatalf("setup: mesh_0 %s retained=%v, want kept", s.State, s.Retained)
+	}
+	r.after(2 * time.Minute) // tetra's signs age out: a tie, no signs either side
+	if s := r.state(t, "tetra_0"); s.State != HopExcluded || len(s.Signs) != 0 {
+		t.Fatalf("setup: tetra_0 %s signs %+v, want excluded with none", s.State, s.Signs)
+	}
+	if m, tt := r.state(t, "mesh_0"), r.state(t, "tetra_0"); !m.Retained || tt.Retained {
+		t.Fatalf("on a tie: mesh_0 (recovering) retained=%v, tetra_0 (excluded, newer positive) retained=%v; want the recovering one kept", m.Retained, tt.Retained)
+	}
+}
+
+// A change of retention or of down alone, the state unchanged, is audited.
+func TestHopSetRetentionAndDownChangesAreAudited(t *testing.T) {
+	r := newHopRig(t, "mesh_0:mesh", "aprs_0:aprs", "tetra_0:tetra")
+	excludeMesh(t, r)
+	r.deaf["aprs_0"] = true // aprs down: tetra alone usable, so the floor keeps mesh
+	r.state(t, "mesh_0")
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	got := map[string]bool{}
+	for _, a := range r.audits {
+		got[a] = true
+	}
+	if !got["hopset_down aprs_0"] || !got["hopset_retained mesh_0"] {
+		t.Fatalf("audits %v, want hopset_down aprs_0 and hopset_retained mesh_0", r.audits)
 	}
 }

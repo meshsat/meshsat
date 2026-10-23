@@ -28,20 +28,27 @@ import (
 //     known spectrum jam), the radio's own (it refused or never sent the
 //     packet), or a delivery failure to one destination. Failures to the same
 //     destination are one sign.
+//   - A positive sign answers every negative sign that came before it: those
+//     are cleared and never count again (R46-V1).
 //   - A suspect link is excluded when, inside TriggerWindow, it holds two
-//     distinct signs, no positive sign came after the latest of them, and it
-//     has been suspect for DropDwell. Otherwise it goes back to admitted once
-//     its signs age out or a positive sign arrives.
+//     distinct unanswered signs and has been suspect for DropDwell. It goes
+//     back to admitted once its signs age out or a positive sign answers them.
 //   - An excluded link starts recovering on a positive sign (a frame received
 //     on it, a peer's acknowledgement), never on elapsed time alone, and is
 //     admitted after ReadmitDwell without a new negative sign; one sends it
-//     back to excluded.
+//     back to excluded. A recovering link carries no ordinary traffic until it
+//     is admitted, unless the floor keeps it (R46-V2).
 //   - The floor: never fewer than MinSet usable links (of those not down),
-//     and never the last free one. An exclusion that would break it leaves
-//     the link retained (suspect, still tried); a floor broken by a link going
-//     down re-admits the least-bad excluded link, by measured evidence.
-//   - A deaf receiver or a missing device (the receive checkers) is down: out
-//     of use whatever the floor says, as the slice (a) gate had it.
+//     and never the last free one. While it is broken, the least-bad link out
+//     of use (excluded or recovering) is kept in use, retained. Retention is
+//     worked out afresh at each evaluation.
+//   - A link is down when its receiver is deaf (the receive checkers) or its
+//     device is known to be absent (the availability the failover groups
+//     use; a device-less link is never absent): out of use whatever the floor
+//     says, and not counted for it (R46-V4).
+//   - Every net change of a link's state, retention or down is audited once
+//     per evaluation; a link going out of use or back into use is a HeMB
+//     bearer event (R46-V5).
 
 // HopState is a link's place in the hop set.
 type HopState string
@@ -110,6 +117,10 @@ func HopSetGating() bool {
 
 // hopPaid lists the channel types the hop set covers and whether each is
 // paid (the three the intent engine bills). Any other type is outside it.
+// hopDeviceless lists the covered channel types with no device of their own,
+// which are never down for absence.
+var hopDeviceless = map[string]bool{"lxmf": true, "hub": true}
+
 var hopPaid = map[string]bool{
 	"mesh": false, "aprs": false, "tetra": false, "lxmf": false, "cell": false,
 	"zigbee": false, "hub": false,
@@ -131,7 +142,10 @@ type HopLinkStatus struct {
 	ChannelType  string     `json:"channel_type"`
 	Paid         bool       `json:"paid"`
 	State        HopState   `json:"state"`
+	Usable       bool       `json:"usable"` // ordinary traffic may use it now
 	Down         bool       `json:"down"`
+	Deaf         bool       `json:"deaf"`
+	Absent       bool       `json:"absent"`
 	Retained     bool       `json:"retained"`
 	Since        time.Time  `json:"since"`
 	Reason       string     `json:"reason,omitempty"`
@@ -151,7 +165,8 @@ type hopLink struct {
 	paid            bool
 	state           HopState
 	since           time.Time
-	down            bool
+	deaf, absent    bool
+	down            bool // deaf or absent
 	retained        bool
 	reason          string
 	negatives       []HopSign
@@ -207,6 +222,7 @@ type HopSetManager struct {
 	list      func() ([]database.Interface, error)
 	spectrum  JamVerdicter
 	receive   ReceiveChecker
+	avail     func(ifaceID string) (up, known bool)
 	audit     func(eventType, ifaceID, detail string)
 	publish   func(hemb.Event)
 	links     map[string]*hopLink
@@ -233,6 +249,15 @@ func (m *HopSetManager) SetSpectrum(sv JamVerdicter) {
 func (m *HopSetManager) SetReceiveChecker(rc ReceiveChecker) {
 	m.mu.Lock()
 	m.receive = rc
+	m.mu.Unlock()
+}
+
+// SetAvailability sets where the hop set learns that a link's device is
+// known to be absent (the failover groups' online check). An unknown answer
+// never makes a link down.
+func (m *HopSetManager) SetAvailability(f func(ifaceID string) (up, known bool)) {
+	m.mu.Lock()
+	m.avail = f
 	m.mu.Unlock()
 }
 
@@ -331,7 +356,7 @@ func (m *HopSetManager) PaidAttempt(ifaceID string) {
 	}
 	var out hopOut
 	for _, f := range m.sortedLocked() {
-		if f.paid || f.down || f.state != HopExcluded {
+		if f.paid || f.down || usable(f) {
 			continue
 		}
 		if !f.lastAlarm.IsZero() && now.Sub(f.lastAlarm) < m.cfg.AlarmEvery {
@@ -345,9 +370,10 @@ func (m *HopSetManager) PaidAttempt(ifaceID string) {
 	out.flush()
 }
 
-// RouteExcluded implements RouteGate: a down link and an excluded one are
-// not tried; suspect, retained and recovering links are. A link outside the
-// hop set is gated by its deaf check only, as the slice (a) gate had it.
+// RouteExcluded implements RouteGate: a link is tried when it is usable
+// (admitted, suspect, or kept by the floor) and not down. A recovering link
+// waits for its re-admission. A link outside the hop set is gated by its
+// deaf check only, as the slice (a) gate had it.
 func (m *HopSetManager) RouteExcluded(interfaceID string) (bool, string) {
 	m.mu.Lock()
 	out := m.evaluateLocked(m.now())
@@ -359,10 +385,12 @@ func (m *HopSetManager) RouteExcluded(interfaceID string) (bool, string) {
 		if m.receive != nil && m.receive.ReceiveDeaf(interfaceID) {
 			ex, why = true, "deaf"
 		}
-	case l.down:
+	case l.deaf:
 		ex, why = true, "deaf"
-	case l.state == HopExcluded:
-		ex, why = true, "excluded: "+l.reason
+	case l.absent:
+		ex, why = true, "absent"
+	case !usable(l):
+		ex, why = true, string(l.state)+": "+l.reason
 	}
 	m.mu.Unlock()
 	out.flush()
@@ -378,8 +406,9 @@ func (m *HopSetManager) Status() HopSetStatus {
 		"readmit_dwell_s": m.cfg.ReadmitDwell.Seconds(), "min_set": m.cfg.MinSet,
 	}, Links: []HopLinkStatus{}}
 	for _, l := range m.sortedLocked() {
-		ls := HopLinkStatus{InterfaceID: l.id, ChannelType: l.channelType, Paid: l.paid, State: l.state,
-			Down: l.down, Retained: l.retained, Since: l.since, Reason: l.reason, Signs: append([]HopSign{}, l.negatives...)}
+		ls := HopLinkStatus{InterfaceID: l.id, ChannelType: l.channelType, Paid: l.paid, State: l.state, Usable: usable(l),
+			Down: l.down, Deaf: l.deaf, Absent: l.absent, Retained: l.retained, Since: l.since, Reason: l.reason,
+			Signs: append([]HopSign{}, l.negatives...)}
 		if !l.lastPositive.IsZero() {
 			t := l.lastPositive
 			ls.LastPositive = &t
@@ -440,25 +469,37 @@ func (m *HopSetManager) sortedLocked() []*hopLink {
 	return out
 }
 
+// usable reports whether ordinary traffic may use the link now.
+func usable(l *hopLink) bool {
+	if l.down {
+		return false
+	}
+	return l.state == HopAdmitted || l.state == HopSuspect || l.retained
+}
+
+// hopSnap is what a link was before an evaluation.
+type hopSnap struct {
+	state                  HopState
+	retained, down, usable bool
+}
+
 // evaluateLocked applies the rules at now and returns what to emit: the
-// transitions first, then the floor, then one audit entry or event per net
-// change, so a link the floor keeps never shows an exclusion it didn't have.
+// transitions first, then the floor, then one audit entry per net change
+// and one event per link going out of use or back into use, so a link the
+// floor keeps never shows an exclusion it didn't have.
 func (m *HopSetManager) evaluateLocked(now time.Time) hopOut {
 	if m.refreshed.IsZero() || now.Sub(m.refreshed) >= m.cfg.RefreshEvery {
 		m.refreshLocked(now)
 	}
 	links := m.sortedLocked()
-	type before struct {
-		state    HopState
-		retained bool
-	}
-	prior := make(map[*hopLink]before, len(links))
+	prior := make(map[*hopLink]hopSnap, len(links))
 	for _, l := range links {
-		prior[l] = before{l.state, l.retained}
+		prior[l] = hopSnap{l.state, l.retained, l.down, usable(l)}
 		kept := l.negatives[:0]
 		for _, s := range l.negatives {
-			// The spectrum sign is read afresh below, never kept.
-			if s.Source != "spectrum" && now.Sub(s.At) <= m.cfg.TriggerWindow {
+			// The spectrum sign is read afresh below, never kept; a sign a
+			// positive sign answered is cleared (R46-V1).
+			if s.Source != "spectrum" && now.Sub(s.At) <= m.cfg.TriggerWindow && s.seq > l.lastPositiveSeq {
 				kept = append(kept, s)
 			}
 		}
@@ -471,12 +512,20 @@ func (m *HopSetManager) evaluateLocked(now time.Time) hopOut {
 				l.negatives = append(l.negatives, HopSign{Source: "spectrum", Key: "jam", Reason: "spectrum jam verdict", At: now, seq: m.seq})
 			}
 		}
-		l.down = m.receive != nil && m.receive.ReceiveDeaf(l.id)
+		l.deaf = m.receive != nil && m.receive.ReceiveDeaf(l.id)
+		l.absent = false
+		if m.avail != nil && !hopDeviceless[l.channelType] {
+			if up, known := m.avail(l.id); known && !up {
+				l.absent = true
+			}
+		}
+		l.down = l.deaf || l.absent
+		l.retained = false // worked out afresh by the floor below
 	}
 
 	for _, l := range links {
 		latest := l.latestNegative()
-		cleared := len(l.negatives) == 0 || l.lastPositiveSeq > latest
+		cleared := len(l.negatives) == 0
 		switch l.state {
 		case HopAdmitted:
 			if !cleared {
@@ -484,14 +533,12 @@ func (m *HopSetManager) evaluateLocked(now time.Time) hopOut {
 			}
 		case HopSuspect:
 			if cleared {
-				l.retained = false
 				m.setLocked(l, HopAdmitted, "evidence cleared", now)
 			} else if l.distinct() >= 2 && now.Sub(l.since) >= m.cfg.DropDwell {
-				l.retained = false
 				m.setLocked(l, HopExcluded, l.summary(), now)
 			}
 		case HopExcluded:
-			if l.lastPositiveSeq > l.sinceSeq && l.lastPositiveSeq > latest {
+			if l.lastPositiveSeq > l.sinceSeq && cleared {
 				m.setLocked(l, HopRecovering, "a positive sign", now)
 			}
 		case HopRecovering:
@@ -502,28 +549,27 @@ func (m *HopSetManager) evaluateLocked(now time.Time) hopOut {
 			}
 		}
 	}
-	m.repairFloorLocked(now)
+	m.repairFloorLocked()
 
 	var out hopOut
 	for _, l := range links {
 		was := prior[l]
-		switch {
-		case l.state == HopExcluded && was.state != HopExcluded:
-			out = append(out, m.emitLocked("hopset_excluded", string(hemb.EventBearerDegraded), l, "excluded: "+l.reason)...)
-		case l.state == HopRecovering && was.state != HopRecovering:
-			out = append(out, m.emitLocked("hopset_recovering", "", l, "recovering: a positive sign")...)
-		case l.state == HopAdmitted && was.state == HopRecovering:
-			out = append(out, m.emitLocked("hopset_admitted", string(hemb.EventBearerRecovered), l, "re-admitted after "+m.cfg.ReadmitDwell.String()+" without a negative sign")...)
-		case l.retained && !was.retained:
-			out = append(out, m.emitLocked("hopset_retained", "", l, "retained by the floor: "+l.summary())...)
+		if was.state != l.state || was.retained != l.retained || was.down != l.down {
+			out = append(out, m.auditLocked(l)...)
+		}
+		switch now := usable(l); {
+		case was.usable && !now:
+			out = append(out, m.eventLocked(string(hemb.EventBearerDegraded), l)...)
+		case !was.usable && now:
+			out = append(out, m.eventLocked(string(hemb.EventBearerRecovered), l)...)
 		}
 	}
 	return out
 }
 
-// countsLocked counts the links not down, the usable ones (not excluded),
-// and the free ones of each.
-func (m *HopSetManager) countsLocked() (available, usable, freeAvailable, freeUsable int) {
+// countsLocked counts the links not down, the usable ones, and the free
+// ones of each.
+func (m *HopSetManager) countsLocked() (available, usableN, freeAvailable, freeUsable int) {
 	for _, l := range m.links {
 		if l.down {
 			continue
@@ -532,10 +578,10 @@ func (m *HopSetManager) countsLocked() (available, usable, freeAvailable, freeUs
 		if !l.paid {
 			freeAvailable++
 		}
-		if l.state == HopExcluded {
+		if !usable(l) {
 			continue
 		}
-		usable++
+		usableN++
 		if !l.paid {
 			freeUsable++
 		}
@@ -545,20 +591,20 @@ func (m *HopSetManager) countsLocked() (available, usable, freeAvailable, freeUs
 
 // repairFloorLocked keeps the floor: while fewer than MinSet links (of
 // those not down) are usable, or no free link is while one is available,
-// the least-bad excluded link is kept in use, retained: the fewest
-// distinct signs first, then the most recent positive sign, then the id.
-// Never at random, never on elapsed time. One rule for both ways the floor
-// breaks: an exclusion, and a link going down.
-func (m *HopSetManager) repairFloorLocked(now time.Time) {
+// the least-bad link out of use (excluded or recovering) is kept in use,
+// retained: the fewest distinct signs first, then a recovering one, then
+// the most recent positive sign, then the id. Never at random, never on
+// elapsed time. One rule for every way the floor breaks.
+func (m *HopSetManager) repairFloorLocked() {
 	for {
-		available, usable, freeAvailable, freeUsable := m.countsLocked()
+		available, usableN, freeAvailable, freeUsable := m.countsLocked()
 		needFree := freeAvailable > 0 && freeUsable == 0
-		if usable >= min(m.cfg.MinSet, available) && !needFree {
+		if usableN >= min(m.cfg.MinSet, available) && !needFree {
 			return
 		}
 		var cands []*hopLink
 		for _, l := range m.sortedLocked() {
-			if l.down || l.state != HopExcluded || (needFree && l.paid) {
+			if l.down || usable(l) || (needFree && l.paid) {
 				continue
 			}
 			cands = append(cands, l)
@@ -571,11 +617,12 @@ func (m *HopSetManager) repairFloorLocked(now time.Time) {
 			if a.distinct() != b.distinct() {
 				return a.distinct() < b.distinct()
 			}
+			if ra, rb := a.state == HopRecovering, b.state == HopRecovering; ra != rb {
+				return ra
+			}
 			return a.lastPositiveSeq > b.lastPositiveSeq
 		})
-		l := cands[0]
-		l.retained = true
-		m.setLocked(l, HopSuspect, l.summary(), now)
+		cands[0].retained = true
 	}
 }
 
@@ -585,21 +632,62 @@ func (m *HopSetManager) setLocked(l *hopLink, s HopState, reason string, now tim
 	l.state, l.reason, l.since, l.sinceSeq = s, reason, now, m.seq
 }
 
-// emitLocked prepares an audit entry and, when event is set, a HeMB event.
+// label is the link's state as the audit names it: down and retained
+// first, since they decide its use.
+func (l *hopLink) label() string {
+	switch {
+	case l.deaf:
+		return "down"
+	case l.absent:
+		return "down"
+	case l.retained:
+		return "retained"
+	}
+	return string(l.state)
+}
+
+func (m *HopSetManager) mode() string {
+	if m.gating {
+		return "gating"
+	}
+	return "observing"
+}
+
+// auditLocked prepares the audit entry for a link's net change.
+func (m *HopSetManager) auditLocked(l *hopLink) hopOut {
+	audit := m.audit
+	if audit == nil {
+		return nil
+	}
+	detail := fmt.Sprintf("%s: state %s, retained %v, deaf %v, absent %v: %s (%s)", l.label(), l.state, l.retained, l.deaf, l.absent, l.reason, m.mode())
+	typ, id := "hopset_"+l.label(), l.id
+	return hopOut{func() { audit(typ, id, detail) }}
+}
+
+// eventLocked prepares a HeMB bearer event for a link going out of use or
+// back into use.
+func (m *HopSetManager) eventLocked(event string, l *hopLink) hopOut {
+	publish := m.publish
+	if publish == nil {
+		return nil
+	}
+	payload, _ := json.Marshal(map[string]any{"interface_id": l.id, "state": l.state, "reason": l.reason,
+		"retained": l.retained, "deaf": l.deaf, "absent": l.absent, "signs": append([]HopSign{}, l.negatives...), "mode": m.mode()})
+	ev := hemb.Event{Type: hemb.EventType(event), Timestamp: m.now(), Payload: payload}
+	return hopOut{func() { publish(ev) }}
+}
+
+// emitLocked prepares an audit entry and, when event is set, a HeMB event
+// (the alarm's).
 func (m *HopSetManager) emitLocked(auditType, event string, l *hopLink, detail string) hopOut {
 	audit, publish := m.audit, m.publish
-	mode := "observing"
-	if m.gating {
-		mode = "gating"
-	}
-	id, full := l.id, detail+" ("+mode+")"
+	id, full := l.id, detail+" ("+m.mode()+")"
 	var out hopOut
 	if audit != nil {
 		out = append(out, func() { audit(auditType, id, full) })
 	}
 	if event != "" && publish != nil {
-		payload, _ := json.Marshal(map[string]any{"interface_id": id, "state": l.state, "reason": l.reason,
-			"retained": l.retained, "signs": append([]HopSign{}, l.negatives...), "mode": mode})
+		payload, _ := json.Marshal(map[string]any{"interface_id": id, "state": l.state, "reason": l.reason, "mode": m.mode()})
 		ev := hemb.Event{Type: hemb.EventType(event), Timestamp: m.now(), Payload: payload}
 		out = append(out, func() { publish(ev) })
 	}
