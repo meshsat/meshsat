@@ -1,11 +1,15 @@
 package engine
 
 import (
+	"context"
+	"fmt"
 	"testing"
 	"time"
 
 	"meshsat/internal/database"
 	"meshsat/internal/directory"
+	"meshsat/internal/gateway"
+	"meshsat/internal/lxmf"
 	"meshsat/internal/transport"
 )
 
@@ -148,5 +152,218 @@ func TestHopSetFedByMeshReceipts(t *testing.T) {
 	h.ack(send("d"), annMesh, 0) // the destination's acknowledgement
 	if s := hopState(t, m, "mesh_0"); s.LastPositive == nil || s.State != HopAdmitted {
 		t.Fatalf("after an ack: %s positive=%v, want admitted with a positive sign", s.State, s.LastPositive)
+	}
+}
+
+// nextRouteRig: a contact with LXMF first and the mesh next, under a gating
+// hop set; LXMF refuses round 1 (not sent, a next route exists), so the
+// walk's next route is the mesh's, read through the gate.
+func nextRouteRig(t *testing.T) (*intentHarness, *HopSetManager, *time.Time, string) {
+	t.Helper()
+	h := newIntentHarness(t)
+	m, now := gatingHopSet(t, h.d, h.db.GetAllInterfaces)
+	return h, m, now, h.contact(lxmfAddr(0), meshAddr(1))
+}
+
+// runRound1 submits, lets LXMF refuse, evaluates, and returns round 2's
+// channel ("" when there is none) and the intent's state.
+func runRound1(t *testing.T, h *intentHarness, c, text string) (string, string) {
+	t.Helper()
+	id := h.submit(c, text, directory.StrategyOrderedFallback)
+	h.lx.results = []error{lxmf.ErrStampCostTooHigh}
+	h.work("lxmf_0")
+	h.eval(id)
+	s := h.snap(id)
+	if r, ok := rowsByRound(s)[2]; ok {
+		return r.Channel, s.Intent.State
+	}
+	return "", s.Intent.State
+}
+
+func excludeMeshHop(t *testing.T, m *HopSetManager, now *time.Time) {
+	t.Helper()
+	m.Negative("mesh_0", "delivery", "!0000abcd", "no_ack")
+	m.Negative("mesh_0", "delivery", "!0000beef", "no_ack")
+	*now = now.Add(11 * time.Second)
+	if s := hopState(t, m, "mesh_0"); s.State != HopExcluded || s.Retained {
+		t.Fatalf("setup: mesh_0 %s retained=%v, want excluded", s.State, s.Retained)
+	}
+}
+
+// hopset_next_route_skips_excluded: the excluded mesh is not the next route,
+// and a recovering one isn't either, until it is re-admitted.
+func TestHopSetNextRouteSkipsExcluded(t *testing.T) {
+	h, m, now, c := nextRouteRig(t)
+	excludeMeshHop(t, m, now)
+	if ch, st := runRound1(t, h, c, "one"); ch != "" || st != database.IntentClosed {
+		t.Fatalf("mesh excluded: round 2 on %q, intent %s; want no round 2, closed", ch, st)
+	}
+	*now = now.Add(time.Second)
+	m.Positive("mesh_0", "rx") // recovering
+	if ch, _ := runRound1(t, h, c, "two"); ch != "" {
+		t.Fatalf("mesh recovering: round 2 on %q, want none before re-admission", ch)
+	}
+}
+
+// hopset_next_route_uses_retained: a mesh the floor keeps is the next route.
+func TestHopSetNextRouteUsesRetained(t *testing.T) {
+	h, m, now, c := nextRouteRig(t)
+	m.SetAvailability(func(id string) (bool, bool) { return id != "cellular_0", true }) // two links there
+	m.Negative("mesh_0", "delivery", "!0000abcd", "no_ack")
+	m.Negative("mesh_0", "delivery", "!0000beef", "no_ack")
+	*now = now.Add(11 * time.Second)
+	if s := hopState(t, m, "mesh_0"); !s.Retained {
+		t.Fatalf("mesh_0 %s retained=%v, want kept by the floor of two", s.State, s.Retained)
+	}
+	if ch, _ := runRound1(t, h, c, "one"); ch != "mesh_0" {
+		t.Fatalf("mesh retained: round 2 on %q, want mesh_0", ch)
+	}
+}
+
+// hopset_next_route_uses_readmitted: once the mesh is re-admitted it is the
+// next route again.
+func TestHopSetNextRouteUsesReadmitted(t *testing.T) {
+	h, m, now, c := nextRouteRig(t)
+	excludeMeshHop(t, m, now)
+	*now = now.Add(time.Second)
+	m.Positive("mesh_0", "rx")
+	*now = now.Add(5*time.Minute + time.Second)
+	if s := hopState(t, m, "mesh_0"); s.State != HopAdmitted {
+		t.Fatalf("mesh_0 %s, want re-admitted", s.State)
+	}
+	if ch, _ := runRound1(t, h, c, "one"); ch != "mesh_0" {
+		t.Fatalf("mesh re-admitted: round 2 on %q, want mesh_0", ch)
+	}
+}
+
+// intent_send_failure_feeds_hopset: a native intent send the radio refused
+// (nothing left the device, a retry spent) is the radio's sign; a link that
+// was down is none; a route whose receipt never came in time is a delivery
+// sign keyed by its destination.
+func TestHopSetFedByIntentSends(t *testing.T) {
+	h := newIntentHarness(t)
+	m, _ := gatingHopSet(t, h.d, h.db.GetAllInterfaces)
+	h.workers["mesh_0"].hop = &h.d.hop
+	c := h.contact(meshAddr(0), lxmfAddr(1))
+
+	h.mesh.err = transport.ErrNotConnected
+	h.submit(c, "down", directory.StrategyOrderedFallback)
+	h.work("mesh_0")
+	if s := hopState(t, m, "mesh_0"); len(s.Signs) != 0 {
+		t.Fatalf("a down link gave signs %+v, want none", s.Signs)
+	}
+
+	h.mesh.err = fmt.Errorf("radio refused: %w", transport.ErrNotSubmitted)
+	h.due()
+	h.work("mesh_0")
+	s := hopState(t, m, "mesh_0")
+	if len(s.Signs) != 1 || s.Signs[0].Source != "radio" || s.Signs[0].Key != "not_submitted" {
+		t.Fatalf("radio refusal: signs %+v, want one radio:not_submitted", s.Signs)
+	}
+
+	h2 := newIntentHarness(t)
+	m2, _ := gatingHopSet(t, h2.d, h2.db.GetAllInterfaces)
+	id := h2.submit(h2.contact(meshAddr(0), lxmfAddr(1)), "silent", directory.StrategyOrderedFallback)
+	h2.work("mesh_0") // accepted by the radio; no answer ever comes
+	h2.clock.Advance(121 * time.Second)
+	h2.eval(id)
+	s2 := hopState(t, m2, "mesh_0")
+	if len(s2.Signs) != 1 || s2.Signs[0].Source != "delivery" || s2.Signs[0].Key != annMesh {
+		t.Fatalf("no receipt in time: signs %+v, want one delivery:%s", s2.Signs, annMesh)
+	}
+
+	// A destination's own NAK that arrives after the receipt window still
+	// says nothing about the band: no sign.
+	h3 := newIntentHarness(t)
+	m3, _ := gatingHopSet(t, h3.d, h3.db.GetAllInterfaces)
+	h3.submit(h3.contact(meshAddr(0), lxmfAddr(1)), "late nak", directory.StrategyOrderedFallback)
+	h3.work("mesh_0")
+	h3.clock.Advance(121 * time.Second)
+	h3.ack(h3.mesh.lastID(), annMesh, transport.RoutingErrorNoChannel)
+	if s3 := hopState(t, m3, "mesh_0"); len(s3.Signs) != 0 {
+		t.Fatalf("late destination NAK: signs %+v, want none", s3.Signs)
+	}
+}
+
+// The legacy path raises the paid alarm at its forward, a real submission
+// on the paid link, not before.
+func TestHopSetPaidAlarmOnTheLegacyForward(t *testing.T) {
+	h, _ := noAckHarness(t)
+	now := time.Date(2026, 10, 23, 14, 0, 0, 0, time.UTC)
+	m := NewHopSetManager(DefaultHopSetConfig(), h.db.GetAllInterfaces, true)
+	m.clock = func() time.Time { return now }
+	var audits []string
+	m.SetAudit(func(typ, id, _ string) { audits = append(audits, typ+" "+id) })
+	h.dispatch.SetHopSigns(m)
+	m.Negative("aprs_0", "delivery", "a", "no_ack")
+	m.Negative("aprs_0", "delivery", "b", "no_ack")
+	now = now.Add(11 * time.Second)
+	if s := hopState(t, m, "aprs_0"); s.State != HopExcluded {
+		t.Fatalf("setup: aprs_0 %s, want excluded", s.State)
+	}
+	row := database.MessageDelivery{MsgRef: "paid", Channel: "cellular_0", Status: "queued", Priority: 10,
+		Payload: []byte("hello"), TextPreview: "hello", MaxRetries: 3, Visited: "[]", QoSLevel: 1, Destination: "+31600000001"}
+	id, err := h.db.InsertDelivery(row)
+	if err != nil {
+		t.Fatal(err)
+	}
+	row.ID = id
+	w := newTestWorker(h, "cellular_0", "cellular")
+	w.hop = &h.dispatch.hop
+	w.deliver(context.Background(), row)
+	n := 0
+	for _, a := range audits {
+		if a == "hopset_alarm aprs_0" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("legacy paid forward: %d alarms (%v), want 1", n, audits)
+	}
+}
+
+// unsent_paid_intent_does_not_raise_alarm: a paid attempt refused before its
+// adapter is called raises no alarm; the same attempt sent later raises it,
+// once.
+func TestHopSetPaidAlarmOnlyOnARealSubmission(t *testing.T) {
+	h := newIntentHarness(t)
+	m, now := gatingHopSet(t, h.d, h.db.GetAllInterfaces)
+	var audits []string
+	m.SetAudit(func(typ, id, _ string) { audits = append(audits, typ+" "+id) })
+	f := &fakeSMS{answer: gateway.IntentOutcome{Class: gateway.IntentAccepted, AcceptedBy: "carrier", Charged: true, ChargedUnits: 1}}
+	useSMS(t, h, f)
+	h.workers["cellular_0"].hop = &h.d.hop
+	smsTariff(t, h, 3)
+	excludeMeshHop(t, m, now) // a free link out of use
+
+	sc := smsContact(h)
+	sub, err := h.esc.Submit(h.ctx, IntentRequest{ContactID: sc, Body: []byte("x"), Strategy: directory.StrategyPrimaryOnly, MaxCostCents: capOf(10)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.setAdmit("not_now") // admitted at submission, refused at pre-send
+	h.work("cellular_0")
+	alarms := func() int {
+		n := 0
+		for _, a := range audits {
+			if a == "hopset_alarm mesh_0" {
+				n++
+			}
+		}
+		return n
+	}
+	if f.count() != 0 || alarms() != 0 {
+		t.Fatalf("refused before the call: %d sends, %d alarms; want 0 and 0", f.count(), alarms())
+	}
+	// A refusal at pre-send closes that PRIMARY_ONLY intent; the next one
+	// is admitted and sent.
+	f.setAdmit("")
+	sub2, err := h.esc.Submit(h.ctx, IntentRequest{ContactID: sc, Body: []byte("y"), Strategy: directory.StrategyPrimaryOnly, MaxCostCents: capOf(10)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.work("cellular_0")
+	if f.count() != 1 || alarms() != 1 {
+		t.Fatalf("sent: %d sends, %d alarms; want 1 and 1 (intents %s, %s)", f.count(), alarms(), sub.Intents[0].ID, sub2.Intents[0].ID)
 	}
 }

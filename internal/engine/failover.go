@@ -72,6 +72,24 @@ func (fr *FailoverResolver) online(ifaceID string, state InterfaceState) bool {
 	return fr.gwOnline != nil && fr.gwOnline(ifaceID)
 }
 
+// Online reports a link online as the failover groups see it (its interface
+// state, or a connected gateway behind it) and whether that is known: an
+// interface the manager doesn't have, with no gateway connected, is
+// unknown. The hop set reads it for known absence (R46-V4).
+func (fr *FailoverResolver) Online(ifaceID string) (online, known bool) {
+	if fr.gwOnline != nil && fr.gwOnline(ifaceID) {
+		return true, true
+	}
+	if fr.ifaceMgr == nil {
+		return false, false
+	}
+	st, err := fr.ifaceMgr.GetStatus(ifaceID)
+	if err != nil {
+		return false, false
+	}
+	return fr.online(ifaceID, st.State), true
+}
+
 // NewFailoverResolver creates a resolver.
 func NewFailoverResolver(db *database.DB, ifaceMgr *InterfaceManager) *FailoverResolver {
 	return &FailoverResolver{db: db, ifaceMgr: ifaceMgr, faultedIDs: make(map[string]bool)}

@@ -123,6 +123,9 @@ func (w *DeliveryWorker) deliverIntent(ctx context.Context, del database.Message
 		return
 	}
 	w.intents.Changed(del.IntentID, "handed_off")
+	// Authorized and handed off: a real submission attempt from here on, so
+	// this is where a paid link feeds the hop set's alarm (R46-V6).
+	w.hopPaidAttempt()
 
 	var out SendOutcome
 	switch {
@@ -140,6 +143,7 @@ func (w *DeliveryWorker) deliverIntent(ctx context.Context, del database.Message
 		// Its queue allowance decides when the next route takes over.
 		out.Detail = "link down: " + out.Detail
 	}
+	w.hopIntentOutcome(out)
 	res := out.transmissionResult()
 	if del.Class != database.DeliveryClassLXMF && ad == nil {
 		res.Reconcile, res.MatchWindowS = classifyMeshReceipt, meshCorrWindowS
@@ -171,6 +175,22 @@ func (w *DeliveryWorker) deliverIntent(ctx context.Context, del database.Message
 			Data:    deliveryEventData(del, out.Class, map[string]interface{}{"intent_id": del.IntentID, "gen": gen}),
 			Time:    time.Now().UTC().Format(time.RFC3339),
 		})
+	}
+}
+
+// hopIntentOutcome turns an intent send's outcome into the hop set's
+// evidence, as hopFailure does for the legacy rows: nothing left the device
+// though the bearer was there and a retry is spent (every adapter's
+// ErrNotSubmitted) is the radio's sign. A link that was down, an oversize
+// or unsupported send, and the pre-send refusals (which never get here)
+// say nothing about the band. A missing receipt is the Escalator's to
+// report (hopReceiptEnded). [MESHSAT-1650, R46-V3]
+func (w *DeliveryWorker) hopIntentOutcome(out SendOutcome) {
+	if out.Class != database.ClassNotSent || !out.ConsumeRetry || out.Reason != "not_sent" {
+		return
+	}
+	if h := hopSigns(w.hop); h != nil {
+		h.Negative(w.channelID, "radio", "not_submitted", "the radio did not send it")
 	}
 }
 

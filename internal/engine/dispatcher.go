@@ -1793,14 +1793,6 @@ func (w *DeliveryWorker) deliver(ctx context.Context, del database.MessageDelive
 		}
 	}
 
-	// A send on a paid link is the hop set's alarm input: free bearers
-	// excluded while paid attempts go out. [MESHSAT-1650]
-	if isPaidInterface(w.channelID) {
-		if h := hopSigns(w.hop); h != nil {
-			h.PaidAttempt(w.channelID)
-		}
-	}
-
 	// An attempt of a delivery intent: claimed under the intent's fence,
 	// sent once per authorized transmission, finalized in one
 	// transaction. [MESHSAT-1581]
@@ -2076,7 +2068,10 @@ func (w *DeliveryWorker) deliver(ctx context.Context, del database.MessageDelive
 			}, del.MsgRef))
 		}
 	} else {
-		// Gateway delivery: find the gateway and forward
+		// Gateway delivery: find the gateway and forward. A forward on a
+		// paid link is a real submission attempt: the hop set's alarm input
+		// (free bearers excluded while paid attempts go out). [MESHSAT-1650]
+		w.hopPaidAttempt()
 		deliveryErr = w.forwardToGatewaySealed(ctx, del, encrypted, chatTexts)
 	}
 
@@ -2424,6 +2419,17 @@ func (w *DeliveryWorker) hopFailure(del database.MessageDelivery, err error) {
 		h.Negative(w.channelID, "delivery", del.Destination, "no_ack")
 	case errors.Is(err, transport.ErrNotSubmitted):
 		h.Negative(w.channelID, "radio", "not_submitted", "the radio did not send it")
+	}
+}
+
+// hopPaidAttempt tells the hop set a submission goes out on a paid link,
+// at the moment it does (R46-V6).
+func (w *DeliveryWorker) hopPaidAttempt() {
+	if !isPaidInterface(w.channelID) {
+		return
+	}
+	if h := hopSigns(w.hop); h != nil {
+		h.PaidAttempt(w.channelID)
 	}
 }
 

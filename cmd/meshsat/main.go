@@ -1834,6 +1834,7 @@ func main() {
 	if spectrumMon != nil {
 		hopSet.SetSpectrum(spectrumMon)
 	}
+	hopSet.SetAvailability(failoverResolver.Online)
 	if signingService != nil {
 		hopSet.SetAudit(func(eventType, ifaceID, detail string) {
 			signingService.AuditEvent(eventType, &ifaceID, nil, nil, nil, detail)

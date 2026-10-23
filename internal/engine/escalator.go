@@ -330,8 +330,14 @@ func (e *Escalator) Evaluate(id string) {
 		}
 		now := e.elapsedMs(id, in.ElapsedMs)
 		elig := e.eligibility(in)
+		var silent []rowFacts
 		ch, err := e.db.ApplyIntentChange(id, func(s *database.IntentSnapshot) *database.IntentChange {
-			return decideIntent(s, now, elig, e.buildRow)
+			c := decideIntent(s, now, elig, e.buildRow)
+			silent = nil
+			if c != nil && c.Transition != "" {
+				silent = receiptsRunOut(s, now)
+			}
+			return c
 		})
 		if err != nil {
 			log.Error().Err(err).Str("intent", id).Msg("delivery intents: transition failed")
@@ -340,6 +346,7 @@ func (e *Escalator) Evaluate(id string) {
 		if ch == nil || ch.Transition == "" {
 			return
 		}
+		e.hopReceiptEnded(silent)
 		e.logTransition(id, ch)
 		if ch.Close {
 			e.dropBase(id)
@@ -529,6 +536,41 @@ func mayEscalateAfterAcceptance(e database.RoutePlanEntry) bool {
 		return !e.Paid || e.EscalateUnconfirmed
 	}
 	return e.EscalateUnconfirmed
+}
+
+// receiptsRunOut lists the active round's rows that a peer accepted no
+// receipt for in time: accepted, a completion rule that waits for one, not
+// completed, and the receipt allowance run out by the clock. A NAK that
+// says no receipt will come is not one: a destination's own answer says
+// nothing about the band. [MESHSAT-1650, R46-V3]
+func receiptsRunOut(s *database.IntentSnapshot, now int64) []rowFacts {
+	var out []rowFacts
+	for _, f := range factsOf(s) {
+		if f.row.Round != s.Intent.ActiveRound || f.row.Status != database.AttemptAccepted || f.completed ||
+			f.noReceipt || f.entry.CompletionRule == "" || f.row.AcceptedElapsedMs == nil {
+			continue
+		}
+		if now-*f.row.AcceptedElapsedMs >= int64(f.entry.ReceiptAllowS)*1000 {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// hopReceiptEnded tells the hop set about each route whose receipt never
+// came: a delivery sign keyed by its destination, the native counterpart of
+// the legacy worker's no-ack (one silent contact is one sign).
+func (e *Escalator) hopReceiptEnded(rows []rowFacts) {
+	if len(rows) == 0 || e.d == nil {
+		return
+	}
+	h := hopSigns(&e.d.hop)
+	if h == nil {
+		return
+	}
+	for _, f := range rows {
+		h.Negative(f.entry.InterfaceID, "delivery", f.entry.Destination, "no_receipt")
+	}
 }
 
 // nextRoute is the next admitted route after idx that is still usable.
