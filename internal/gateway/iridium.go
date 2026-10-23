@@ -659,8 +659,13 @@ func (g *IridiumGateway) ringAlertListenOnce(ctx context.Context) error {
 	}
 
 	// Re-check modem status after Subscribe (which triggers connect for direct transport).
+	// The status read at Start can come before the modem has answered AT+CGSN
+	// (parallax, 23 Oct 2026: gateway started 15:14:56Z, modem connected
+	// 15:14:57Z), so the IMEI is taken here too; the birth names the modem by
+	// it and the Hub keeps a sealed declaration only under an IMEI (MESHSAT-1659).
 	if status, err := g.sat.GetStatus(ctx); err == nil && status.Connected {
 		g.connected.Store(true)
+		g.rememberIMEI(status)
 		log.Info().Msg("iridium: modem connected (post-subscribe check)")
 		g.emit("iridium", "Iridium modem connected")
 	}
