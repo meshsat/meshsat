@@ -2276,7 +2276,9 @@ func parseATValue(resp string) string {
 // parseMSSTM parses an AT-MSSTM response.
 // Response format: "-MSSTM: XXXXXXXX" (8 hex chars, 90 ms ticks since the
 // current era's origin, iridiumEpoch) or "no network service" if not
-// registered. EpochUTC keeps the fraction: a tick is 90 ms.
+// registered. EpochUTC keeps the fraction: a tick is 90 ms. A count of zero
+// is the era's first frame, which no reading taken after the era began can
+// be, so it is no usable time (IsValid false), as MSGEO's stamp is.
 func parseMSSTM(resp string) (*IridiumTime, error) {
 	if strings.Contains(resp, "no network") {
 		return &IridiumTime{IsValid: false}, nil
@@ -2297,6 +2299,10 @@ func parseMSSTM(resp string) (*IridiumTime, error) {
 	ticks, err := strconv.ParseUint(hex, 16, 32)
 	if err != nil {
 		return nil, fmt.Errorf("parse MSSTM hex %q: %w", hex, err)
+	}
+
+	if ticks == 0 {
+		return &IridiumTime{IsValid: false}, nil
 	}
 
 	return &IridiumTime{

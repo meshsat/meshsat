@@ -420,15 +420,34 @@ func TestParseMSSTM_Missing(t *testing.T) {
 }
 
 func TestParseMSSTM_Epoch(t *testing.T) {
-	// Tick 0 is the first frame of ERA3 (14 Feb 2025 18:14:17 UTC), the
+	// Tick 1 is the second frame of ERA3 (14 Feb 2025 18:14:17 UTC), the
 	// era Iridium counts in since 14 Jan 2026. [MESHSAT-1652]
 	t.Setenv("MESHSAT_IRIDIUM_EPOCH", "")
-	resp := "-MSSTM: 00000000\r\nOK\r\n"
+	resp := "-MSSTM: 00000001\r\nOK\r\n"
 	result, err := parseMSSTM(resp)
 	if err != nil {
 		t.Fatalf("parseMSSTM failed: %v", err)
 	}
-	if result.EpochUTC != "2025-02-14T18:14:17Z" {
-		t.Errorf("epoch = %s, want 2025-02-14T18:14:17Z", result.EpochUTC)
+	if !result.IsValid || result.EpochUTC != "2025-02-14T18:14:17.09Z" {
+		t.Errorf("tick 1 = %+v, want valid 2025-02-14T18:14:17.09Z", result)
+	}
+}
+
+// msstm_zero_policy_is_explicit: AT-MSSTM is read for the current time, and
+// a count of zero is the first frame of the era, which no reading taken
+// after the era began can be. So zero is no usable time (IsValid false, no
+// EpochUTC), the same rule MSGEO's stamp follows. The counter itself still
+// converts zero to the origin (iridiumTicksTime). [MESHSAT-1652]
+func TestParseMSSTMZeroIsNoUsableTime(t *testing.T) {
+	t.Setenv("MESHSAT_IRIDIUM_EPOCH", "")
+	r, err := parseMSSTM("\r\n-MSSTM: 00000000\r\n\r\nOK\r\n")
+	if err != nil {
+		t.Fatalf("parseMSSTM: %v", err)
+	}
+	if r.IsValid || r.EpochUTC != "" {
+		t.Errorf("zero = %+v, want IsValid false and no EpochUTC", r)
+	}
+	if got := iridiumTicksTime(0); !got.Equal(iridiumEra3) {
+		t.Errorf("iridiumTicksTime(0) = %v, want the ERA3 origin", got)
 	}
 }
