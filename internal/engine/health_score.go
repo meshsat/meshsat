@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -55,18 +56,40 @@ func (c ReceiveCheckers) ReceiveDeaf(interfaceID string) bool {
 // HealthScorer computes composite health scores for transport interfaces.
 type HealthScorer struct {
 	db       *database.DB
+	mu       sync.RWMutex // the checkers are set late in main, read by the intents
 	spectrum SpectrumChecker
 	receive  ReceiveChecker
 }
 
 // SetSpectrumChecker sets the spectrum monitor for jamming-aware health scoring.
 func (h *HealthScorer) SetSpectrumChecker(sc SpectrumChecker) {
+	h.mu.Lock()
 	h.spectrum = sc
+	h.mu.Unlock()
 }
 
 // SetReceiveChecker sets the receive watchdog for deaf-aware health scoring.
 func (h *HealthScorer) SetReceiveChecker(rc ReceiveChecker) {
+	h.mu.Lock()
 	h.receive = rc
+	h.mu.Unlock()
+}
+
+// RouteExcluded implements RouteGate: a link whose band is jammed (a fresh
+// verdict; the monitor reads a stale one as unknown) or whose receiver is
+// deaf is not tried. Nothing else excludes, the composite score least of
+// all. [MESHSAT-1650]
+func (h *HealthScorer) RouteExcluded(interfaceID string) (bool, string) {
+	h.mu.RLock()
+	sc, rc := h.spectrum, h.receive
+	h.mu.RUnlock()
+	if sc != nil && sc.IsJammed(interfaceID) {
+		return true, "jammed"
+	}
+	if rc != nil && rc.ReceiveDeaf(interfaceID) {
+		return true, "deaf"
+	}
+	return false, ""
 }
 
 // NewHealthScorer creates a new health scorer.
@@ -100,14 +123,8 @@ func (h *HealthScorer) Score(interfaceID string) HealthScore {
 	// Cost score based on channel type
 	hs.Cost = channelCostScore(iface.ChannelType)
 
-	// Spectrum: override to 0 if interface is jammed
-	if h.spectrum != nil && h.spectrum.IsJammed(interfaceID) {
-		hs.Signal = 0
-		hs.Score = 0
-		return hs
-	}
-	// Receive watchdog: a deaf receiver is as useless as a jammed one
-	if h.receive != nil && h.receive.ReceiveDeaf(interfaceID) {
+	// A jammed band or a deaf receiver scores 0: as useless as each other
+	if excluded, _ := h.RouteExcluded(interfaceID); excluded {
 		hs.Signal = 0
 		hs.Score = 0
 		return hs

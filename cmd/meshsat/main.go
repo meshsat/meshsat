@@ -1815,8 +1815,13 @@ func main() {
 	healthScorer := engine.NewHealthScorer(db)
 	if spectrumMon != nil {
 		healthScorer.SetSpectrumChecker(spectrumMon)
+		failoverResolver.SetSpectrumChecker(spectrumMon)
 	}
 	srv.SetHealthScorer(healthScorer)
+	// The delivery intents skip a link whose band is jammed or whose
+	// receiver is deaf; the deaf checkers join the scorer further down.
+	// [MESHSAT-1650]
+	dispatcher.SetRouteGate(healthScorer)
 	srv.SetAccessEvaluator(accessEval)
 	srv.SetRegistry(registry)
 	srv.SetTLEManager(tleMgr)

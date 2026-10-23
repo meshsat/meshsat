@@ -83,8 +83,10 @@ type Dispatcher struct {
 	db         *database.DB
 	access     *rules.AccessEvaluator // v0.3.0 access rule evaluation
 	failover   *FailoverResolver      // v0.3.0 failover group resolution
-	signing    *SigningService        // v0.3.0 non-repudiation signing + audit
-	transforms *TransformPipeline     // v0.3.0 per-interface transform pipeline
+	gateMu     sync.RWMutex
+	routeGate  RouteGate          // jammed or deaf links the intents skip [MESHSAT-1650]
+	signing    *SigningService    // v0.3.0 non-repudiation signing + audit
+	transforms *TransformPipeline // v0.3.0 per-interface transform pipeline
 	registry   *channel.Registry
 	gwProv     GatewayProvider
 	mesh       transport.MeshTransport
@@ -321,6 +323,33 @@ func (d *Dispatcher) satellitePassSched(desc channel.ChannelDescriptor) PassStat
 // Start settles the intents' attempts a stop left in flight before any
 // worker runs, and runs the Escalator's loop. [MESHSAT-1581]
 func (d *Dispatcher) SetEscalator(e *Escalator) { d.escalator = e }
+
+// RouteGate says whether a link should not be tried now and why: its band
+// is jammed (a fresh spectrum verdict) or its receiver is deaf. Booleans
+// only, never the composite health score, whose cost and no-data terms
+// are not health (MEDIA_HOP_DESIGN section 8, point 8). [MESHSAT-1650]
+type RouteGate interface {
+	RouteExcluded(interfaceID string) (bool, string)
+}
+
+// SetRouteGate sets the gate the delivery intents read; nil = none. It may
+// be set after Start: the gate's own checkers arrive late in main.
+func (d *Dispatcher) SetRouteGate(g RouteGate) {
+	d.gateMu.Lock()
+	d.routeGate = g
+	d.gateMu.Unlock()
+}
+
+// routeExcluded asks the gate about a link.
+func (d *Dispatcher) routeExcluded(interfaceID string) (bool, string) {
+	d.gateMu.RLock()
+	g := d.routeGate
+	d.gateMu.RUnlock()
+	if g == nil {
+		return false, ""
+	}
+	return g.RouteExcluded(interfaceID)
+}
 
 // Escalator returns the owner of delivery intents, or nil.
 func (d *Dispatcher) Escalator() *Escalator { return d.escalator }

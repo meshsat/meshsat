@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/rs/zerolog/log"
 
 	"meshsat/internal/database"
 	"meshsat/internal/directory"
@@ -189,7 +190,14 @@ func (e *Escalator) create(sub database.DeliverySubmission, intents []database.N
 // firstRound is round 1 of a plan (r3 section 3a), a copy: PRIMARY_ONLY
 // the primary route, which must admit; ORDERED_FALLBACK the first route
 // that admits; ALL_BEARERS every route that admits.
-func firstRound(plan []database.RoutePlanEntry, effective directory.Strategy) []database.RoutePlanEntry {
+//
+// excluded names the routes whose link is jammed or deaf now (the route
+// gate): ORDERED_FALLBACK starts on the first admitted route not excluded,
+// ALL_BEARERS sends on the admitted routes not excluded, and either falls
+// back to every admitted route when all of them are, since a verdict can
+// be wrong and the message must still leave. PRIMARY_ONLY is the
+// operator's choice of route and ignores it. [MESHSAT-1650]
+func firstRound(plan []database.RoutePlanEntry, effective directory.Strategy, excluded map[int]bool) []database.RoutePlanEntry {
 	var first []database.RoutePlanEntry
 	switch effective {
 	case directory.StrategyPrimaryOnly:
@@ -197,19 +205,49 @@ func firstRound(plan []database.RoutePlanEntry, effective directory.Strategy) []
 			first = append(first, plan[0])
 		}
 	case directory.StrategyOrderedFallback:
+		var fallback []database.RoutePlanEntry
 		for _, p := range plan {
-			if p.Admitted {
+			if !p.Admitted {
+				continue
+			}
+			if !excluded[p.RouteIndex] {
 				return append(first, p)
 			}
+			if fallback == nil {
+				fallback = append(fallback, p)
+			}
 		}
+		return fallback
 	default:
+		var all []database.RoutePlanEntry
 		for _, p := range plan {
-			if p.Admitted {
+			if !p.Admitted {
+				continue
+			}
+			all = append(all, p)
+			if !excluded[p.RouteIndex] {
 				first = append(first, p)
 			}
 		}
+		if len(first) == 0 {
+			return all
+		}
 	}
 	return first
+}
+
+// excludedRoutes is the route gate's answer for each admitted route.
+func (e *Escalator) excludedRoutes(plan []database.RoutePlanEntry) map[int]bool {
+	m := map[int]bool{}
+	for _, p := range plan {
+		if p.Admitted {
+			if ex, why := e.d.routeExcluded(p.InterfaceID); ex {
+				m[p.RouteIndex] = true
+				log.Info().Str("interface", p.InterfaceID).Str("why", why).Msg("delivery intents: route skipped in round 1")
+			}
+		}
+	}
+	return m
 }
 
 // prepareIntent builds one recipient's intent and its round-1 attempts, or
@@ -277,7 +315,8 @@ func (e *Escalator) prepareIntent(ctx context.Context, req IntentRequest, subID 
 		}
 	}
 
-	if len(firstRound(in.RoutePlan, effective)) == 0 {
+	excluded := e.excludedRoutes(in.RoutePlan)
+	if len(firstRound(in.RoutePlan, effective, excluded)) == 0 {
 		nre := &NoRouteError{Plan: in.RoutePlan, Oversize: true}
 		for _, p := range in.RoutePlan {
 			if p.Reason != reasonOversize {
@@ -299,7 +338,7 @@ func (e *Escalator) prepareIntent(ctx context.Context, req IntentRequest, subID 
 			in.RoutePlan[i].WireTimestampMs = ts
 		}
 	}
-	first := firstRound(in.RoutePlan, effective)
+	first := firstRound(in.RoutePlan, effective, excluded)
 	var rows []database.MessageDelivery
 	for i, p := range first {
 		rows = append(rows, e.buildRow(in, p, 1, i+1))
@@ -540,6 +579,11 @@ func (e *Escalator) meshWireSize(chain string, payload []byte) (int, string, err
 // packet ids, and an LXMF path has not moved onto a paid link.
 func (e *Escalator) usable(p database.RoutePlanEntry) bool {
 	if !p.Admitted {
+		return false
+	}
+	// A link whose band is jammed or whose receiver is deaf is not the next
+	// route; the walk takes the one after it. [MESHSAT-1650]
+	if excluded, _ := e.d.routeExcluded(p.InterfaceID); excluded {
 		return false
 	}
 	iface, err := e.d.db.GetInterface(p.InterfaceID)
