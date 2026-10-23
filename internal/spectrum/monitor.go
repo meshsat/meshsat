@@ -35,6 +35,9 @@ type SpectrumMonitor struct {
 	// lastRound is how long the last completed scan of every band took;
 	// JamVerdict gives a slow reader two of its own rounds. [MESHSAT-1650]
 	lastRound time.Duration
+	// clock is time.Now unless a test sets it; it times the rounds,
+	// stamps the verdicts and ages them. [MESHSAT-1650]
+	clock func() time.Time
 
 	// History persistence. Optional — if nil, monitor runs as before
 	// and the detail/prefill features degrade gracefully. Assigned via
@@ -437,6 +440,14 @@ func (m *SpectrumMonitor) Status() []BandStatus {
 	return result
 }
 
+// now is the monitor's clock.
+func (m *SpectrumMonitor) now() time.Time {
+	if m.clock != nil {
+		return m.clock()
+	}
+	return time.Now()
+}
+
 // VerdictMaxAge is how old a band's last classification may be and still
 // say something: the classifier's own recovery dwell, since a jam cannot
 // clear faster than RecoveryPersistenceSec of clear scans, so holding a
@@ -458,7 +469,7 @@ func (m *SpectrumMonitor) JamVerdict(interfaceID string) (jammed, known bool) {
 	if !m.enabled || m.suspended {
 		return false, false
 	}
-	now := time.Now()
+	now := m.now()
 	maxAge := VerdictMaxAge
 	if 2*m.lastRound > maxAge {
 		maxAge = 2 * m.lastRound
@@ -929,11 +940,17 @@ func (m *SpectrumMonitor) calibrate(ctx context.Context, band Band) *Baseline {
 }
 
 func (m *SpectrumMonitor) scanAllBands(ctx context.Context) {
-	start := time.Now()
+	// Only a pass that classified every calibrated band measures the
+	// round: a failed or cut-short scan classified nothing, so it says
+	// nothing about how often a band is classified, and letting its time
+	// count would stretch the age limit and revive an expired verdict
+	// that no scan refreshed. [MESHSAT-1650]
+	start := m.now()
+	calibrated, classified := 0, 0
 	defer func() {
-		if ctx.Err() == nil { // a cut-short round is no measure
+		if ctx.Err() == nil && calibrated > 0 && classified == calibrated {
 			m.mu.Lock()
-			m.lastRound = time.Since(start)
+			m.lastRound = m.now().Sub(start)
 			m.mu.Unlock()
 		}
 	}()
@@ -950,6 +967,7 @@ func (m *SpectrumMonitor) scanAllBands(ctx context.Context) {
 		if bl == nil {
 			continue // not calibrated yet
 		}
+		calibrated++
 
 		// One exec per band per tick; the timeout rationale is on
 		// calibrationScanTimeout. [MESHSAT-509, MESHSAT-656]
@@ -1008,10 +1026,11 @@ func (m *SpectrumMonitor) scanAllBands(ctx context.Context) {
 			peakFreqHz = band.FreqLow + int((float64(peakIdx)+0.5)*binWidthHz)
 		}
 
-		now := time.Now()
+		now := m.now()
 		m.mu.Lock()
 		bs := m.status[band.Name]
 		bs.CheckedAt = now
+		classified++
 		bs.PowerDB = avg
 		bs.LastOccupancy = occupancy
 		bs.LastFlatness = flatness

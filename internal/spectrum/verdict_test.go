@@ -2,6 +2,7 @@ package spectrum
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 )
@@ -169,5 +170,93 @@ func TestScanRecordsItsRound(t *testing.T) {
 	m.mu.RUnlock()
 	if r <= 0 {
 		t.Errorf("lastRound = %v after a round", r)
+	}
+}
+
+// slowScanner stands for a reader whose every scan takes `step` of the
+// monitor's clock; scans of the bands named in fail return an error.
+type slowScanner struct {
+	clock *time.Time
+	step  time.Duration
+	fail  map[int]bool // by the scan's low frequency, MHz
+}
+
+func (s slowScanner) Available() bool   { return true }
+func (s slowScanner) Info() ScannerInfo { return ScannerInfo{BinaryPath: "slow"} }
+func (s slowScanner) Scan(_ context.Context, low, _, _, _ int) ([]float64, error) {
+	*s.clock = s.clock.Add(s.step)
+	if s.fail[low/1000000] {
+		return nil, errors.New("scan failed")
+	}
+	p := make([]float64, 18)
+	for i := range p {
+		p[i] = -63
+	}
+	return p, nil
+}
+
+// slowMonitor is a monitor on the mesh and 2 m bands, both calibrated, on
+// a clock the scanner moves.
+func slowMonitor(clock *time.Time, sc slowScanner) *SpectrumMonitor {
+	m := NewSpectrumMonitor(sc, DefaultBands[1:3])
+	m.clock = func() time.Time { return *clock }
+	m.mu.Lock()
+	m.enabled = true
+	m.baseline["mesh_869"] = &Baseline{Mean: -63}
+	m.baseline["aprs_144"] = &Baseline{Mean: -63}
+	m.lastRound = 10 * time.Second
+	m.mu.Unlock()
+	return m
+}
+
+// failed_round_does_not_revive_expired_verdict: a pass whose scans failed
+// classified nothing, so it says nothing about how often the bands are
+// classified. It must not stretch the age limit, and an expired verdict
+// stays unknown until its band is classified again. Only a pass that
+// classified every calibrated band measures the round. [MESHSAT-1650]
+func TestFailedRoundDoesNotReviveExpiredVerdict(t *testing.T) {
+	clock := time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)
+	m := slowMonitor(&clock, slowScanner{clock: &clock, step: 45 * time.Second, fail: map[int]bool{869: true, 144: true}})
+	setVerdict(m, "mesh_869", StateJamming, clock.Add(-40*time.Second))
+	m.clock = func() time.Time { return clock }
+	if _, known := m.JamVerdict(MeshInterfaceID); known {
+		t.Fatal("a 40 s old verdict is known before the round")
+	}
+	m.scanAllBands(context.Background()) // two failed scans, 90 s of clock
+	if jammed, known := m.JamVerdict(MeshInterfaceID); jammed || known {
+		t.Errorf("after a failed 90 s round: jammed=%v known=%v, want unknown", jammed, known)
+	}
+	m.mu.RLock()
+	r := m.lastRound
+	m.mu.RUnlock()
+	if r != 10*time.Second {
+		t.Errorf("lastRound = %v after a failed round, want the last good 10s", r)
+	}
+}
+
+// A pass that classified one band and failed the other doesn't measure the
+// round either; a slow pass that classified both still does (the slow
+// reader keeps its allowance).
+func TestOnlyACompleteRoundMeasuresTheReader(t *testing.T) {
+	clock := time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)
+	m := slowMonitor(&clock, slowScanner{clock: &clock, step: 30 * time.Second, fail: map[int]bool{144: true}})
+	m.scanAllBands(context.Background())
+	m.mu.RLock()
+	r := m.lastRound
+	m.mu.RUnlock()
+	if r != 10*time.Second {
+		t.Errorf("lastRound = %v after a half-failed round, want the last good 10s", r)
+	}
+
+	m = slowMonitor(&clock, slowScanner{clock: &clock, step: 30 * time.Second})
+	m.scanAllBands(context.Background())
+	m.mu.RLock()
+	r = m.lastRound
+	m.mu.RUnlock()
+	if r != 60*time.Second {
+		t.Errorf("lastRound = %v after a complete 60 s round, want 60s", r)
+	}
+	if jammed, known := m.JamVerdict("aprs_0"); jammed || !known {
+		t.Errorf("after a complete round: aprs_0 jammed=%v known=%v, want known clear", jammed, known)
 	}
 }
