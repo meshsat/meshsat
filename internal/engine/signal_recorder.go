@@ -90,32 +90,49 @@ func (sr *SignalRecorder) pollLoop(ctx context.Context, np namedProvider) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			sig, err := np.provider.GetSignalFast(ctx)
-			if err != nil || sig == nil {
-				continue // transport not connected yet
-			}
-			// Only record when we have a valid reading (timestamp set)
-			if sig.Timestamp == "" {
-				continue
-			}
-			// Use the source key from the transport ("sbd" or "imt").
-			// HAL transport doesn't set source — fall back to provider's fallback name.
-			source := sig.Source
-			if source == "" {
-				source = np.fallbackName
-			}
-			// Record every reading (even if same as last) for history chart continuity
-			ts := time.Now().Unix()
-			if err := sr.db.InsertSignalHistory(source, ts, float64(sig.Bars)); err != nil {
-				log.Warn().Err(err).Str("source", source).Msg("signal recorder: insert failed")
-				continue
-			}
-			if sig.Bars != lastBars {
-				log.Debug().Int("bars", sig.Bars).Str("source", source).Msg("signal recorder: recorded")
-				lastBars = sig.Bars
+			if bars, source, ok := sr.recordOnce(ctx, np, time.Now()); ok && bars != lastBars {
+				log.Debug().Int("bars", bars).Str("source", source).Msg("signal recorder: recorded")
+				lastBars = bars
 			}
 		}
 	}
+}
+
+// signalClockSlack is how far ahead of the host clock a reading's time may
+// be and still be taken as the time of the reading.
+const signalClockSlack = time.Minute
+
+// recordOnce reads one cached signal and records it at the time the modem
+// observed it, never the time it was polled. A cache that has not changed
+// since an old reading (the 9704's, while its poller is disconnected) is
+// the same observation, and UNIQUE(source, timestamp) keeps it one row, so
+// polling it again never makes it fresh; the health scorer, which reads the
+// last ten minutes, then has no reading. A reading with no usable time
+// (missing, unparseable, or ahead of the host clock by more than
+// signalClockSlack) is not recorded. [MESHSAT-1653]
+func (sr *SignalRecorder) recordOnce(ctx context.Context, np namedProvider, now time.Time) (int, string, bool) {
+	sig, err := np.provider.GetSignalFast(ctx)
+	if err != nil || sig == nil {
+		return 0, "", false // transport not connected yet
+	}
+	observed, err := time.Parse(time.RFC3339Nano, sig.Timestamp)
+	if err != nil || observed.After(now.Add(signalClockSlack)) {
+		return 0, "", false
+	}
+	// Use the source key from the transport ("sbd" or "imt").
+	// HAL transport doesn't set source — fall back to provider's fallback name.
+	source := sig.Source
+	if source == "" {
+		source = np.fallbackName
+	}
+	// Every new observation is a row, the same bars included, so the chart
+	// keeps its points; an unchanged cache adds none, and the chart shows
+	// the gap.
+	if err := sr.db.InsertSignalHistory(source, observed.Unix(), float64(sig.Bars)); err != nil {
+		log.Warn().Err(err).Str("source", source).Msg("signal recorder: insert failed")
+		return 0, "", false
+	}
+	return sig.Bars, source, true
 }
 
 func (sr *SignalRecorder) dailyPruner(ctx context.Context) {

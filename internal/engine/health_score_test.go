@@ -1,10 +1,12 @@
 package engine
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"meshsat/internal/database"
+	"meshsat/internal/transport"
 )
 
 func newHealthDB(t *testing.T) *database.DB {
@@ -117,5 +119,49 @@ func TestHealthScoreSamplesSayWhenThereIsNoData(t *testing.T) {
 	}
 	if s := h.Score("mesh_0"); s.SuccessRate != 0.5 || s.Samples != 2 {
 		t.Fatalf("one sent, one failed, one queued: rate %.2f over %d, want 0.50 over 2", s.SuccessRate, s.Samples)
+	}
+}
+
+// fixedSignal is a modem whose cached reading never changes, as the 9704's
+// cache does while its poller is disconnected.
+type fixedSignal transport.SignalInfo
+
+func (f fixedSignal) GetSignalFast(context.Context) (*transport.SignalInfo, error) {
+	s := transport.SignalInfo(f)
+	return &s, nil
+}
+
+// recorder_does_not_refresh_stale_observation: the recorder writes a reading
+// at the time the modem observed it, so polling an old cached reading again
+// never makes it fresh; the scorer, which reads the last ten minutes, then
+// says there is no reading. A reading with no usable time is not recorded.
+// [MESHSAT-1653]
+func TestRecorderDoesNotRefreshStaleObservation(t *testing.T) {
+	db := newHealthDB(t)
+	h := NewHealthScorer(db)
+	sr := NewSignalRecorder(db, nil)
+	now := time.Now()
+	at := func(d time.Duration) string { return now.Add(d).UTC().Format(time.RFC3339) }
+
+	stale := namedProvider{provider: fixedSignal{Bars: 4, Source: "imt", Timestamp: at(-20 * time.Minute)}, fallbackName: "imt"}
+	for i := 0; i < 3; i++ { // three polls, 30 s apart
+		sr.recordOnce(context.Background(), stale, now.Add(time.Duration(i)*30*time.Second))
+	}
+	if s := h.Score("iridium_imt_0"); s.Signal != 0 || s.SignalSource != "" {
+		t.Errorf("a 20-minute-old reading polled again scores %d from %q, want none", s.Signal, s.SignalSource)
+	}
+
+	for _, bad := range []string{"not a time", at(time.Hour)} {
+		p := namedProvider{provider: fixedSignal{Bars: 5, Source: "sbd", Timestamp: bad}, fallbackName: "sbd"}
+		sr.recordOnce(context.Background(), p, now)
+	}
+	if s := h.Score("iridium_0"); s.Signal != 0 || s.SignalSource != "" {
+		t.Errorf("a reading with no usable time scores %d from %q, want none", s.Signal, s.SignalSource)
+	}
+
+	fresh := namedProvider{provider: fixedSignal{Bars: 3, Source: "imt", Timestamp: at(-30 * time.Second)}, fallbackName: "imt"}
+	sr.recordOnce(context.Background(), fresh, now)
+	if s := h.Score("iridium_imt_0"); s.Signal != 60 || s.SignalSource != "imt" {
+		t.Errorf("a 30-second-old reading scores %d from %q, want 60 from imt", s.Signal, s.SignalSource)
 	}
 }
