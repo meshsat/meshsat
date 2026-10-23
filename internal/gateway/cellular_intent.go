@@ -196,5 +196,9 @@ func (g *CellularGateway) IntentSend(ctx context.Context, s IntentSend) IntentOu
 	if errors.Is(err, transport.ErrNotConnected) {
 		return IntentOutcome{Class: IntentNotSent, Retryable: true, Reason: "skipped_offline", Detail: detail}
 	}
-	return IntentOutcome{Class: IntentNotSent, Retryable: true, ConsumeRetry: true, Reason: "not_sent", Detail: detail, BearerRefused: true}
+	// Only the modem's own failure is the bearer's refusal; a command that
+	// never started (behind a busy one, a session that ended, the caller
+	// gone) or a check before the modem is not. [R50-V1]
+	return IntentOutcome{Class: IntentNotSent, Retryable: true, ConsumeRetry: true, Reason: "not_sent", Detail: detail,
+		BearerRefused: errors.Is(err, transport.ErrModemFailed)}
 }

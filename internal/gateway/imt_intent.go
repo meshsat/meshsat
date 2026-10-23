@@ -139,6 +139,11 @@ func (g *IMTGateway) IntentSend(ctx context.Context, s IntentSend) IntentOutcome
 		return IntentOutcome{Class: IntentNotSent, Retryable: true, Reason: "skipped_offline", Detail: detail}
 	}
 	g.errors.Add(1)
+	// The bearer's own refusal is the modem's answer to this send: a result
+	// the helper brought back without a local error (a refusal at
+	// messageOriginate, a cancel before transit), or a final status of the
+	// modem's. A send its caller cancelled, or that never reached the
+	// modem, comes back with a local error and no modem status. [R50-V1]
 	return IntentOutcome{Class: IntentNotSent, Retryable: res.Retry, ConsumeRetry: true, Reason: "not_sent",
-		Detail: "not sent: " + detail, BearerRefused: true}
+		Detail: "not sent: " + detail, BearerRefused: err == nil || res.ModemAnswered()}
 }

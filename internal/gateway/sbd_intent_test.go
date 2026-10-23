@@ -131,7 +131,8 @@ func TestSBDIntent_EachKindOfSession(t *testing.T) {
 	}{
 		{"taken", ok, nil, IntentAccepted, false, "", true, false},
 		{"the line is down", nil, fmt.Errorf("x: %w", transport.ErrNotConnected), IntentNotSent, true, "skipped_offline", false, false},
-		{"failed before the SBDIX", nil, fmt.Errorf("%w: AT+SBDWB failed", transport.ErrNotSubmitted), IntentNotSent, true, "not_sent", false, true},
+		{"the modem failed before the SBDIX", nil, fmt.Errorf("%w: AT+SBDWB failed (%w)", transport.ErrNotSubmitted, transport.ErrModemFailed), IntentNotSent, true, "not_sent", false, true},
+		{"refused before the modem", nil, fmt.Errorf("%w: text too long", transport.ErrNotSubmitted), IntentNotSent, true, "not_sent", false, false},
 		{"no network service", &transport.SatResult{MOStatus: 32}, nil, IntentNotSent, true, "not_sent", false, true},
 		{"access denied", &transport.SatResult{MOStatus: 15}, nil, IntentNotSent, false, "not_sent", false, true},
 		{"the session did not complete", &transport.SatResult{MOStatus: 13}, nil, IntentUnknown, false, "", false, false},

@@ -57,6 +57,15 @@ type IMTSubmit struct {
 	Inconsistent bool
 }
 
+// ModemAnswered reports whether Status is the modem's own final_mo_status
+// (one of the statuses imtStatusBasis knows), not the helper's marker or
+// nothing: a send cancelled by its caller or never handed to the modem has
+// none. [MESHSAT-1650, R50-V1]
+func (s IMTSubmit) ModemAnswered() bool {
+	_, ok := imtStatusBasis[s.Status]
+	return ok
+}
+
 // moOp is the MO with the modem: its reference, its op token (never
 // reused, unlike the reference, which wraps at 100) and whether a cancel
 // may touch it.

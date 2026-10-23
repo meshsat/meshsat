@@ -83,7 +83,8 @@ func TestSMSIntent_Outcomes(t *testing.T) {
 		{"refused", transport.SMSSubmit{Phase: transport.SMSRefused}, errTest("+CMS ERROR: 500"), IntentNotSent, false, "not_sent", false},
 		{"handed_over", transport.SMSSubmit{Phase: transport.SMSHandedOver}, errTest("timeout"), IntentUnknown, false, "", false},
 		{"offline", transport.SMSSubmit{}, transport.ErrNotConnected, IntentNotSent, false, "skipped_offline", false},
-		{"not_sent", transport.SMSSubmit{}, errTest("no prompt"), IntentNotSent, false, "not_sent", true},
+		{"the modem failed", transport.SMSSubmit{}, fmt.Errorf("timeout waiting for > prompt (%w)", transport.ErrModemFailed), IntentNotSent, false, "not_sent", true},
+		{"not_sent", transport.SMSSubmit{}, errTest("no prompt"), IntentNotSent, false, "not_sent", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cell := &submitCell{fakeCellTransport: newFakeCellTransport(), res: tc.res, err: tc.err}

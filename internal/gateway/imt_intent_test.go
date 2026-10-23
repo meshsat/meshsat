@@ -81,6 +81,8 @@ func TestIMTIntent_Outcomes(t *testing.T) {
 		{"no sky", transport.IMTSubmit{Phase: transport.IMTNotSent, Retry: true, Status: "message_cancelled_pre_transit"}, nil, IntentNotSent, "not_sent", false, true, true, true},
 		{"invalid subscription", transport.IMTSubmit{Phase: transport.IMTNotSent, Status: "subscription_invalid"}, nil, IntentNotSent, "not_sent", false, false, true, true},
 		{"modem not connected", transport.IMTSubmit{Phase: transport.IMTNotSent, Retry: true}, fmt.Errorf("imt: %w", transport.ErrNotConnected), IntentNotSent, "skipped_offline", false, true, false, false},
+		{"the modem refused it at messageOriginate", transport.IMTSubmit{Phase: transport.IMTNotSent, Retry: true}, nil, IntentNotSent, "not_sent", false, true, true, true},
+		{"cancelled by its caller before the handoff", transport.IMTSubmit{Phase: transport.IMTNotSent, Retry: true, MOStatus: transport.IMTStatusGenericFail}, fmt.Errorf("imt: not started: %w", context.Canceled), IntentNotSent, "not_sent", false, true, true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			sat := &submitSat{res: tc.res, err: tc.err}

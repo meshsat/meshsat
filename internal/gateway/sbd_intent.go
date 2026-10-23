@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -178,5 +179,5 @@ func (g *SBDGateway) IntentSend(ctx context.Context, s IntentSend) IntentOutcome
 	}
 	g.errors.Add(1)
 	return IntentOutcome{Class: IntentNotSent, Retryable: sub.Retry, ConsumeRetry: true, Reason: "not_sent",
-		Detail: "not sent: " + sub.Status, BearerRefused: true}
+		Detail: "not sent: " + sub.Status, BearerRefused: (err == nil && sub.MOStatus >= 0) || errors.Is(err, transport.ErrModemFailed)}
 }

@@ -1401,14 +1401,14 @@ func (t *DirectCellTransport) cmgs(sp serial.Port, to, text string, intent bool,
 		drainPort(sp)
 		probeResp, probeErr = sendAT(sp, "AT", 5*time.Second)
 		if probeErr != nil {
-			return "", fmt.Errorf("modem not responding: %w", probeErr)
+			return "", modemFailed(fmt.Errorf("modem not responding: %w", probeErr))
 		}
 	}
 
 	// Ensure text mode is set before every CMGS.
 	log.Debug().Msg("cellular: SMS setting CMGF=1")
 	if cmgfResp, cmgfErr := sendAT(sp, "AT+CMGF=1", 3*time.Second); cmgfErr != nil || strings.Contains(cmgfResp, "ERROR") {
-		return "", fmt.Errorf("failed to set text mode: %v", cmgfErr)
+		return "", modemFailed(fmt.Errorf("failed to set text mode: %v", cmgfErr))
 	}
 	// A delivery intent's SMS goes only under the text contract it was
 	// admitted for (B7(l)): checked on every send, so a reconnect or a
@@ -1433,7 +1433,7 @@ func (t *DirectCellTransport) cmgs(sp serial.Port, to, text string, intent bool,
 	cmd := fmt.Sprintf("AT+CMGS=\"%s\"", to)
 	drainPort(sp)
 	if _, err := sp.Write([]byte(cmd + "\r")); err != nil {
-		return "", fmt.Errorf("write CMGS failed: %w", err)
+		return "", modemFailed(fmt.Errorf("write CMGS failed: %w", err))
 	}
 
 	// Wait for ">" prompt
@@ -1443,7 +1443,7 @@ func (t *DirectCellTransport) cmgs(sp serial.Port, to, text string, intent bool,
 	var resp strings.Builder
 	for {
 		if time.Now().After(deadline) {
-			return "", fmt.Errorf("timeout waiting for > prompt (got: %q)", resp.String())
+			return "", modemFailed(fmt.Errorf("timeout waiting for > prompt (got: %q)", resp.String()))
 		}
 		n, err := sp.Read(buf)
 		if n > 0 {
@@ -1456,7 +1456,7 @@ func (t *DirectCellTransport) cmgs(sp serial.Port, to, text string, intent bool,
 			}
 		}
 		if err != nil {
-			return "", fmt.Errorf("read failed: %w", err)
+			return "", modemFailed(fmt.Errorf("read failed: %w", err))
 		}
 	}
 	log.Debug().Str("prompt_buf", resp.String()).Msg("cellular: got > prompt, sending text")
@@ -1467,7 +1467,7 @@ func (t *DirectCellTransport) cmgs(sp serial.Port, to, text string, intent bool,
 	// Send text body first, then Ctrl+Z separately.
 	// Some modems (Huawei E220 on 2G) need Ctrl-Z as a distinct write.
 	if _, err := sp.Write([]byte(text)); err != nil {
-		return "", fmt.Errorf("write text failed: %w", err)
+		return "", modemFailed(fmt.Errorf("write text failed: %w", err))
 	}
 	time.Sleep(100 * time.Millisecond)
 	if n, err := sp.Write([]byte{0x1A}); err != nil {
@@ -1475,7 +1475,7 @@ func (t *DirectCellTransport) cmgs(sp serial.Port, to, text string, intent bool,
 			// The Ctrl-Z reached the modem: it may submit (B9SMS-R1).
 			setSMSPhase(phase, SMSHandedOver)
 		}
-		return "", fmt.Errorf("write Ctrl-Z failed: %w", err)
+		return "", modemFailed(fmt.Errorf("write Ctrl-Z failed: %w", err))
 	}
 	setSMSPhase(phase, SMSHandedOver)
 

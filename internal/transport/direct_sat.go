@@ -790,7 +790,7 @@ func (t *DirectSatTransport) Send(ctx context.Context, data []byte) (*SBDResult,
 		if pipeLineGone(err) {
 			return nil, fmt.Errorf("failed to clear MO buffer: %w: %w", ErrNotConnected, err)
 		}
-		return nil, fmt.Errorf("%w: failed to clear MO buffer", ErrNotSubmitted)
+		return nil, modemFailed(fmt.Errorf("%w: failed to clear MO buffer", ErrNotSubmitted))
 	}
 	defer t.clearMOAfterSendLocked()
 
@@ -800,10 +800,10 @@ func (t *DirectSatTransport) Send(ctx context.Context, data []byte) (*SBDResult,
 		if pipeLineGone(err) {
 			return nil, fmt.Errorf("AT+SBDWB failed: %w: %w", ErrNotConnected, err)
 		}
-		return nil, fmt.Errorf("%w: AT+SBDWB failed: %w", ErrNotSubmitted, err)
+		return nil, modemFailed(fmt.Errorf("%w: AT+SBDWB failed: %w", ErrNotSubmitted, err))
 	}
 	if !strings.Contains(resp, "READY") {
-		return nil, fmt.Errorf("%w: modem did not respond READY for binary write", ErrNotSubmitted)
+		return nil, modemFailed(fmt.Errorf("%w: modem did not respond READY for binary write", ErrNotSubmitted))
 	}
 
 	// Calculate checksum and write
@@ -822,7 +822,7 @@ func (t *DirectSatTransport) Send(ctx context.Context, data []byte) (*SBDResult,
 		if pipeLineGone(err) {
 			return nil, fmt.Errorf("binary write failed: %w: %w", ErrNotConnected, err)
 		}
-		return nil, fmt.Errorf("%w: binary write failed: %w", ErrNotSubmitted, err)
+		return nil, modemFailed(fmt.Errorf("%w: binary write failed: %w", ErrNotSubmitted, err))
 	}
 
 	// Read write result
@@ -831,7 +831,7 @@ func (t *DirectSatTransport) Send(ctx context.Context, data []byte) (*SBDResult,
 		if pipeLineGone(err) {
 			return nil, fmt.Errorf("binary write response failed: %w: %w", ErrNotConnected, err)
 		}
-		return nil, fmt.Errorf("%w: binary write response failed: %w", ErrNotSubmitted, err)
+		return nil, modemFailed(fmt.Errorf("%w: binary write response failed: %w", ErrNotSubmitted, err))
 	}
 	writeOK := false
 	for _, line := range strings.Split(writeResp, "\n") {
@@ -840,15 +840,15 @@ func (t *DirectSatTransport) Send(ctx context.Context, data []byte) (*SBDResult,
 		case "0":
 			writeOK = true
 		case "1":
-			return nil, fmt.Errorf("%w: binary write timeout on modem", ErrNotSubmitted)
+			return nil, modemFailed(fmt.Errorf("%w: binary write timeout on modem", ErrNotSubmitted))
 		case "2":
-			return nil, fmt.Errorf("%w: binary write checksum mismatch", ErrNotSubmitted)
+			return nil, modemFailed(fmt.Errorf("%w: binary write checksum mismatch", ErrNotSubmitted))
 		case "3":
-			return nil, fmt.Errorf("%w: binary write wrong size", ErrNotSubmitted)
+			return nil, modemFailed(fmt.Errorf("%w: binary write wrong size", ErrNotSubmitted))
 		}
 	}
 	if !writeOK {
-		return nil, fmt.Errorf("%w: binary write: no success confirmation from modem", ErrNotSubmitted)
+		return nil, modemFailed(fmt.Errorf("%w: binary write: no success confirmation from modem", ErrNotSubmitted))
 	}
 
 	// Drain any residual bytes from the binary write before SBDIX.
@@ -942,7 +942,7 @@ func (t *DirectSatTransport) SendText(ctx context.Context, text string) (*SBDRes
 		}
 		// The modem may have taken the text though its OK was lost; the
 		// clear after the send (and before any later session) empties it.
-		return nil, fmt.Errorf("%w: AT+SBDWT failed: %s", ErrNotSubmitted, resp)
+		return nil, modemFailed(fmt.Errorf("%w: AT+SBDWT failed: %s", ErrNotSubmitted, resp))
 	}
 
 	// SBDIX; the MO buffer is cleared after it (clearMOAfterSendLocked). A
@@ -1891,7 +1891,7 @@ func (t *DirectSatTransport) sbdixSessionLocked(ctx context.Context, settle bool
 		}
 		if !strings.Contains(resp, "IX:") {
 			// ERROR alone: the modem refused the command, no session ran.
-			return nil, fmt.Errorf("%w: %w", ErrNotSubmitted, err)
+			return nil, modemFailed(fmt.Errorf("%w: %w", ErrNotSubmitted, err))
 		}
 		return nil, err
 	}

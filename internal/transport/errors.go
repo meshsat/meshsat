@@ -47,6 +47,22 @@ var ErrPayloadTooLong = errors.New("not sent: the message does not fit, and cutt
 // and are read the same way. [MESHSAT-1581]
 var ErrNotSubmitted = errors.New("not submitted: nothing left the device")
 
+// ErrModemFailed marks a send that the modem itself failed or refused: a
+// command it answered with an error, did not answer, or could not be
+// written to it. Never a check this side made before the modem (size,
+// characters, a queue or a session that ended first, the caller giving
+// up). The hop set counts only this as the bearer's own refusal; the
+// error's text and its other causes are unchanged. [MESHSAT-1650, R50-V1]
+var ErrModemFailed = errors.New("the modem failed the command")
+
+// modemFailed marks err as the modem's own failure, keeping its text.
+func modemFailed(err error) error { return modemErr{err} }
+
+type modemErr struct{ err error }
+
+func (e modemErr) Error() string   { return e.err.Error() }
+func (e modemErr) Unwrap() []error { return []error{e.err, ErrModemFailed} }
+
 // ErrOutcomeUnknown is returned by a satellite send whose session may have
 // gone out while its outcome never reached this Bridge: the link to the
 // MeshSat node dropped while the node's modem ran the session (or the write
