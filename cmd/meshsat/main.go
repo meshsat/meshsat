@@ -1817,9 +1817,14 @@ func main() {
 		healthScorer.SetSpectrumChecker(spectrumMon)
 	}
 	srv.SetHealthScorer(healthScorer)
-	// One gate for every route decision: the delivery intents and the
-	// failover groups skip a link whose band is jammed or whose receiver is
-	// deaf; the deaf checkers join the scorer further down. [MESHSAT-1650]
+	// One gate, consulted by the delivery intents (round 1 and the next
+	// route) and by a failover group (its first choice and the no-ack
+	// retry): they skip a link whose band is jammed or whose receiver is
+	// deaf; the deaf checkers join the scorer further down. Deliberate
+	// exceptions that don't consult it: PRIMARY_ONLY, a round 1 whose every
+	// admitted route is excluded (it still sends), a group with no usable
+	// member online (its first enabled member holds the deliveries), a
+	// direct interface target, and HeMB bond allocation. [MESHSAT-1650]
 	dispatcher.SetRouteGate(healthScorer)
 	failoverResolver.SetRouteGate(healthScorer)
 	srv.SetAccessEvaluator(accessEval)

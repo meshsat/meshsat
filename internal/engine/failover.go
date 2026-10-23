@@ -173,7 +173,11 @@ func (fr *FailoverResolver) Resolve(targetID string) string {
 		}
 	}
 
-	// No online member — fall back to first enabled member (deliveries will be held)
+	// No online member — fall back to first enabled member (deliveries will be held).
+	// The same when every online member is excluded by the gate: a group never
+	// answers nothing while a member is enabled, so the deliveries wait on it
+	// rather than being dropped (a deliberate exception to the gate, kept in
+	// slice (b)). [MESHSAT-1650]
 	for _, m := range members {
 		status, err := fr.ifaceMgr.GetStatus(m.InterfaceID)
 		if err != nil {
