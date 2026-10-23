@@ -218,14 +218,16 @@ func (p *Processor) decodeIngressChain(sourceIface, raw string) (text string, cl
 	return raw, false, false
 }
 
-// DecodeSMS is DecodeIngress for an SMS from a number: the chat's own key
-// opens it first (sms:<from>, then sms:*), then the interface's ingress
-// chain, as before. encrypted is true when a key opened it, so the SMS
-// history can show the words with the lock.
+// DecodeSMS is DecodeIngress for an SMS from a number, read in the app SMS
+// wire's order (Dispatcher.ReadSMS): the chat's own key first (sms:<from>,
+// then sms:*), then the interface's ingress chain when the link's key opens
+// it, then a clear v2 frame, or a v2 one kept as it came; the chain reads
+// the rest, as before. encrypted is true when a key opened it, so the SMS
+// history can show the words with the lock; a clear frame has none.
 func (p *Processor) DecodeSMS(sourceIface, from, raw string) (text string, encrypted bool) {
 	if p != nil && p.dispatcher != nil {
-		if words, ok := p.dispatcher.OpenChatSMS(sourceIface, from, raw); ok {
-			return words, true
+		if r, ok := p.dispatcher.ReadSMS(sourceIface, from, raw); ok {
+			return r.Text, r.Encrypted
 		}
 	}
 	text, clear, decrypted := p.decodeIngressChain(sourceIface, raw)
@@ -1282,12 +1284,14 @@ func (p *Processor) StartGatewayReceiver(ctx context.Context, gw gateway.Gateway
 				decodedText := msg.Text
 				dropped := false
 				// An SMS one of its chat's keys opens (sms:<from>, then sms:*)
-				// is its words; the link's chain, and its gate, are for the
-				// rest.
+				// is its words, and so is a clear app SMS wire v2 frame on a
+				// link whose chain does not authenticate; a v2 frame this
+				// Bridge does not read is kept as it came (Dispatcher.ReadSMS).
+				// The link's chain, and its gate, are for the rest.
 				chatOpened := false
 				if p.dispatcher != nil && !msg.Plain {
-					if words, ok := p.dispatcher.OpenChatSMS(sourceIface, msg.FromAddr, msg.Text); ok {
-						decodedText, chatOpened = words, true
+					if r, ok := p.dispatcher.ReadSMS(sourceIface, msg.FromAddr, msg.Text); ok {
+						decodedText, chatOpened = r.Text, true
 					}
 				}
 				if p.dispatcher != nil && p.dispatcher.TransformPipeline() != nil && !msg.Plain && !chatOpened {

@@ -184,6 +184,23 @@ func chatCipherStep(hexKey string) TransformSpec {
 	return TransformSpec{Type: "encrypt", Params: map[string]string{"key": hexKey}}
 }
 
+// SMSRead is what a Bridge makes of an SMS from a MeshSat app (r41 review
+// V1): its words or the SMS as it came, and, apart from that, whether a key
+// opened it.
+type SMSRead struct {
+	// Text is the words, or the SMS as it came when Kept.
+	Text string
+	// Encrypted: one of the chat's keys opened it, so its tag authenticated
+	// it. A clear v2 frame is never encrypted.
+	Encrypted bool
+	// Kept: app SMS wire v2 this Bridge does not read (a mode or codec it
+	// does not know, a body that does not read, a sealed frame no key
+	// opens). Nothing is read into it.
+	Kept bool
+	// Key names the key that opened it, for the log.
+	Key string
+}
+
 // OpenChatSMS reads an SMS from number with that chat's keys, the number's
 // own first, and returns its words and the name of the key that opened it.
 // It takes MeshSat Android's form (base64 of the version byte, nonce,
@@ -192,16 +209,21 @@ func chatCipherStep(hexKey string) TransformSpec {
 // decoder does: a GSM 0x01 can arrive as "£". AES-GCM authenticates, so text
 // a key did not seal never opens.
 func (tp *TransformPipeline) OpenChatSMS(number, raw string) ([]byte, string, bool) {
+	r, ok := tp.openChatSMS(number, raw)
+	return []byte(r.Text), r.Key, ok
+}
+
+func (tp *TransformPipeline) openChatSMS(number, raw string) (SMSRead, bool) {
 	keys, err := tp.smsChatKeys(number, false)
 	if err != nil {
 		log.Warn().Err(err).Str("from", number).Msg("chat keys: a lookup failed; the other keys and the link's chain read the SMS")
 	}
 	if len(keys) == 0 {
-		return nil, "", false
+		return SMSRead{}, false
 	}
 	blob, ok := chatBase64(raw)
 	if !ok {
-		return nil, "", false
+		return SMSRead{}, false
 	}
 	// Version 2 says how to read it. A frame a key opens but whose codec
 	// this Bridge does not know is kept as it came, never guessed at. A
@@ -214,21 +236,65 @@ func (tp *TransformPipeline) OpenChatSMS(number, raw string) ([]byte, string, bo
 				continue
 			}
 			if words, ok := tp.smsFrameWords(frame); ok {
-				return words, k.ref, true
+				return SMSRead{Text: string(words), Encrypted: true, Key: k.ref}, true
 			}
 			log.Warn().Str("from", number).Hex("codec", frame[:min(1, len(frame))]).
 				Msg("chat keys: an SMS with a codec this Bridge does not read, kept as it came")
-			return []byte(raw), k.ref, true
+			return SMSRead{Text: raw, Encrypted: true, Kept: true, Key: k.ref}, true
 		}
 	}
 	// Version 1 and unversioned: the codec is guessed (chatWords), with the
-	// ambiguity that guess cannot escape.
+	// ambiguity that guess cannot escape. A key that opens one outranks the
+	// clear v2 reading its bytes may also have (readAppSMS, r41 review V2).
 	for _, k := range keys {
 		if p, ok := tp.openChatBlob(blob, k.hex); ok {
-			return tp.chatWords(p), k.ref, true
+			return SMSRead{Text: string(tp.chatWords(p)), Encrypted: true, Key: k.ref}, true
 		}
 	}
-	return nil, "", false
+	return SMSRead{}, false
+}
+
+// readAppSMS reads an app SMS wire v2 frame that no key opened (r41 review
+// V1): a clear frame by the codec it names; a frame with a mode or codec
+// this Bridge does not read, a body that does not read, or a sealed frame,
+// kept as it came. ok is false for anything that is not v2. Only an SMS that
+// is base64 and nothing else qualifies: a Bridge chain puts its version byte
+// (0x01, or "£" after GSM) in front of its base64, so its SMAZ2 or ciphertext
+// is never read as a frame here. Nothing authenticates what this returns.
+func (tp *TransformPipeline) readAppSMS(raw string) (SMSRead, bool) {
+	blob, ok := appSMSBase64(raw)
+	if !ok {
+		return SMSRead{}, false
+	}
+	mode, payload, v2 := codec.ParseSMSWireV2(blob)
+	if !v2 {
+		return SMSRead{}, false
+	}
+	if mode == codec.SMSModeClear {
+		if words, ok := tp.smsFrameWords(payload); ok && len(words) > 0 {
+			return SMSRead{Text: string(words)}, true
+		}
+	}
+	log.Warn().Hex("mode", blob[1:2]).Hex("codec", payload[:1]).
+		Msg("sms: app SMS wire v2 this Bridge does not read, or sealed with no key that opens it; kept as it came")
+	return SMSRead{Text: raw, Kept: true}, true
+}
+
+// appSMSBase64 decodes an SMS that is standard base64 and nothing else,
+// padded or not, as the apps send it.
+func appSMSBase64(raw string) ([]byte, bool) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return nil, false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !(c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '+' || c == '/' || c == '=') {
+			return nil, false
+		}
+	}
+	blob, err := base64.RawStdEncoding.DecodeString(strings.TrimRight(s, "="))
+	return blob, err == nil
 }
 
 // chatBase64 decodes the base64 in an SMS, skipping every character that is
@@ -371,24 +437,80 @@ func chainStep(chain, typ string) (TransformSpec, bool) {
 	return TransformSpec{}, false
 }
 
-// OpenChatSMS returns the words of an SMS that came in on a cellular link
-// from `from` when one of that chat's keys opens it (sms:<from>, then
-// sms:*). ok is false otherwise, and the link's ingress chain reads the SMS
-// as before.
-func (d *Dispatcher) OpenChatSMS(sourceIface, from, raw string) (string, bool) {
+// ReadSMS reads an SMS that came in on a cellular link from `from` in the
+// order the Hub and both apps read one (r41 review V1, V2):
+//
+//  1. what one of the chat's keys opens (sms:<from>, then sms:*): a v2
+//     sealed frame, then version 1 or unversioned;
+//  2. what the link's own key opens: ok is false, and the link's chain reads
+//     it as before;
+//  3. an app SMS wire v2 frame nothing authenticated: a clear frame by the
+//     codec it names, anything else v2 kept as it came.
+//
+// A key's reading always wins over a clear one, so a sealed SMS whose nonce
+// starts like a v2 header never reads as clear text. On a link whose chain
+// authenticates, step 3 does not apply: the chain's gate still drops what no
+// key sealed. ok is false for everything else, which the chain reads.
+func (d *Dispatcher) ReadSMS(sourceIface, from, raw string) (SMSRead, bool) {
 	if d == nil || raw == "" || !strings.HasPrefix(sourceIface, "cellular") {
-		return "", false
+		return SMSRead{}, false
 	}
 	tp := d.TransformPipeline()
 	if tp == nil {
-		return "", false
+		return SMSRead{}, false
 	}
-	words, ref, ok := tp.OpenChatSMS(from, raw)
+	if r, ok := tp.openChatSMS(from, raw); ok {
+		log.Debug().Str("iface", sourceIface).Str("from", from).Str("key", r.Key).Bool("kept", r.Kept).Msg("chat keys: SMS opened with its chat's key")
+		return r, true
+	}
+	r, ok := tp.readAppSMS(raw)
 	if !ok {
-		return "", false
+		return SMSRead{}, false
 	}
-	log.Debug().Str("iface", sourceIface).Str("from", from).Str("key", ref).Msg("chat keys: SMS opened with its chat's key")
-	return string(words), true
+	if chain := d.ingressChain(sourceIface); TransformsAuthenticate(chain) || tp.linkKeyOpens(chain, raw) {
+		return SMSRead{}, false
+	}
+	log.Debug().Str("iface", sourceIface).Str("from", from).Bool("kept", r.Kept).Msg("sms: app SMS wire v2, clear")
+	return r, true
+}
+
+// ingressChain is an interface's ingress transforms, "" when it has none or
+// cannot be read.
+func (d *Dispatcher) ingressChain(ifaceID string) string {
+	if d.db == nil {
+		return ""
+	}
+	iface, err := d.db.GetInterface(ifaceID)
+	if err != nil {
+		return ""
+	}
+	return iface.IngressTransforms
+}
+
+// linkKeyOpens reports whether the decrypt steps of a link's ingress chain
+// open raw, an optional one included: AES-GCM authenticates, so it opens
+// only what the link's key sealed.
+func (tp *TransformPipeline) linkKeyOpens(chain, raw string) bool {
+	specs, err := parseTransforms(chain)
+	if err != nil || !ChainEncrypts(chain) {
+		return false
+	}
+	strict := make([]TransformSpec, len(specs))
+	for i, s := range specs {
+		strict[i] = TransformSpec{Type: s.Type, Params: map[string]string{}}
+		for k, v := range s.Params {
+			if k != "optional" {
+				strict[i].Params[k] = v
+			}
+		}
+	}
+	strictJSON, err := json.Marshal(strict)
+	if err != nil {
+		return false
+	}
+	_, body := codec.StripVersionByte([]byte(raw))
+	_, err = tp.ApplyIngress(body, string(strictJSON))
+	return err == nil
 }
 
 // sealChatSMS seals a cellular delivery's text for every destination that

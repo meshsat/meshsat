@@ -718,11 +718,13 @@ func (d *Dispatcher) dispatchAccess(sourceInterface string, msg rules.RouteMessa
 	}
 
 	// An SMS one of its chat's keys opens (sms:<from>, then sms:*) goes on as
-	// its words; the link's chain reads the rest, as before.
+	// its words, and so does a clear app SMS wire v2 frame; a v2 frame this
+	// Bridge does not read goes on as it came (ReadSMS). The link's chain
+	// reads the rest, as before.
 	chatOpened := false
 	if len(payload) > 0 && !msg.Plain {
-		if words, ok := d.OpenChatSMS(sourceInterface, msg.From, string(payload)); ok {
-			payload, msg.Text, chatOpened = []byte(words), words, true
+		if r, ok := d.ReadSMS(sourceInterface, msg.From, string(payload)); ok {
+			payload, msg.Text, chatOpened = []byte(r.Text), r.Text, true
 		}
 	}
 

@@ -1,7 +1,7 @@
 {
   "version": 1,
   "contract": "SMS text = base64(0x02 | mode | payload). mode 0x00 clear: payload = codec | body. mode 0x01 AES-256-GCM: payload = nonce(12) | ciphertext(codec | body) | tag(16), no AAD. codec 0x00 UTF-8 text, 0x01 SMAZ2 with the default table, 0x02 MSVQ-SC. Senders: MSVQ-SC when set and it encodes, else SMAZ2 when shorter, else the text. A plain SMS (no key, no compression) is the typed text, unframed.",
-  "kept": "status kept: the receiver shows the SMS text as it came (the base64), reads nothing into it, and logs the unknown mode or codec. status legacy: version 1 or unversioned, read by the old rule; its ambiguity is the contract's reason to exist.",
+  "kept": "status kept: the receiver shows the SMS text as it came (the base64), reads nothing into it, and logs the unknown mode or codec. status legacy: version 1 or unversioned, read by the old rule; its ambiguity is the contract's reason to exist. encrypted: a key opened the SMS, whether or not it then reads. A receiver takes what a key opens (v2 sealed, then v1 or unversioned) before it reads a clear v2 frame, which nothing authenticates.",
   "key_hex": "101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f",
   "vectors": [
     {
@@ -14,7 +14,8 @@
       "sms": "AgABwqE=",
       "expect": {
         "status": "decoded",
-        "text": "sara"
+        "text": "sara",
+        "encrypted": false
       }
     },
     {
@@ -28,7 +29,8 @@
       "sms": "AgGhoaGhoaGhoaGhoQFDj57CIUNv73LLETM8Jk+kk6dG",
       "expect": {
         "status": "decoded",
-        "text": "sara"
+        "text": "sara",
+        "encrypted": true
       }
     },
     {
@@ -41,7 +43,8 @@
       "sms": "AgABwqk=",
       "expect": {
         "status": "decoded",
-        "text": "sata"
+        "text": "sata",
+        "encrypted": false
       }
     },
     {
@@ -55,7 +58,8 @@
       "sms": "AgGioqKioqKioqKiogLfKPM8DBYKbitJ5cutFH/fP2qF",
       "expect": {
         "status": "decoded",
-        "text": "sata"
+        "text": "sata",
+        "encrypted": true
       }
     },
     {
@@ -68,7 +72,8 @@
       "sms": "AgAAwqE=",
       "expect": {
         "status": "decoded",
-        "text": "¡"
+        "text": "¡",
+        "encrypted": false
       }
     },
     {
@@ -82,7 +87,8 @@
       "sms": "AgGjo6Ojo6Ojo6OjowNkTJR7S6YHZqCpd6AFa3xc3t/3",
       "expect": {
         "status": "decoded",
-        "text": "¡"
+        "text": "¡",
+        "encrypted": true
       }
     },
     {
@@ -95,7 +101,8 @@
       "sms": "AgAAwqk=",
       "expect": {
         "status": "decoded",
-        "text": "©"
+        "text": "©",
+        "encrypted": false
       }
     },
     {
@@ -109,7 +116,8 @@
       "sms": "AgGkpKSkpKSkpKSkpATPzhXNSqz8HHJRowwxmY3jrlt1",
       "expect": {
         "status": "decoded",
-        "text": "©"
+        "text": "©",
+        "encrypted": true
       }
     },
     {
@@ -122,7 +130,8 @@
       "sms": "AgAAzprOsc67zrfOvM6tz4HOsQ==",
       "expect": {
         "status": "decoded",
-        "text": "Καλημέρα"
+        "text": "Καλημέρα",
+        "encrypted": false
       }
     },
     {
@@ -136,7 +145,8 @@
       "sms": "AgGlpaWlpaWlpaWlpQWcuo7Z/XVuYBqS/3LUW9pIWlsfwHWhS+x2ioBaXT1Ioyg=",
       "expect": {
         "status": "decoded",
-        "text": "Καλημέρα"
+        "text": "Καλημέρα",
+        "encrypted": true
       }
     },
     {
@@ -149,7 +159,8 @@
       "sms": "AgAAzpPOtc65zrEgz4POv8+FIM66z4zPg868zrUsIM+Gz4TOrM+DzrHOvM61IM+Dz4TOtyDOs86tz4bPhc+BzrE=",
       "expect": {
         "status": "decoded",
-        "text": "Γεια σου κόσμε, φτάσαμε στη γέφυρα"
+        "text": "Γεια σου κόσμε, φτάσαμε στη γέφυρα",
+        "encrypted": false
       }
     },
     {
@@ -163,7 +174,8 @@
       "sms": "AgGmpqampqampqampgbr6H+rrkIsVblBRGo3nb7fZSzd3VbIjdnOAZc8f5n40P1NCWlDQHGxGW6bcE2Fx7yNtWwc2nSJbbmZKkSQCdwVZOzLOsT3VFUDeKG+BZgI",
       "expect": {
         "status": "decoded",
-        "text": "Γεια σου κόσμε, φτάσαμε στη γέφυρα"
+        "text": "Γεια σου κόσμε, φτάσαμε στη γέφυρα",
+        "encrypted": true
       }
     },
     {
@@ -176,7 +188,8 @@
       "sms": "AgAAY2Fmw6kgY3LDqG1l",
       "expect": {
         "status": "decoded",
-        "text": "café crème"
+        "text": "café crème",
+        "encrypted": false
       }
     },
     {
@@ -190,7 +203,8 @@
       "sms": "AgGnp6enp6enp6enpwfjRPmSMdo7OxuHJI4K25phfXHRQZuO8VgryPigqg==",
       "expect": {
         "status": "decoded",
-        "text": "café crème"
+        "text": "café crème",
+        "encrypted": true
       }
     },
     {
@@ -203,7 +217,8 @@
       "sms": "AgAAbmHDr3ZlIGZhw6dhZGU=",
       "expect": {
         "status": "decoded",
-        "text": "naïve façade"
+        "text": "naïve façade",
+        "encrypted": false
       }
     },
     {
@@ -217,7 +232,8 @@
       "sms": "AgGoqKioqKioqKioqAiOuYHWm7htJuQrPRHJErtjQUseUwa30epgzTF7Es4y",
       "expect": {
         "status": "decoded",
-        "text": "naïve façade"
+        "text": "naïve façade",
+        "encrypted": true
       }
     },
     {
@@ -230,7 +246,8 @@
       "sms": "AgAA8J+YgPCfkY0=",
       "expect": {
         "status": "decoded",
-        "text": "😀👍"
+        "text": "😀👍",
+        "encrypted": false
       }
     },
     {
@@ -244,7 +261,8 @@
       "sms": "AgGpqampqampqampqQlbf+3y3QFLWuBA4xenTt17e055kxwXKAUM",
       "expect": {
         "status": "decoded",
-        "text": "😀👍"
+        "text": "😀👍",
+        "encrypted": true
       }
     },
     {
@@ -257,7 +275,8 @@
       "sms": "AgAAaGVsbG8gzprOsc67zrfOvM6tz4HOsSDwn5iA",
       "expect": {
         "status": "decoded",
-        "text": "hello Καλημέρα 😀"
+        "text": "hello Καλημέρα 😀",
+        "encrypted": false
       }
     },
     {
@@ -271,7 +290,8 @@
       "sms": "AgGqqqqqqqqqqqqqqgqN9RUauM19Ik7uFAAkLaR538N7GlX3vQP5z8m0xO5yAunyeBqghCBOoynnPw==",
       "expect": {
         "status": "decoded",
-        "text": "hello Καλημέρα 😀"
+        "text": "hello Καλημέρα 😀",
+        "encrypted": true
       }
     },
     {
@@ -284,7 +304,8 @@
       "sms": "AgABgQJlIOqKhAJyIJYBIMrmgANnIHeIlAIsIITXgAJnIAfLkAEggQNlIGjb",
       "expect": {
         "status": "decoded",
-        "text": "the weather is getting worse, heading down to the hut"
+        "text": "the weather is getting worse, heading down to the hut",
+        "encrypted": false
       }
     },
     {
@@ -298,7 +319,8 @@
       "sms": "AgGrq6urq6urq6urqwskA1pCHfKObSCPOZSQ8stm++LhU3IMjve4wPBlUkZTdIy4DpXPe80V4iUURZcBMzLqj1JVJI096XnB2Q==",
       "expect": {
         "status": "decoded",
-        "text": "the weather is getting worse, heading down to the hut"
+        "text": "the weather is getting worse, heading down to the hut",
+        "encrypted": true
       }
     },
     {
@@ -311,7 +333,8 @@
       "sms": "AgAAb2s=",
       "expect": {
         "status": "decoded",
-        "text": "ok"
+        "text": "ok",
+        "encrypted": false
       }
     },
     {
@@ -325,7 +348,8 @@
       "sms": "AgGsrKysrKysrKysrAxr7h/vTr4uK9hV+3uf1tb2OKcb",
       "expect": {
         "status": "decoded",
-        "text": "ok"
+        "text": "ok",
+        "encrypted": true
       }
     },
     {
@@ -338,7 +362,8 @@
       "sms": "AgAAYQ==",
       "expect": {
         "status": "decoded",
-        "text": "a"
+        "text": "a",
+        "encrypted": false
       }
     },
     {
@@ -352,7 +377,8 @@
       "sms": "AgGtra2tra2tra2trQ0Lq89TU1/NabkAaSbFqfN8DUE=",
       "expect": {
         "status": "decoded",
-        "text": "a"
+        "text": "a",
+        "encrypted": true
       }
     },
     {
@@ -365,7 +391,8 @@
       "sms": "AgAAeAF5IGFuZCB0aGUgcmVzdA==",
       "expect": {
         "status": "decoded",
-        "text": "x\u0001y and the rest"
+        "text": "x\u0001y and the rest",
+        "encrypted": false
       }
     },
     {
@@ -379,7 +406,8 @@
       "sms": "AgGurq6urq6urq6urg6anAR0gTnqlrXDcCOJXlSj015NL2OFU2dj4OXb3y9p8cE=",
       "expect": {
         "status": "decoded",
-        "text": "x\u0001y and the rest"
+        "text": "x\u0001y and the rest",
+        "encrypted": true
       }
     }
   ],
@@ -389,7 +417,8 @@
       "wire_hex": "0201afafafafafafafafafafaf0f8020ea0562f5f328ea6416d10a69b0d7c5a660",
       "sms": "AgGvr6+vr6+vr6+vrw+AIOoFYvXzKOpkFtEKabDXxaZg",
       "expect": {
-        "status": "kept"
+        "status": "kept",
+        "encrypted": true
       },
       "note": "codec 0x07 inside a frame the key opens"
     },
@@ -398,7 +427,8 @@
       "wire_hex": "0200076869",
       "sms": "AgAHaGk=",
       "expect": {
-        "status": "kept"
+        "status": "kept",
+        "encrypted": false
       },
       "note": "codec 0x07"
     },
@@ -407,7 +437,8 @@
       "wire_hex": "0205006869",
       "sms": "AgUAaGk=",
       "expect": {
-        "status": "kept"
+        "status": "kept",
+        "encrypted": false
       },
       "note": "mode 0x05"
     },
@@ -416,7 +447,8 @@
       "wire_hex": "020000c328",
       "sms": "AgAAwyg=",
       "expect": {
-        "status": "kept"
+        "status": "kept",
+        "encrypted": false
       },
       "note": "codec 0x00 with bytes that are not UTF-8"
     }
@@ -428,7 +460,8 @@
       "sms": "AbCwsLCwsLCwsLCwENfppquGs55LJHE/IrmdhkC2hw==",
       "expect": {
         "status": "legacy",
-        "text": "¡"
+        "text": "¡",
+        "encrypted": true
       },
       "note": "MeshSat Android up to 2.22.3 sends \"sara\" as SMAZ2 c2 a1 behind 0x01; nothing tells it from \"¡\", and the old rule reads \"¡\""
     },
@@ -438,7 +471,8 @@
       "sms": "AcKh",
       "expect": {
         "status": "legacy",
-        "text": "¡"
+        "text": "¡",
+        "encrypted": false
       },
       "note": "the same without a key"
     },
@@ -448,9 +482,21 @@
       "sms": "AbGxsbGxsbGxsbGxEWWUFZ1LJP6++L6oOx1M0uT301snsRtjychRs7I2aipr1HVbUP/M4PLNxSRRj8kVN7WHJg+oH3fjTY8=",
       "expect": {
         "status": "legacy",
-        "text": "the weather is getting worse, heading down to the hut"
+        "text": "the weather is getting worse, heading down to the hut",
+        "encrypted": true
       },
       "note": "English through SMAZ2 reads right under the old rule"
+    },
+    {
+      "name": "legacy_encrypted_clear_header_overlap",
+      "wire_hex": "020000303030303238333734754311091a180a526602d486482b1369d7a9",
+      "sms": "AgAAMDAwMDI4Mzc0dUMRCRoYClJmAtSGSCsTadep",
+      "expect": {
+        "status": "legacy",
+        "text": "ok",
+        "encrypted": true
+      },
+      "note": "unversioned, sealed by the key, whose nonce starts 02 00 00 and whose rest is valid UTF-8, so it is also a clear v2 frame; the key opens it and that wins: \"ok\", encrypted, never the clear frame's text"
     }
   ]
 }
