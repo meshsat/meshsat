@@ -46,7 +46,7 @@ type SatStatus struct {
 // IridiumTime represents the Iridium network system time from AT-MSSTM.
 type IridiumTime struct {
 	SystemTime uint32 `json:"system_time"` // raw 90ms tick count
-	EpochUTC   string `json:"epoch_utc"`   // converted to RFC3339
+	EpochUTC   string `json:"epoch_utc"`   // RFC 3339 with the 90 ms fraction, in the current Iridium era
 	IsValid    bool   `json:"is_valid"`    // false if modem returned "no network service"
 }
 
@@ -99,7 +99,7 @@ type GeolocationInfo struct {
 	Lon       float64 `json:"lon"`
 	AltKm     float64 `json:"alt_km"`
 	Accuracy  float64 `json:"accuracy_km"` // estimated accuracy in km (~200 km for single reading)
-	Timestamp string  `json:"timestamp"`
+	Timestamp string  `json:"timestamp"`   // the reading's Iridium system time (RFC 3339), empty when the modem gave none
 }
 
 // SatTransport abstracts how MeshSat talks to a satellite modem.

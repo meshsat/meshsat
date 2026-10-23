@@ -3,6 +3,7 @@ package transport
 import (
 	"math"
 	"testing"
+	"time"
 )
 
 // ============================================================================
@@ -310,21 +311,72 @@ func TestParseMSGEO_Missing(t *testing.T) {
 	}
 }
 
-func TestParseIridiumTimestamp(t *testing.T) {
-	// Iridium epoch: 2007-03-08 03:50:35 UTC
-	// Tick = 0 should return epoch
-	ts := parseIridiumTimestamp("0")
-	// Zero ticks falls through to time.Now() fallback (err != nil for "0" as base-16)
-	// Actually "0" parses as 0 in hex, but ticks==0 triggers fallback
-	if ts.Year() < 2025 {
-		t.Errorf("zero ticks should fallback to now, got %v", ts)
-	}
+// The Iridium time vectors: tick counts decoded independently of this
+// package (Python datetime) against the era origins in Ground Control's
+// "What's the Time?" page, and its own worked ERA2 example. [MESHSAT-1652]
+var iridiumTimeVectors = []struct {
+	name  string
+	epoch string // MESHSAT_IRIDIUM_EPOCH, "" = the default
+	hex   string
+	want  time.Time
+}{
+	{"era3_today", "", "23456789", time.Date(2026, 10, 24, 4, 0, 51, 410e6, time.UTC)},
+	{"era3_at_the_switch", "", "131c83a3", time.Date(2026, 1, 14, 18, 7, 59, 990e6, time.UTC)},
+	{"era2_ground_control_example", "2014-05-11T14:23:55Z", "d1c6dd38", time.Date(2024, 5, 24, 17, 10, 16, 360e6, time.UTC)},
+	{"bad_override_reads_era3", "11 May 2014", "23456789", time.Date(2026, 10, 24, 4, 0, 51, 410e6, time.UTC)},
+}
 
-	// Non-zero tick: 0x10000 = 65536 ticks × 90ms = 5,898,240 ms ≈ 1h 38m
-	ts2 := parseIridiumTimestamp("10000")
-	expected := iridiumEpoch.Add(65536 * 90 * 1000000) // nanoseconds
-	if math.Abs(float64(ts2.Unix()-expected.Unix())) > 1 {
-		t.Errorf("timestamp mismatch: got %v, expected %v", ts2, expected)
+func TestParseIridiumTimestampReadsTheCurrentEra(t *testing.T) {
+	for _, v := range iridiumTimeVectors {
+		t.Run(v.name, func(t *testing.T) {
+			t.Setenv("MESHSAT_IRIDIUM_EPOCH", v.epoch)
+			got, ok := parseIridiumTimestamp(v.hex)
+			if !ok || !got.Equal(v.want) {
+				t.Fatalf("parseIridiumTimestamp(%s) = %v, %v; want %v", v.hex, got, ok, v.want)
+			}
+		})
+	}
+}
+
+func TestParseMSSTMReadsTheCurrentEra(t *testing.T) {
+	for _, v := range iridiumTimeVectors {
+		t.Run(v.name, func(t *testing.T) {
+			t.Setenv("MESHSAT_IRIDIUM_EPOCH", v.epoch)
+			r, err := parseMSSTM("\r\n-MSSTM: " + v.hex + "\r\n\r\nOK\r\n")
+			if err != nil || !r.IsValid {
+				t.Fatalf("parseMSSTM: %v, %+v", err, r)
+			}
+			got, err := time.Parse(time.RFC3339Nano, r.EpochUTC)
+			if err != nil || !got.Equal(v.want) {
+				t.Fatalf("EpochUTC = %q; want %v (90 ms ticks, so no rounding to the second)", r.EpochUTC, v.want)
+			}
+		})
+	}
+}
+
+// A stamp the modem could not give is unknown, never the time it was read.
+func TestParseIridiumTimestampBadStampIsUnknown(t *testing.T) {
+	for _, hex := range []string{"", "0", "00000000", "zz", "1ffffffff"} {
+		if got, ok := parseIridiumTimestamp(hex); ok || !got.IsZero() {
+			t.Errorf("parseIridiumTimestamp(%q) = %v, %v; want zero, false", hex, got, ok)
+		}
+	}
+}
+
+func TestParseMSGEOStampIsTheCurrentEraOrEmpty(t *testing.T) {
+	info, err := parseMSGEO("-MSGEO: 3912, 308, 5020, 23456789\r\nOK")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Timestamp != "2026-10-24T04:00:51.41Z" {
+		t.Errorf("MSGEO timestamp = %q, want 2026-10-24T04:00:51.41Z", info.Timestamp)
+	}
+	info, err = parseMSGEO("-MSGEO: 3912, 308, 5020, 00000000\r\nOK")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Timestamp != "" {
+		t.Errorf("MSGEO with no stamp read as %q, want empty (unknown)", info.Timestamp)
 	}
 }
 
@@ -368,13 +420,15 @@ func TestParseMSSTM_Missing(t *testing.T) {
 }
 
 func TestParseMSSTM_Epoch(t *testing.T) {
-	// Tick 0 should correspond to MSSTM epoch (May 11, 2014 14:23:55 UTC)
+	// Tick 0 is the first frame of ERA3 (14 Feb 2025 18:14:17 UTC), the
+	// era Iridium counts in since 14 Jan 2026. [MESHSAT-1652]
+	t.Setenv("MESHSAT_IRIDIUM_EPOCH", "")
 	resp := "-MSSTM: 00000000\r\nOK\r\n"
 	result, err := parseMSSTM(resp)
 	if err != nil {
 		t.Fatalf("parseMSSTM failed: %v", err)
 	}
-	if result.EpochUTC != "2014-05-11T14:23:55Z" {
-		t.Errorf("epoch = %s, want 2014-05-11T14:23:55Z", result.EpochUTC)
+	if result.EpochUTC != "2025-02-14T18:14:17Z" {
+		t.Errorf("epoch = %s, want 2025-02-14T18:14:17Z", result.EpochUTC)
 	}
 }

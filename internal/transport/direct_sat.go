@@ -1359,8 +1359,8 @@ func (t *DirectSatTransport) GetGeolocation(_ context.Context) (*GeolocationInfo
 }
 
 // GetSystemTime returns the Iridium network time via AT-MSSTM.
-// The response is a hex tick count since the Iridium epoch (May 11, 2014 14:23:55 UTC),
-// with each tick representing 90ms.
+// The response is a hex count of 90 ms ticks since the current era's
+// origin (iridiumEpoch).
 func (t *DirectSatTransport) GetSystemTime(_ context.Context) (*IridiumTime, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -2143,15 +2143,19 @@ func parseMSGEO(resp string) (*GeolocationInfo, error) {
 	// We report 200 km as a conservative median estimate.
 	accuracy := 200.0
 
-	// Parse Iridium system timestamp (hex, 90ms ticks since Iridium epoch 2007-03-08T03:50:35Z)
-	ts := parseIridiumTimestamp(strings.TrimSpace(parts[3]))
+	// The Iridium system time of the reading (hex, 90 ms ticks since the
+	// current era's origin); empty when the modem gave none. [MESHSAT-1652]
+	stamp := ""
+	if ts, ok := parseIridiumTimestamp(parts[3]); ok {
+		stamp = ts.Format(time.RFC3339Nano)
+	}
 
 	return &GeolocationInfo{
 		Lat:       lat,
 		Lon:       lon,
 		AltKm:     0, // ECEF gives satellite altitude, not ground altitude
 		Accuracy:  accuracy,
-		Timestamp: ts.UTC().Format(time.RFC3339),
+		Timestamp: stamp,
 	}, nil
 }
 
@@ -2163,18 +2167,42 @@ func ecefToGeodetic(x, y, z float64) (lat, lon float64) {
 	return lat, lon
 }
 
-// iridiumEpoch is 2007-03-08 03:50:35 UTC (Iridium system time origin).
-var iridiumEpoch = time.Date(2007, 3, 8, 3, 50, 35, 0, time.UTC)
+// iridiumEra3 is the origin Iridium system time counts from since
+// 14 Jan 2026 18:08:00 UTC. Earlier eras began 2007-03-08 03:50:21 UTC
+// (ERA1) and 2014-05-11 14:23:55 UTC (ERA2); AT-MSSTM, AT-MSGEO,
+// AT-MSGEOS and AT+CRISX all count 90 ms frames from the current one
+// (Ground Control, "What's the Time?"; MetOcean's re-epoch bulletin).
+// [MESHSAT-1652]
+var iridiumEra3 = time.Date(2025, 2, 14, 18, 14, 17, 0, time.UTC)
 
-// parseIridiumTimestamp parses a hex Iridium system timestamp (90ms ticks since epoch).
-func parseIridiumTimestamp(hexStr string) time.Time {
-	hexStr = strings.TrimSpace(hexStr)
-	ticks, err := strconv.ParseUint(hexStr, 16, 64)
-	if err != nil || ticks == 0 {
-		return time.Now().UTC()
+// iridiumEpoch is the origin of the era the modem counts in: ERA3, or
+// MESHSAT_IRIDIUM_EPOCH (RFC 3339) once Iridium starts another.
+func iridiumEpoch() time.Time {
+	if v := strings.TrimSpace(os.Getenv("MESHSAT_IRIDIUM_EPOCH")); v != "" {
+		t, err := time.Parse(time.RFC3339Nano, v)
+		if err == nil {
+			return t.UTC()
+		}
+		log.Warn().Str("value", v).Msg("iridium: MESHSAT_IRIDIUM_EPOCH is not RFC 3339, using ERA3")
 	}
-	ms := ticks * 90
-	return iridiumEpoch.Add(time.Duration(ms) * time.Millisecond)
+	return iridiumEra3
+}
+
+// iridiumTicksTime converts a count of 90 ms frames to a time in the
+// current era.
+func iridiumTicksTime(ticks uint64) time.Time {
+	return iridiumEpoch().Add(time.Duration(ticks) * 90 * time.Millisecond)
+}
+
+// parseIridiumTimestamp parses a hex Iridium system timestamp (a 32-bit
+// count of 90 ms frames). A stamp that is empty, zero or not 32-bit hex
+// is unknown: false, never the time it was read.
+func parseIridiumTimestamp(hexStr string) (time.Time, bool) {
+	ticks, err := strconv.ParseUint(strings.TrimSpace(hexStr), 16, 32)
+	if err != nil || ticks == 0 {
+		return time.Time{}, false
+	}
+	return iridiumTicksTime(ticks), true
 }
 
 func parseSBDRBResponse(raw []byte) ([]byte, error) {
@@ -2245,13 +2273,10 @@ func parseATValue(resp string) string {
 	return ""
 }
 
-// msstmEpoch is the Iridium MSSTM time origin: May 11, 2014 14:23:55 UTC.
-// This is different from the MSGEO epoch (2007-03-08).
-var msstmEpoch = time.Date(2014, 5, 11, 14, 23, 55, 0, time.UTC)
-
 // parseMSSTM parses an AT-MSSTM response.
-// Response format: "-MSSTM: XXXXXXXX" (8 hex chars, 90ms ticks since msstmEpoch)
-// or "no network service" if not registered.
+// Response format: "-MSSTM: XXXXXXXX" (8 hex chars, 90 ms ticks since the
+// current era's origin, iridiumEpoch) or "no network service" if not
+// registered. EpochUTC keeps the fraction: a tick is 90 ms.
 func parseMSSTM(resp string) (*IridiumTime, error) {
 	if strings.Contains(resp, "no network") {
 		return &IridiumTime{IsValid: false}, nil
@@ -2274,12 +2299,9 @@ func parseMSSTM(resp string) (*IridiumTime, error) {
 		return nil, fmt.Errorf("parse MSSTM hex %q: %w", hex, err)
 	}
 
-	ms := ticks * 90
-	t := msstmEpoch.Add(time.Duration(ms) * time.Millisecond)
-
 	return &IridiumTime{
 		SystemTime: uint32(ticks),
-		EpochUTC:   t.UTC().Format(time.RFC3339),
+		EpochUTC:   iridiumTicksTime(ticks).Format(time.RFC3339Nano),
 		IsValid:    true,
 	}, nil
 }
