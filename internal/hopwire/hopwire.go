@@ -11,12 +11,14 @@
 //	form     = "H1:" *link [ "+" ]
 //	link     = kind instance state
 //	kind     = one lowercase letter from Kinds
-//	instance = 1*3DIGIT, the interface's number (mesh_0 is 0)
+//	instance = 1*3DIGIT, the interface's number (mesh_0 is 0), no
+//	           leading zero
 //	state    = "A" admitted / "S" suspect / "X" excluded /
 //	           "R" recovering / "T" retained by the floor / "D" down
 //
-// Links go in interface-id order. A link whose kind has no letter is left
-// out. A form cut to fit its budget ends in "+": the links after the last
+// Links go in interface-id order, one per interface. A link whose kind has
+// no letter is left out. The form is canonical: a reader refuses a second
+// link for one interface and an instance with a leading zero. A form cut to fit its budget ends in "+": the links after the last
 // one shown were dropped. Example: "H1:a0Ag0Ak0Rm0X+". A new kind or state
 // is version 2, with its own prefix; a version 1 reader refuses what it
 // does not know rather than guess.
@@ -98,7 +100,7 @@ func split(iface string) (kind, inst string, ok bool) {
 		return "", "", false
 	}
 	kind, inst = iface[:i], iface[i+1:]
-	if len(inst) > 3 {
+	if len(inst) > 3 || (len(inst) > 1 && inst[0] == '0') {
 		return "", "", false
 	}
 	for j := 0; j < len(inst); j++ {
@@ -115,14 +117,17 @@ func split(iface string) (kind, inst string, ok bool) {
 // that is not 1 to 3 digits, or a state outside the six are left out.
 func Encode(links []Link, budget int) string {
 	sorted := append([]Link{}, links...)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Iface < sorted[j].Iface })
+	// Stable, so of two links given for one interface the first is kept.
+	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Iface < sorted[j].Iface })
 	var toks []string
+	seen := map[string]bool{}
 	for _, l := range sorted {
 		kind, inst, ok := split(l.Iface)
 		letter, known := Kinds[kind]
-		if !ok || !known || stateNames[l.State] == "" {
+		if !ok || !known || stateNames[l.State] == "" || seen[l.Iface] {
 			continue
 		}
+		seen[l.Iface] = true
 		toks = append(toks, string(letter)+inst+string(l.State))
 	}
 	full := Prefix + strings.Join(toks, "")
@@ -154,6 +159,7 @@ func Parse(s string) (Report, error) {
 		r.Cut = true
 		rest = rest[:len(rest)-len(Cut)]
 	}
+	seen := map[string]bool{}
 	for len(rest) > 0 {
 		kind, ok := kindByLetter[rest[0]]
 		if !ok {
@@ -163,7 +169,7 @@ func Parse(s string) (Report, error) {
 		for j < len(rest) && rest[j] >= '0' && rest[j] <= '9' {
 			j++
 		}
-		if j == 1 || j > 4 || j >= len(rest) {
+		if j == 1 || j > 4 || j >= len(rest) || (j > 2 && rest[1] == '0') {
 			return Report{}, ErrForm
 		}
 		st := State(rest[j])
@@ -171,18 +177,25 @@ func Parse(s string) (Report, error) {
 			return Report{}, ErrForm
 		}
 		n, _ := strconv.Atoi(rest[1:j])
-		r.Links = append(r.Links, Link{Iface: kind + "_" + strconv.Itoa(n), State: st})
+		iface := kind + "_" + strconv.Itoa(n)
+		if seen[iface] {
+			return Report{}, ErrForm
+		}
+		seen[iface] = true
+		r.Links = append(r.Links, Link{Iface: iface, State: st})
 		rest = rest[j+1:]
 	}
 	return r, nil
 }
 
-// Find returns the form inside a STATUS-NET body: the word that starts with
-// the prefix, at the start of the body or after a space.
+// Find returns the form inside a STATUS-NET body: the last word that starts
+// with the prefix. The replier appends its form last, so a word earlier in
+// the body that only looks like one (an SSID, say) is not taken for it.
 func Find(body string) (string, bool) {
-	for _, w := range strings.Split(body, " ") {
-		if strings.HasPrefix(w, Prefix) {
-			return w, true
+	words := strings.Split(body, " ")
+	for i := len(words) - 1; i >= 0; i-- {
+		if strings.HasPrefix(words[i], Prefix) {
+			return words[i], true
 		}
 	}
 	return "", false
