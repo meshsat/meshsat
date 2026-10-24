@@ -13,6 +13,7 @@ import (
 
 	"meshsat/internal/database"
 	"meshsat/internal/hemb"
+	"meshsat/internal/hopwire"
 )
 
 // The hop set is slice (b) of media hopping (MEDIA_HOP_DESIGN section 4.3):
@@ -52,6 +53,10 @@ import (
 //   - Every net change of a link's state, retention or down is audited once
 //     per evaluation; a link going out of use or back into use is a HeMB
 //     bearer event (R46-V5).
+//   - Part two: a scheduled time-sync request answered on the free link it
+//     went out on is a probe, a positive sign that is no frame heard for the
+//     silence rule. What an OOB peer reports about its own links over
+//     STATUS-NET (internal/hopwire) is kept for display only, never a sign.
 
 // HopState is a link's place in the hop set.
 type HopState string
@@ -188,6 +193,28 @@ type HopLinkStatus struct {
 	Flaps        int        `json:"flaps"`                   // exclusions within an hour of the one before
 	Signs        []HopSign  `json:"signs"`
 	LastPositive *time.Time `json:"last_positive,omitempty"`
+	// LastProbe is when a scheduled time-sync request sent on the link was
+	// last answered on it (part two: the probe, a positive sign).
+	LastProbe *time.Time `json:"last_probe,omitempty"`
+}
+
+// HopPeerLink is one of a peer's links as the peer reported it.
+type HopPeerLink struct {
+	InterfaceID string `json:"interface_id"`
+	State       string `json:"state"` // admitted, suspect, excluded, recovering, retained, down
+}
+
+// HopPeerStatus is the latest hop state an OOB peer told us, over STATUS-NET
+// (part two). It is shown, never acted on: a peer's report about its own
+// links is not evidence about ours.
+type HopPeerStatus struct {
+	PeerID  uint16        `json:"peer_id"`
+	Alias   string        `json:"alias"`
+	Bearer  string        `json:"bearer"`   // the interface it came in on
+	Via     string        `json:"via"`      // "request" (its STATUS-NET carried it) or "reply"
+	HeardAt time.Time     `json:"heard_at"` // when it arrived
+	Cut     bool          `json:"cut"`      // the peer dropped links to fit the bearer
+	Links   []HopPeerLink `json:"links"`
 }
 
 // HopSetStatus is GET /api/hopset.
@@ -196,6 +223,7 @@ type HopSetStatus struct {
 	Gating bool            `json:"gating"`
 	Config map[string]any  `json:"config"`
 	Links  []HopLinkStatus `json:"links"`
+	Peers  []HopPeerStatus `json:"peers"`
 }
 
 type hopLink struct {
@@ -211,6 +239,7 @@ type hopLink struct {
 	lastPositive    time.Time
 	lastPositiveSeq uint64
 	rx              []rxMark      // frames heard, the last 90 min, for the silence sign
+	lastProbe       time.Time     // a time-sync request sent on it last answered on it
 	lastExcluded    time.Time     // when the link was last excluded
 	flaps           int           // exclusions within FlapMemory of the one before
 	readmit         time.Duration // this exclusion's re-admission dwell
@@ -321,6 +350,8 @@ type HopSetManager struct {
 	audit     func(eventType, ifaceID, detail string)
 	publish   func(hemb.Event)
 	links     map[string]*hopLink
+	peers     map[uint16]HopPeerStatus // the latest report of each OOB peer, shown only
+	onChange  func()                   // a link went out of use or back into use
 	refreshed time.Time
 	seq       uint64 // the arrival order of signs and state changes
 	// gen counts the switches to off; flushMu is held for reading while
@@ -334,7 +365,7 @@ func NewHopSetManager(cfg HopSetConfig, list func() ([]database.Interface, error
 	if _, ok := ParseHopMode(string(mode)); !ok {
 		mode = HopOff
 	}
-	return &HopSetManager{cfg: cfg, hopMode: mode, list: list, links: map[string]*hopLink{}}
+	return &HopSetManager{cfg: cfg, hopMode: mode, list: list, links: map[string]*hopLink{}, peers: map[uint16]HopPeerStatus{}}
 }
 
 // Gating reports whether the hop set is the route gate (mode on).
@@ -364,6 +395,7 @@ func (m *HopSetManager) SetMode(mode HopMode) (HopMode, error) {
 	m.hopMode = mode
 	if mode == HopOff {
 		m.links = map[string]*hopLink{}
+		m.peers = map[uint16]HopPeerStatus{}
 		m.refreshed = time.Time{}
 		m.gen++
 	}
@@ -423,6 +455,15 @@ func (m *HopSetManager) SetAudit(f func(eventType, ifaceID, detail string)) {
 func (m *HopSetManager) SetPublisher(f func(hemb.Event)) {
 	m.mu.Lock()
 	m.publish = f
+	m.mu.Unlock()
+}
+
+// SetOnChange sets what runs, once per evaluation, when a link went out of
+// use or back into use (watch and on only): the OOB service tells the peers
+// our state then.
+func (m *HopSetManager) SetOnChange(f func()) {
+	m.mu.Lock()
+	m.onChange = f
 	m.mu.Unlock()
 }
 
@@ -517,6 +558,9 @@ func (m *HopSetManager) Positive(ifaceID, source string) {
 	}
 	m.seq++
 	l.lastPositive, l.lastPositiveSeq = now, m.seq
+	if source == "probe" {
+		l.lastProbe = now
+	}
 	if source == "rx" {
 		if k := len(l.rx); k > 0 && l.rx[k-1].at.Unix() == now.Unix() {
 			l.rx[k-1].at = now
@@ -534,6 +578,79 @@ func (m *HopSetManager) Positive(ifaceID, source string) {
 	gen := m.gen
 	m.mu.Unlock()
 	m.flush(out, gen)
+}
+
+// Probe is a positive sign from the time-sync schedule: a request sent on
+// the link was answered on it, which shows a Bridge peer hears the link and
+// is heard on it. It answers earlier negative signs like any positive sign
+// but is no frame heard for the silence rule, and it is never taken on a paid
+// link (requests go out on free links only; design 4.3, MESHSAT-778).
+func (m *HopSetManager) Probe(ifaceID string) {
+	m.mu.Lock()
+	if m.hopMode == HopOff {
+		m.mu.Unlock()
+		return
+	}
+	l := m.linkLocked(ifaceID, m.now())
+	free := l != nil && !l.paid
+	m.mu.Unlock()
+	if free {
+		m.Positive(ifaceID, "probe")
+	}
+}
+
+// NotePeer keeps the hop state an OOB peer reported, for display. It never
+// touches a sign, a state or a gate decision. Nothing is kept with the
+// switch off.
+func (m *HopSetManager) NotePeer(peerID uint16, alias, bearer, via string, r hopwire.Report) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.hopMode == HopOff {
+		return
+	}
+	ps := HopPeerStatus{PeerID: peerID, Alias: alias, Bearer: bearer, Via: via, HeardAt: m.now(), Cut: r.Cut, Links: []HopPeerLink{}}
+	for _, l := range r.Links {
+		ps.Links = append(ps.Links, HopPeerLink{InterfaceID: l.Iface, State: l.State.String()})
+	}
+	m.peers[peerID] = ps
+}
+
+// Compact is our hop state in the hopwire form, at most budget bytes; ""
+// with the switch off or a budget too small. A down link is D and a link
+// the floor keeps is T, as they decide its use.
+func (m *HopSetManager) Compact(budget int) string {
+	m.mu.Lock()
+	if m.hopMode == HopOff {
+		m.mu.Unlock()
+		return ""
+	}
+	out := m.evaluateLocked(m.now())
+	var links []hopwire.Link
+	for _, l := range m.sortedLocked() {
+		links = append(links, hopwire.Link{Iface: l.id, State: compactState(l)})
+	}
+	gen := m.gen
+	m.mu.Unlock()
+	m.flush(out, gen)
+	return hopwire.Encode(links, budget)
+}
+
+func compactState(l *hopLink) hopwire.State {
+	switch {
+	case l.down:
+		return hopwire.Down
+	case l.retained:
+		return hopwire.Retained
+	}
+	switch l.state {
+	case HopSuspect:
+		return hopwire.Suspect
+	case HopExcluded:
+		return hopwire.Excluded
+	case HopRecovering:
+		return hopwire.Recovering
+	}
+	return hopwire.Admitted
 }
 
 // PaidAttempt implements HopSigns: a send on a paid link while a free link
@@ -625,7 +742,7 @@ func (m *HopSetManager) Status() HopSetStatus {
 		"readmit_dwell_s": m.cfg.ReadmitDwell.Seconds(), "readmit_max_s": m.cfg.ReadmitMax.Seconds(),
 		"flap_memory_s": m.cfg.FlapMemory.Seconds(), "radio_repeat_s": m.cfg.RadioRepeat.Seconds(),
 		"silence_after_s": m.cfg.SilenceAfter.Seconds(), "min_set": m.cfg.MinSet,
-	}, Links: []HopLinkStatus{}}
+	}, Links: []HopLinkStatus{}, Peers: []HopPeerStatus{}}
 	for _, l := range m.sortedLocked() {
 		ls := HopLinkStatus{InterfaceID: l.id, ChannelType: l.channelType, Paid: l.paid, State: l.state, Usable: usable(l),
 			Down: l.down, Deaf: l.deaf, Absent: l.absent, Retained: l.retained, Since: l.since, Reason: l.reason,
@@ -638,7 +755,21 @@ func (m *HopSetManager) Status() HopSetStatus {
 		if l.readmit > 0 {
 			ls.ReadmitAfter = l.readmit.String()
 		}
+		if !l.lastProbe.IsZero() {
+			t := l.lastProbe
+			ls.LastProbe = &t
+		}
 		st.Links = append(st.Links, ls)
+	}
+	ids := make([]int, 0, len(m.peers))
+	for id := range m.peers {
+		ids = append(ids, int(id))
+	}
+	sort.Ints(ids)
+	for _, id := range ids {
+		p := m.peers[uint16(id)]
+		p.Links = append([]HopPeerLink{}, p.Links...)
+		st.Peers = append(st.Peers, p)
 	}
 	gen := m.gen
 	m.mu.Unlock()
@@ -786,6 +917,7 @@ func (m *HopSetManager) evaluateLocked(now time.Time) hopOut {
 	m.repairFloorLocked()
 
 	var out hopOut
+	changed := false
 	for _, l := range links {
 		was := prior[l]
 		if was.state != l.state || was.retained != l.retained || was.down != l.down {
@@ -794,9 +926,14 @@ func (m *HopSetManager) evaluateLocked(now time.Time) hopOut {
 		switch now := usable(l); {
 		case was.usable && !now:
 			out = append(out, m.eventLocked(string(hemb.EventBearerDegraded), l)...)
+			changed = true
 		case !was.usable && now:
 			out = append(out, m.eventLocked(string(hemb.EventBearerRecovered), l)...)
+			changed = true
 		}
+	}
+	if changed && m.onChange != nil {
+		out = append(out, m.onChange)
 	}
 	return out
 }

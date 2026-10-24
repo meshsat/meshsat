@@ -91,6 +91,10 @@ type peerClock struct {
 type ifaceSchedule struct {
 	peerSeen time.Time // last request or response from another bridge on it
 	lastSent time.Time // last request we sent on it
+	// sent holds the timestamps of the requests sent on this interface that
+	// no answer on it has matched yet, for the probe (media hopping part
+	// two). Pruned with the pending requests. [MESHSAT-1650]
+	sent map[int64]time.Time
 }
 
 // PeerState is a read-only view of one time-sync peer.
@@ -165,6 +169,11 @@ type MeshTimeConsensus struct {
 	budgetPct float64
 	ifaceMu   sync.Mutex
 	ifaces    map[string]*ifaceSchedule
+
+	// probeFn is told the interface a request we sent on it was answered
+	// on: the probe of media hopping part two. It costs no airtime, since
+	// the probe is the scheduled request itself. [MESHSAT-1650]
+	probeFn func(iface string)
 }
 
 // NewMeshTimeConsensus creates a new mesh time consensus instance.
@@ -226,6 +235,48 @@ func (mc *MeshTimeConsensus) airtimeFloorLocked(iface string) time.Duration {
 	}
 	budget := float64(bps) * mc.budgetPct / 100
 	return time.Duration(float64(requestWireBytes*8) / budget * float64(time.Second)).Round(time.Second)
+}
+
+// SetProbeFunc sets what is told, per interface, that a request sent on it
+// was answered on it (the media hopping probe). Only requests sent per
+// interface count; a broadcast request names no interface. [MESHSAT-1650]
+func (mc *MeshTimeConsensus) SetProbeFunc(fn func(iface string)) {
+	mc.mu.Lock()
+	mc.probeFn = fn
+	mc.mu.Unlock()
+}
+
+// noteSent records that the request stamped nanos went out on ids.
+func (mc *MeshTimeConsensus) noteSent(ids []string, nanos int64, now time.Time) {
+	mc.ifaceMu.Lock()
+	defer mc.ifaceMu.Unlock()
+	for _, id := range ids {
+		st := mc.ifaces[id]
+		if st == nil {
+			st = &ifaceSchedule{}
+			mc.ifaces[id] = st
+		}
+		if st.sent == nil {
+			st.sent = map[int64]time.Time{}
+		}
+		st.sent[nanos] = now
+	}
+}
+
+// answeredOn reports, once, whether the request stamped echo went out on
+// iface: the first matching answer on that interface takes it.
+func (mc *MeshTimeConsensus) answeredOn(iface string, echo int64) bool {
+	mc.ifaceMu.Lock()
+	defer mc.ifaceMu.Unlock()
+	st := mc.ifaces[iface]
+	if st == nil || st.sent == nil {
+		return false
+	}
+	if _, ok := st.sent[echo]; !ok {
+		return false
+	}
+	delete(st.sent, echo)
+	return true
 }
 
 // SetReplyFunc routes time sync responses to the interface the request
@@ -308,6 +359,7 @@ func (mc *MeshTimeConsensus) pruneLoop(ctx context.Context) {
 		case <-ticker.C:
 			mc.pruneStalePeers()
 			mc.pruneStaleRequests()
+			mc.pruneSent(time.Now().Add(-2 * time.Minute))
 			mc.pruneSeen()
 		}
 	}
@@ -351,6 +403,7 @@ func (mc *MeshTimeConsensus) sendRequestAt(now time.Time) {
 		mc.sendFn(pkt)
 		return
 	}
+	mc.noteSent(due, nowNanos, now)
 	for _, id := range due {
 		send(id, pkt)
 	}
@@ -497,6 +550,16 @@ func (mc *MeshTimeConsensus) HandleTimeSyncResponse(data []byte, sourceIface str
 	// Any answer proves a peer on this interface, even the second copy of
 	// one that already arrived over another link.
 	mc.notePeer(sourceIface, time.Now())
+	// An answer on the interface the request went out on is that link's
+	// probe. It reads its own record, so the consensus below is unchanged.
+	if sourceIface != "" && mc.answeredOn(sourceIface, echoTimestamp) {
+		mc.mu.RLock()
+		probe := mc.probeFn
+		mc.mu.RUnlock()
+		if probe != nil {
+			probe(sourceIface)
+		}
+	}
 
 	// Look up the pending request to get the local send time.
 	mc.pendingMu.Lock()
@@ -625,6 +688,19 @@ func (mc *MeshTimeConsensus) pruneStaleRequests() {
 	for ts, sendTime := range mc.pending {
 		if sendTime.Before(cutoff) {
 			delete(mc.pending, ts)
+		}
+	}
+}
+
+// pruneSent drops the per-interface request records sent before cutoff.
+func (mc *MeshTimeConsensus) pruneSent(cutoff time.Time) {
+	mc.ifaceMu.Lock()
+	defer mc.ifaceMu.Unlock()
+	for _, st := range mc.ifaces {
+		for ts, at := range st.sent {
+			if at.Before(cutoff) {
+				delete(st.sent, ts)
+			}
 		}
 	}
 }

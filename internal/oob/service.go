@@ -12,6 +12,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"meshsat/internal/database"
+	"meshsat/internal/hopwire"
 	"meshsat/internal/keystore"
 )
 
@@ -106,6 +107,16 @@ type Deps struct {
 	// boot-time clock guard). An expiry is only judged against a trusted
 	// clock; nil means trusted. [MESHSAT-1293]
 	ClockTrusted func() bool
+	// HopState is this kit's hop state in the hopwire form, at most budget
+	// bytes; "" while media hopping is off. Nil: STATUS-NET carries none.
+	// [MESHSAT-1650]
+	HopState func(budget int) string
+	// HopPeer is given a peer's hop state from its STATUS-NET request or
+	// reply (via "request" or "reply"), for display only. [MESHSAT-1650]
+	HopPeer func(peerID uint16, alias, bearer, via string, r hopwire.Report)
+	// FreeBearer reports whether an interface costs nothing to send on;
+	// our hop state is shared on free bearers only. Nil: none are.
+	FreeBearer func(ifaceID string) bool
 }
 
 // Service is the OOB management frame service.
@@ -130,6 +141,12 @@ type Service struct {
 	// usbLast remembers the hub port each device was last seen on, so a
 	// device that dropped off the bus can still have its port power-cycled.
 	usbLast map[string]string
+
+	// hopMu guards the hop state exchange: when each peer was last told our
+	// state, and the STATUS-NET replies being put back together. [MESHSAT-1650]
+	hopMu     sync.Mutex
+	hopShared map[uint16]time.Time
+	hopParts  map[hopPartsKey]*hopParts
 }
 
 // LastUSBLocation is the hub port (e.g. "2-1.1") a device role was last
@@ -575,6 +592,9 @@ func (s *Service) handleReply(peer *database.OOBPeer, ifaceID, fromAddr string, 
 			"peer_id": peer.PeerID, "alias": peer.Alias, "bearer": ifaceID, "cmd": frame.Cmd,
 			"counter": frame.Counter, "result": result, "detail": detail,
 		})
+	}
+	if err == nil && frame.Cmd == CmdStatusNet && ra.RC == RCOK {
+		s.hopReplyChunk(peer, ifaceID, ra)
 	}
 }
 

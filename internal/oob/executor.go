@@ -89,7 +89,7 @@ func (s *Service) Execute(ctx context.Context, o Origin, cmd byte, args []byte) 
 	case CmdPing:
 		return Result{Code: RCOK, Body: s.pingBody()}
 	case CmdStatusNet:
-		return Result{Code: RCOK, Body: s.statusNetBody(ctx)}
+		return s.execStatusNet(ctx, o, args)
 	case CmdLog:
 		return s.execLog(ctx, args)
 	case CmdReboot:

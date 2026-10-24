@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"meshsat/internal/engine"
+	"meshsat/internal/hopwire"
 )
 
 // GET /api/hopset shows each covered link with its state and whether the
@@ -100,5 +101,37 @@ func TestHopModeAPI(t *testing.T) {
 	s.Router().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/hopset", nil))
 	if !strings.Contains(rec.Body.String(), `"mode":"watch"`) {
 		t.Errorf("GET /api/hopset after the change: %s, want mode watch", rec.Body.String())
+	}
+}
+
+// api_peers_shape (part two): GET /api/hopset carries the peers' reported hop
+// state as a list (empty, never null) and each link's last probe. [MESHSAT-1650]
+func TestGetHopSetPeers(t *testing.T) {
+	s := newTestServerWithDB(t)
+	hs := engine.NewHopSetManager(engine.DefaultHopSetConfig(), s.db.GetAllInterfaces, engine.HopWatch)
+	s.SetHopSet(hs)
+	get := func() map[string]json.RawMessage {
+		rec := httptest.NewRecorder()
+		s.Router().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/hopset", nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("hop set: %d", rec.Code)
+		}
+		var raw map[string]json.RawMessage
+		if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+	if p := string(get()["peers"]); p != "[]" {
+		t.Fatalf("peers %s, want []", p)
+	}
+	hs.Probe("mesh_0")
+	hs.NotePeer(9, "tesseract", "mesh_0", "reply", hopwire.Report{Links: []hopwire.Link{{Iface: "aprs_0", State: hopwire.Excluded}}})
+	raw := get()
+	if !strings.Contains(string(raw["peers"]), `"alias":"tesseract"`) || !strings.Contains(string(raw["peers"]), `"state":"excluded"`) {
+		t.Fatalf("peers %s", raw["peers"])
+	}
+	if !strings.Contains(string(raw["links"]), `"last_probe"`) {
+		t.Fatalf("links carry no last_probe: %s", raw["links"])
 	}
 }

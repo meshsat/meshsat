@@ -90,9 +90,11 @@ Unauthenticated, replayed, unknown-peer, disabled-peer and disabled-service fram
 | 0x04 | RESET | target byte, level byte (1, 2, 3) | control | section 7 |
 | 0x05 | BEARER | target byte, state byte (0 off, 1 on) | control | gateway instance stop or start plus the interface enabled flag |
 | 0x06 | LOG | unit byte, lines byte (1 to 20) | readonly | host agent journal tail, chunked |
-| 0x07 | STATUS-NET | none | readonly | network summary from the host agent, in-container fallback |
+| 0x07 | STATUS-NET | none, or the sender's hop state (below) | readonly | network summary from the host agent, in-container fallback; the replier's hop state appended while media hopping is on or watching |
 
 Every reply echoes the request cmd and carries `[rc:1][request counter low 16 bits:2][seq:1][total:1][body]`. Result codes: 0 OK, 1 DENIED, 2 BADARGS, 3 UNAVAILABLE, 4 REFUSED (self-severance guard), 5 AGENT_ERR, 6 UNKNOWN_CMD, 7 BUSY, 8 KEY_EXHAUSTED. Reply encryption mirrors the request: a frame typed by hand in clear gets a readable answer.
+
+STATUS-NET and media hopping (MESHSAT-1650, part two of slice (b)): a request may carry the sender's hop state in the compact form `internal/hopwire` defines (`H1:` then per link a kind letter, the interface number and a state letter, `+` when cut to fit), and the reply body ends with the replier's form after a space, cut so that body and form fit the reply's four chunks on that bearer. An argument that is not a form is BADARGS; no argument is the STATUS-NET it always was. Either side only shows the other's form (Settings > Media Hopping, `GET /api/hopset` `peers`): a peer's report about its own links is never evidence about ours. With media hopping off a Bridge sends no form and keeps none. When one of its links goes out of use or back into use, a Bridge sends one STATUS-NET carrying its form to each enabled peer on a free bearer that is up (never SMS, satellite or cellular), at most once per 10 minutes per peer, each send audited (`oob_hop_share`).
 
 PING body, ASCII, most important first so the APRS budget keeps the head: `u17h b98A q0 wU-61 t1432Z sB7` (uptime, battery percent with A for AC or B for battery, queued deliveries, wlan up or down with RSSI when known, UTC HHMM, bearers-up bitmap in hex over the target table order).
 

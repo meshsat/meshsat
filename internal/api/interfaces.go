@@ -933,7 +933,7 @@ func (s *Server) handleGetHealthScores(w http.ResponseWriter, r *http.Request) {
 // handleGetHopSet returns the hop set: per link its state, the evidence it
 // rests on, and the media hopping switch's position.
 // @Summary Get the hop set
-// @Description Media hopping, slice (b): per link (interface) the hop set's state (admitted, suspect, excluded, recovering), whether it is usable, down (deaf or absent) or retained by the floor, its re-admission dwell and repeat count, the contact-independent signs against it and its last positive sign, plus the switch (mode off, watch or on; gating only when on). With the switch off it lists no links. [MESHSAT-1650]
+// @Description Media hopping, slice (b): per link (interface) the hop set's state (admitted, suspect, excluded, recovering), whether it is usable, down (deaf or absent) or retained by the floor, its re-admission dwell and repeat count, the contact-independent signs against it, its last positive sign and its last probe (a scheduled time-sync request answered on the link), plus the switch (mode off, watch or on; gating only when on). `peers` lists the latest hop state each OOB peer reported over STATUS-NET, for display only: it is never a sign or a gate decision. With the switch off it lists no links and no peers. [MESHSAT-1650]
 // @Tags interfaces
 // @Produce json
 // @Success 200 {object} engine.HopSetStatus

@@ -41,7 +41,9 @@ var Commands = []Command{
 	{CmdReset, "RESET", RoleControl, 2, 2},
 	{CmdBearer, "BEARER", RoleControl, 2, 2},
 	{CmdLog, "LOG", RoleReadonly, 1, 2},
-	{CmdStatusNet, "STATUS-NET", RoleReadonly, 0, 0},
+	// STATUS-NET may carry the sender's hop state (internal/hopwire), so one
+	// round trip tells each side the other's links. [MESHSAT-1650]
+	{CmdStatusNet, "STATUS-NET", RoleReadonly, 0, MaxArgs - ExpiryLen},
 }
 
 // CommandByCode looks a command up by wire code.
