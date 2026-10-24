@@ -46,6 +46,8 @@ func withHop(h *harness, on bool) *peerNotes {
 		return hopwire.Encode(ourLinks, budget)
 	}
 	h.svc.d.HopPeer = notes.note
+	h.svc.d.FreeBearer = func(id string) bool { return id == "aprs_0" || id == "mesh_0" }
+	h.svc.d.HopOn = func() bool { return on }
 	return notes
 }
 
@@ -86,10 +88,11 @@ func TestStatusNetWithoutArgsAsBefore(t *testing.T) {
 }
 
 // status_net_request_carries_hop_state: a request's argument is the peer's
-// hop state, noted as such; the reply carries ours after the network status,
-// whole or marked cut, within the four chunks the bearer allows.
+// hop state, noted as such; the reply on a free bearer carries ours after the
+// network status, whole or marked cut, within the four chunks the bearer
+// allows (on a paid one it carries none: TestStatusNetReplyOnAPaidBearerUnchanged).
 func TestStatusNetRequestCarriesHopState(t *testing.T) {
-	for _, tc := range []struct{ bearer, addr string }{{"aprs_0", "PD0XYZ-7"}, {"cellular_0", "+31653207829"}} {
+	for _, tc := range []struct{ bearer, addr string }{{"aprs_0", "PD0XYZ-7"}, {"mesh_0", "!0000beef"}} {
 		h := newHarness(t, RoleReadonly, false)
 		notes := withHop(h, true)
 		h.svc.HandleInbound(context.Background(), tc.bearer, tc.addr, h.peerFrame(t, 1, CmdStatusNet, []byte("H1:m0Xa0A"), false, false))
@@ -116,8 +119,8 @@ func TestStatusNetRequestCarriesHopState(t *testing.T) {
 		if err != nil || len(r.Links) == 0 {
 			t.Fatalf("%s: form %q: %v", tc.bearer, form, err)
 		}
-		if full := hopwire.Encode(ourLinks, 1000); tc.bearer == "cellular_0" && (form != full || r.Cut) {
-			t.Fatalf("SMS has room for the whole form: %q, want %q", form, full)
+		if full := hopwire.Encode(ourLinks, 1000); tc.bearer == "mesh_0" && (form != full || r.Cut) {
+			t.Fatalf("the mesh has room for the whole form: %q, want %q", form, full)
 		}
 		if tc.bearer == "aprs_0" && !r.Cut {
 			t.Fatalf("APRS cannot carry six links in 40 bytes with the status, yet %q is not cut", form)
@@ -164,22 +167,28 @@ func TestStatusNetReplyReassembled(t *testing.T) {
 	ctx := context.Background()
 	body := "wlan0:up agent:none H1:a0Am0Xt0S"
 	parts := []string{body[:10], body[10:20], body[20:]}
+	// Each reply answers a STATUS-NET request of ours (an unsolicited one is
+	// not read: TestStatusNetReplyOnlyForOurRequest).
+	asked := map[int]uint16{}
+	for _, n := range []int{40, 41, 42, 43, 44, 45} {
+		asked[n] = askStatusNet(t, h, h.peer.PeerID)
+	}
 	in := func(counter uint32, cmd byte, rc ResultCode, req uint16, seq, total byte, b string) {
 		h.svc.HandleInbound(ctx, "aprs_0", "PD0XYZ-7", h.peerReply(t, counter, cmd, ReplyArgs{RC: rc, ReqCounterLo: req, Seq: seq, Total: total, Body: []byte(b)}))
 	}
-	in(1, CmdStatusNet, RCOK, 40, 2, 3, parts[1])
-	in(2, CmdStatusNet, RCOK, 40, 1, 3, parts[0])
+	in(1, CmdStatusNet, RCOK, asked[40], 2, 3, parts[1])
+	in(2, CmdStatusNet, RCOK, asked[40], 1, 3, parts[0])
 	if notes.count() != 0 {
 		t.Fatal("noted before the last chunk")
 	}
-	in(3, CmdStatusNet, RCOK, 40, 3, 3, parts[2])
+	in(3, CmdStatusNet, RCOK, asked[40], 3, 3, parts[2])
 	if notes.count() != 1 || notes.notes[0] != "parallax aprs_0 reply" || len(notes.links[0]) != 3 {
 		t.Fatalf("noted %v %v", notes.notes, notes.links)
 	}
-	in(4, CmdStatusNet, RCOK, 41, 1, 2, parts[0]) // its second chunk never comes
-	in(5, CmdStatusNet, RCRefused, 42, 1, 1, "H1:m0X")
-	in(6, CmdPing, RCOK, 43, 1, 1, "u3h H1:m0X")
-	in(7, CmdStatusNet, RCOK, 44, 1, 1, "wlan0:up agent:none H1:m0Q")
+	in(4, CmdStatusNet, RCOK, asked[41], 1, 2, parts[0]) // its second chunk never comes
+	in(5, CmdStatusNet, RCRefused, asked[42], 1, 1, "H1:m0X")
+	in(6, CmdPing, RCOK, asked[43], 1, 1, "u3h H1:m0X")
+	in(7, CmdStatusNet, RCOK, asked[44], 1, 1, "wlan0:up agent:none H1:m0Q")
 	if notes.count() != 1 {
 		t.Fatalf("noted %v", notes.notes)
 	}
@@ -187,12 +196,12 @@ func TestStatusNetReplyReassembled(t *testing.T) {
 	// The first chunks alone already read as a form ("H1:", then "H1:a0Am0X"),
 	// a shorter one than the peer sent: nothing is noted until the last chunk,
 	// and then the whole form.
-	in(8, CmdStatusNet, RCOK, 45, 1, 3, "wlan0:up agent:none H1:")
-	in(9, CmdStatusNet, RCOK, 45, 2, 3, "a0Am0X")
+	in(8, CmdStatusNet, RCOK, asked[45], 1, 3, "wlan0:up agent:none H1:")
+	in(9, CmdStatusNet, RCOK, asked[45], 2, 3, "a0Am0X")
 	if notes.count() != 1 {
 		t.Fatalf("a partial reply was noted: %v %v", notes.notes, notes.links)
 	}
-	in(10, CmdStatusNet, RCOK, 45, 3, 3, "t0S")
+	in(10, CmdStatusNet, RCOK, asked[45], 3, 3, "t0S")
 	if notes.count() != 2 || len(notes.links[1]) != 3 {
 		t.Fatalf("the whole reply: %v %v", notes.notes, notes.links)
 	}

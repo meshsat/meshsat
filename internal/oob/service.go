@@ -117,6 +117,9 @@ type Deps struct {
 	// FreeBearer reports whether an interface costs nothing to send on;
 	// our hop state is shared on free bearers only. Nil: none are.
 	FreeBearer func(ifaceID string) bool
+	// HopOn reports whether media hopping is on or watching. Nil or false:
+	// STATUS-NET carries, keeps and reads no hop state. [MESHSAT-1650]
+	HopOn func() bool
 }
 
 // Service is the OOB management frame service.
@@ -147,6 +150,7 @@ type Service struct {
 	hopMu     sync.Mutex
 	hopShared map[uint16]time.Time
 	hopParts  map[hopPartsKey]*hopParts
+	hopAsked  map[hopPartsKey]time.Time // our STATUS-NET requests awaiting their reply
 }
 
 // LastUSBLocation is the hub port (e.g. "2-1.1") a device role was last
@@ -808,6 +812,9 @@ func (s *Service) Send(ctx context.Context, req SendRequest) (SendResult, error)
 	}
 	entry.DeliveryID = &delID
 	_, _ = s.d.DB.InsertOOBLog(entry)
+	if req.Cmd == CmdStatusNet {
+		s.noteAsked(peer.PeerID, counter)
+	}
 	return SendResult{DeliveryID: delID, Counter: counter, Text: text, Address: addr,
 		ExpiresAt: time.Unix(int64(expires), 0).UTC().Format(time.RFC3339)}, nil
 }

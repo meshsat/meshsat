@@ -1862,6 +1862,8 @@ func main() {
 	// only, the schedule of MESHSAT-778). [MESHSAT-1650]
 	if tsConsensus != nil {
 		tsConsensus.SetProbeFunc(hopSet.Probe)
+		// Nothing is recorded per link while the switch is off.
+		tsConsensus.SetProbeEnabled(func() bool { return hopSet.Mode() != engine.HopOff })
 	}
 	log.Info().Str("mode", string(hopMode)).Msg("media hopping")
 	dispatcher.SetRouteGate(hopSet.IntentGate())
@@ -2211,6 +2213,7 @@ func main() {
 			// state, shown on Settings > Media Hopping, never acted on; it is
 			// shared on free bearers only. [MESHSAT-1650]
 			HopState: hopSet.Compact,
+			HopOn:    func() bool { return hopSet.Mode() != engine.HopOff },
 			HopPeer: func(peerID uint16, alias, bearer, via string, r hopwire.Report) {
 				hopSet.NotePeer(peerID, alias, bearer, via, r)
 			},

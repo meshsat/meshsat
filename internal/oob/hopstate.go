@@ -22,10 +22,17 @@ import (
 const HopShareEvery = 10 * time.Minute
 
 // hopPartsTTL is how long the first chunks of a STATUS-NET reply wait for
-// the rest; hopPartsMax bounds how many replies wait at once.
+// the rest; hopPartsMax bounds how many replies wait at once and
+// hopPartsPerPeer how many of them one peer may hold, so one peer never
+// starves another. hopAskedTTL is how long a STATUS-NET request of ours
+// waits for its reply (past the request's own TTL, a satellite MT included);
+// hopAskedPerPeer bounds the requests remembered per peer.
 const (
-	hopPartsTTL = 10 * time.Minute
-	hopPartsMax = 32
+	hopPartsTTL     = 10 * time.Minute
+	hopPartsMax     = 32
+	hopPartsPerPeer = 4
+	hopAskedTTL     = time.Hour
+	hopAskedPerPeer = 16
 )
 
 type hopPartsKey struct {
@@ -39,17 +46,24 @@ type hopParts struct {
 	chunks map[byte]string
 }
 
+// hopOn reports whether media hopping is on or watching. Nil means off:
+// then nothing of the exchange is sent, kept or read.
+func (s *Service) hopOn() bool { return s.d.HopOn != nil && s.d.HopOn() }
+
+// freeBearer reports whether the hop state may go on a bearer: a free one.
+func (s *Service) freeBearer(id string) bool { return s.d.FreeBearer != nil && s.d.FreeBearer(id) }
+
 // execStatusNet answers STATUS-NET: the network status, then our hop state
-// when media hopping is not off. An argument is the requester's hop state;
-// anything else is refused, and an empty argument is the plain STATUS-NET
-// it always was.
+// when media hopping is not off and the reply goes on a free bearer. An
+// argument is the requester's hop state; anything else is refused, and an
+// empty argument is the plain STATUS-NET it always was.
 func (s *Service) execStatusNet(ctx context.Context, o Origin, args []byte) Result {
 	if len(args) > 0 {
 		r, err := hopwire.Parse(string(args))
 		if err != nil {
 			return Result{Code: RCBadArgs}
 		}
-		if s.d.HopPeer != nil {
+		if s.d.HopPeer != nil && s.hopOn() {
 			s.d.HopPeer(o.PeerID, o.Alias, o.Bearer, "request", r)
 		}
 	}
@@ -59,8 +73,10 @@ func (s *Service) execStatusNet(ctx context.Context, o Origin, args []byte) Resu
 // withHopState appends our hop state to a STATUS-NET body, within what the
 // reply can carry on the bearer (MaxReplyChunks chunks), so the form is
 // never cut by the chunking: it is cut to fit, and says so, or left out.
+// Only on a free bearer: a reply over SMS, satellite or cellular is the
+// STATUS-NET it always was, byte for byte, and costs no more.
 func (s *Service) withHopState(body, bearer string) string {
-	if s.d.HopState == nil {
+	if s.d.HopState == nil || !s.hopOn() || !s.freeBearer(bearer) {
 		return body
 	}
 	room := (BearerBudget(bearer)-ReplyHeaderLen)*MaxReplyChunks - len(body) - 1
@@ -77,8 +93,18 @@ func (s *Service) withHopState(body, bearer string) string {
 // hopReplyChunk puts a peer's STATUS-NET reply back together and, once
 // every chunk is in, hands its hop state on. A reply missing a chunk is
 // dropped after hopPartsTTL; a lost chunk costs the update, nothing else.
+//
+// Only a reply to a STATUS-NET request we sent that peer is read, once; and
+// nothing at all while media hopping is off, which also drops whatever was
+// kept before it went off.
 func (s *Service) hopReplyChunk(peer *database.OOBPeer, ifaceID string, ra ReplyArgs) {
 	if s.d.HopPeer == nil || ra.Total == 0 || ra.Seq == 0 || ra.Seq > ra.Total {
+		return
+	}
+	if !s.hopOn() {
+		s.hopMu.Lock()
+		s.hopParts, s.hopAsked = nil, nil
+		s.hopMu.Unlock()
 		return
 	}
 	now := s.now()
@@ -92,9 +118,13 @@ func (s *Service) hopReplyChunk(peer *database.OOBPeer, ifaceID string, ra Reply
 			delete(s.hopParts, k)
 		}
 	}
+	if at, ok := s.hopAsked[key]; !ok || now.Sub(at) > hopAskedTTL {
+		s.hopMu.Unlock()
+		return
+	}
 	p := s.hopParts[key]
 	if p == nil || p.total != ra.Total {
-		if len(s.hopParts) >= hopPartsMax {
+		if len(s.hopParts) >= hopPartsMax || s.openPartsLocked(peer.PeerID) >= hopPartsPerPeer {
 			s.hopMu.Unlock()
 			return
 		}
@@ -107,6 +137,7 @@ func (s *Service) hopReplyChunk(peer *database.OOBPeer, ifaceID string, ra Reply
 		return
 	}
 	delete(s.hopParts, key)
+	delete(s.hopAsked, key)
 	body := ""
 	for i := byte(1); i <= p.total; i++ {
 		body += p.chunks[i]
@@ -122,6 +153,53 @@ func (s *Service) hopReplyChunk(peer *database.OOBPeer, ifaceID string, ra Reply
 		return
 	}
 	s.d.HopPeer(peer.PeerID, peer.Alias, ifaceID, "reply", r)
+}
+
+// openPartsLocked counts the replies one peer has waiting. Caller holds hopMu.
+func (s *Service) openPartsLocked(peer uint16) int {
+	n := 0
+	for k := range s.hopParts {
+		if k.peer == peer {
+			n++
+		}
+	}
+	return n
+}
+
+// noteAsked remembers a STATUS-NET request we sent a peer, so its reply's
+// hop state is read (by the request's counter, low 16 bits, as the reply
+// names it). Only while media hopping is on or watching; a peer's oldest
+// request is forgotten past hopAskedPerPeer.
+func (s *Service) noteAsked(peer uint16, counter uint32) {
+	if !s.hopOn() {
+		return
+	}
+	now := s.now()
+	s.hopMu.Lock()
+	defer s.hopMu.Unlock()
+	if s.hopAsked == nil {
+		s.hopAsked = map[hopPartsKey]time.Time{}
+	}
+	var oldest hopPartsKey
+	var oldestAt time.Time
+	n := 0
+	for k, at := range s.hopAsked {
+		if now.Sub(at) > hopAskedTTL {
+			delete(s.hopAsked, k)
+			continue
+		}
+		if k.peer != peer {
+			continue
+		}
+		n++
+		if oldestAt.IsZero() || at.Before(oldestAt) {
+			oldest, oldestAt = k, at
+		}
+	}
+	if n >= hopAskedPerPeer {
+		delete(s.hopAsked, oldest)
+	}
+	s.hopAsked[hopPartsKey{peer: peer, counter: uint16(counter)}] = now
 }
 
 // HopShare is one peer ShareHopState told our state, or found no way to.
@@ -140,7 +218,7 @@ type HopShare struct {
 // otherwise). Each request sent is audited. The engine calls it when one
 // of our links goes out of use or back into use. [MESHSAT-1650]
 func (s *Service) ShareHopState(ctx context.Context) []HopShare {
-	if !s.enabled() || s.d.DB == nil || s.d.HopState == nil || s.d.FreeBearer == nil {
+	if !s.enabled() || s.d.DB == nil || s.d.HopState == nil || s.d.FreeBearer == nil || !s.hopOn() {
 		return nil
 	}
 	if s.d.HopState(MaxArgs) == "" {
@@ -161,17 +239,36 @@ func (s *Service) ShareHopState(ctx context.Context) []HopShare {
 			continue
 		}
 		sh := HopShare{PeerID: p.PeerID, Alias: p.Alias}
+		// The slot is taken before the send and given back if nothing went,
+		// so two shares at once (one per link change) tell a peer once.
 		now := s.now()
 		s.hopMu.Lock()
 		last, seen := s.hopShared[p.PeerID]
-		s.hopMu.Unlock()
 		if seen && now.Sub(last) < HopShareEvery {
+			s.hopMu.Unlock()
 			sh.Skipped = "recent"
 			out = append(out, sh)
 			continue
 		}
+		if s.hopShared == nil {
+			s.hopShared = map[uint16]time.Time{}
+		}
+		s.hopShared[p.PeerID] = now
+		s.hopMu.Unlock()
+		giveBack := func() {
+			s.hopMu.Lock()
+			if s.hopShared[p.PeerID].Equal(now) {
+				if seen {
+					s.hopShared[p.PeerID] = last
+				} else {
+					delete(s.hopShared, p.PeerID)
+				}
+			}
+			s.hopMu.Unlock()
+		}
 		via := s.freeBearerTo(p, up)
 		if via == "" {
+			giveBack()
 			sh.Skipped = "no_free_bearer"
 			out = append(out, sh)
 			continue
@@ -179,21 +276,17 @@ func (s *Service) ShareHopState(ctx context.Context) []HopShare {
 		sh.Bearer = via
 		form := s.d.HopState(BearerBudget(via) - ExpiryLen)
 		if form == "" {
+			giveBack()
 			sh.Skipped = "no_free_bearer"
 			out = append(out, sh)
 			continue
 		}
 		if _, err := s.Send(ctx, SendRequest{PeerID: p.PeerID, Via: via, Cmd: CmdStatusNet, Args: []byte(form)}); err != nil {
+			giveBack()
 			sh.Skipped = "send_error"
 			out = append(out, sh)
 			continue
 		}
-		s.hopMu.Lock()
-		if s.hopShared == nil {
-			s.hopShared = map[uint16]time.Time{}
-		}
-		s.hopShared[p.PeerID] = now
-		s.hopMu.Unlock()
 		sh.Sent = true
 		out = append(out, sh)
 		if s.d.Audit != nil {
