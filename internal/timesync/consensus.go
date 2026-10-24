@@ -172,8 +172,11 @@ type MeshTimeConsensus struct {
 
 	// probeFn is told the interface a request we sent on it was answered
 	// on: the probe of media hopping part two. It costs no airtime, since
-	// the probe is the scheduled request itself. [MESHSAT-1650]
+	// the probe is the scheduled request itself. probeOn says whether the
+	// probe is taken now (media hopping not off); nil means yes. Without a
+	// probe taken nothing is recorded per link. [MESHSAT-1650]
 	probeFn func(iface string)
+	probeOn func() bool
 }
 
 // NewMeshTimeConsensus creates a new mesh time consensus instance.
@@ -244,6 +247,26 @@ func (mc *MeshTimeConsensus) SetProbeFunc(fn func(iface string)) {
 	mc.mu.Lock()
 	mc.probeFn = fn
 	mc.mu.Unlock()
+}
+
+// SetProbeEnabled sets whether the probe is taken now (the media hopping
+// switch not off). While it says no, the requests sent per link are not
+// recorded and no answer is a probe. [MESHSAT-1650]
+func (mc *MeshTimeConsensus) SetProbeEnabled(fn func() bool) {
+	mc.mu.Lock()
+	mc.probeOn = fn
+	mc.mu.Unlock()
+}
+
+// probing returns the probe taker, or nil while no probe is taken.
+func (mc *MeshTimeConsensus) probing() func(string) {
+	mc.mu.RLock()
+	fn, on := mc.probeFn, mc.probeOn
+	mc.mu.RUnlock()
+	if fn == nil || (on != nil && !on()) {
+		return nil
+	}
+	return fn
 }
 
 // noteSent records that the request stamped nanos went out on ids.
@@ -403,7 +426,9 @@ func (mc *MeshTimeConsensus) sendRequestAt(now time.Time) {
 		mc.sendFn(pkt)
 		return
 	}
-	mc.noteSent(due, nowNanos, now)
+	if mc.probing() != nil {
+		mc.noteSent(due, nowNanos, now)
+	}
 	for _, id := range due {
 		send(id, pkt)
 	}
@@ -552,13 +577,8 @@ func (mc *MeshTimeConsensus) HandleTimeSyncResponse(data []byte, sourceIface str
 	mc.notePeer(sourceIface, time.Now())
 	// An answer on the interface the request went out on is that link's
 	// probe. It reads its own record, so the consensus below is unchanged.
-	if sourceIface != "" && mc.answeredOn(sourceIface, echoTimestamp) {
-		mc.mu.RLock()
-		probe := mc.probeFn
-		mc.mu.RUnlock()
-		if probe != nil {
-			probe(sourceIface)
-		}
+	if probe := mc.probing(); probe != nil && sourceIface != "" && mc.answeredOn(sourceIface, echoTimestamp) {
+		probe(sourceIface)
 	}
 
 	// Look up the pending request to get the local send time.

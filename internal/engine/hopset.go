@@ -55,7 +55,8 @@ import (
 //     bearer event (R46-V5).
 //   - Part two: a scheduled time-sync request answered on the free link it
 //     went out on is a probe, a positive sign that is no frame heard for the
-//     silence rule. What an OOB peer reports about its own links over
+//     silence rule. On APRS the answer comes in on routing interface ax25_N,
+//     the same radio as hop link aprs_N, and counts for it (hopProbeLink). What an OOB peer reports about its own links over
 //     STATUS-NET (internal/hopwire) is kept for display only, never a sign.
 
 // HopState is a link's place in the hop set.
@@ -580,12 +581,28 @@ func (m *HopSetManager) Positive(ifaceID, source string) {
 	m.flush(out, gen)
 }
 
+// hopProbeLink names the hop link a Reticulum routing interface's probe
+// belongs to. The two share an id except where one radio carries both
+// under different names: the APRS radio is hop link aprs_N and routing
+// interface ax25_N (the same PicoAPRS, KISS both; owner's ruling, 24 Oct
+// 2026). mesh_0 and zigbee_0 are one id each. The other routing interfaces
+// (tcp, ble, mqtt_rns, udp, rnode, auto, kiss) are no hop link's radio and
+// the paid ones (iridium, iridium_imt, sms) never carry a request.
+func hopProbeLink(routingID string) string {
+	if n, ok := strings.CutPrefix(routingID, "ax25_"); ok {
+		return "aprs_" + n
+	}
+	return routingID
+}
+
 // Probe is a positive sign from the time-sync schedule: a request sent on
 // the link was answered on it, which shows a Bridge peer hears the link and
 // is heard on it. It answers earlier negative signs like any positive sign
 // but is no frame heard for the silence rule, and it is never taken on a paid
-// link (requests go out on free links only; design 4.3, MESHSAT-778).
+// link (requests go out on free links only; design 4.3, MESHSAT-778). The
+// interface is the routing interface the answer came in on (hopProbeLink).
 func (m *HopSetManager) Probe(ifaceID string) {
+	ifaceID = hopProbeLink(ifaceID)
 	m.mu.Lock()
 	if m.hopMode == HopOff {
 		m.mu.Unlock()
