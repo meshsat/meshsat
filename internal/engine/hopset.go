@@ -778,8 +778,10 @@ func compactState(l *hopLink) hopwire.State {
 }
 
 // PaidAttempt implements HopSigns: a send on a paid link while a free link
-// is excluded raises the alarm "free bearers excluded while paid attempts
-// rise", once per AlarmEvery per free link.
+// is out of use (excluded, or recovering through its re-admission dwell)
+// raises the alarm "free bearers excluded while paid attempts rise", once
+// per AlarmEvery per free link. The alarm names the link's state as it is
+// (R58-F2).
 func (m *HopSetManager) PaidAttempt(ifaceID string) {
 	m.mu.Lock()
 	if m.hopMode == HopOff {
@@ -801,7 +803,7 @@ func (m *HopSetManager) PaidAttempt(ifaceID string) {
 			continue
 		}
 		f.lastAlarm = now
-		detail := fmt.Sprintf("free bearer %s excluded (%s) while a paid attempt goes out on %s", f.id, f.reason, ifaceID)
+		detail := fmt.Sprintf("free bearer %s out of use, %s (%s), while a paid attempt goes out on %s", f.id, f.state, f.reason, ifaceID)
 		out = append(out, m.emitLocked("hopset_alarm", "HOPSET_ALARM", f, detail)...)
 	}
 	gen := m.gen

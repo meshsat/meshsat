@@ -713,3 +713,40 @@ func TestHopSetDefaultsAreTheRuling(t *testing.T) {
 		t.Errorf("MinSet = %d, want 2", c.MinSet)
 	}
 }
+
+// The alarm names the free link's state as it is: excluded while it is
+// excluded, recovering while its re-admission dwell runs (R58-F2).
+func TestHopSetAlarmNamesTheState(t *testing.T) {
+	cfg := DefaultHopSetConfig()
+	cfg.AlarmEvery = time.Minute
+	r := newHopRigCfg(t, cfg, threeFree...)
+	var alarms []string
+	r.m.SetAudit(func(typ, id, detail string) {
+		if typ == "hopset_alarm" {
+			r.mu.Lock()
+			alarms = append(alarms, detail)
+			r.mu.Unlock()
+		}
+	})
+	excludeMesh(t, r)
+	r.m.PaidAttempt("cellular_0")
+	r.m.Positive("mesh_0", "rx")
+	r.after(2 * time.Minute)
+	if s := r.state(t, "mesh_0"); s.State != HopRecovering {
+		t.Fatalf("setup: mesh_0 %s, want recovering", s.State)
+	}
+	r.m.PaidAttempt("cellular_0")
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(alarms) != 2 {
+		t.Fatalf("alarms %q, want two", alarms)
+	}
+	for i, want := range []string{"mesh_0 out of use, excluded (", "mesh_0 out of use, recovering ("} {
+		if !strings.Contains(alarms[i], want) {
+			t.Errorf("alarm %d %q, want it to say %q", i, alarms[i], want)
+		}
+	}
+	if strings.Contains(alarms[1], "excluded") {
+		t.Errorf("a recovering link's alarm says excluded: %q", alarms[1])
+	}
+}
