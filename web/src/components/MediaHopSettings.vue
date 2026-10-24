@@ -1,8 +1,9 @@
 <script setup>
 // Settings > Media Hopping: the switch (off by default) and, while it
-// watches or gates, each link's state in the hop set. Off changes nothing
-// about routing; watch only records; on lets routes skip links the hop set
-// takes out of use. [MESHSAT-1650]
+// watches or gates, each link's state in the hop set, its last probe, and
+// what each OOB peer reported about its own links over STATUS-NET (shown,
+// never acted on). Off changes nothing about routing; watch only records;
+// on lets routes skip links the hop set takes out of use. [MESHSAT-1650]
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import api from '@/api/client'
 
@@ -25,6 +26,7 @@ const modes = [
 ]
 
 const links = computed(() => st.value?.links || [])
+const peers = computed(() => st.value?.peers || [])
 const cfg = computed(() => st.value?.config || {})
 
 async function load() {
@@ -88,6 +90,19 @@ function when(t) {
   return t ? new Date(t).toLocaleTimeString() : '-'
 }
 
+// ago is how long ago t was, in whole minutes ("now" under one).
+function ago(t) {
+  if (!t) return '-'
+  const m = Math.floor((Date.now() - new Date(t).getTime()) / 60000)
+  return m < 1 ? 'now' : `${m} min ago`
+}
+
+function peerStateClass(state) {
+  if (state === 'excluded' || state === 'down' || state === 'recovering') return 'text-red-400'
+  if (state === 'suspect' || state === 'retained') return 'text-amber-400'
+  return 'text-green-400'
+}
+
 // The status refreshes every 5 s, one load after the other.
 function schedule() {
   if (stopped) return
@@ -141,7 +156,7 @@ onUnmounted(() => {
           <thead>
             <tr class="text-left text-gray-500">
               <th class="py-1 pr-3">Link</th><th class="pr-3">State</th><th class="pr-3">In use</th><th class="pr-3">Signs</th>
-              <th class="pr-3">Back after</th><th class="pr-3">Repeats</th><th>Last heard</th>
+              <th class="pr-3">Back after</th><th class="pr-3">Repeats</th><th class="pr-3">Last heard</th><th>Last probe</th>
             </tr>
           </thead>
           <tbody>
@@ -152,7 +167,8 @@ onUnmounted(() => {
               <td class="pr-3 text-gray-400 font-mono">{{ signs(l) }}</td>
               <td class="pr-3 text-gray-300">{{ l.readmit_after || '-' }}</td>
               <td class="pr-3 text-gray-300">{{ l.flaps }}</td>
-              <td class="text-gray-300">{{ when(l.last_positive) }}</td>
+              <td class="pr-3 text-gray-300">{{ when(l.last_positive) }}</td>
+              <td class="text-gray-300" :data-testid="'hop-probe-' + l.interface_id">{{ when(l.last_probe) }}</td>
             </tr>
           </tbody>
         </table>
@@ -161,8 +177,30 @@ onUnmounted(() => {
         Two signs within {{ mins(cfg.trigger_window_s) }} take a link out after {{ cfg.drop_dwell_s }} s. It comes back
         {{ mins(cfg.readmit_dwell_s) }} after it is heard again, longer each time it fails again within the hour, up to
         {{ mins(cfg.readmit_max_s) }}. A link that usually hears traffic every minute and hears nothing for
-        {{ mins(cfg.silence_after_s) }} has a sign against it.
+        {{ mins(cfg.silence_after_s) }} has a sign against it. A probe is a scheduled time-sync request answered on
+        the link it went out on: free links only, no extra airtime.
       </p>
+    </div>
+
+    <div v-if="st && mode !== 'off'" class="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-3" data-testid="hop-peers">
+      <h4 class="text-sm font-medium text-gray-200">Peers (what they report about their own links)</h4>
+      <p class="text-[11px] text-gray-500">
+        Each OOB peer's hop state, as it last told us over STATUS-NET. Shown only: it never takes one of our links out of use.
+      </p>
+      <div v-if="!peers.length" class="text-[11px] text-gray-500" data-testid="hop-peers-none">No peer has reported yet.</div>
+      <div v-for="p in peers" :key="p.peer_id" class="text-[11px] space-y-1" :data-testid="'hop-peer-' + p.peer_id">
+        <div class="text-gray-300">
+          <span class="font-mono">{{ p.alias || ('peer ' + p.peer_id) }}</span>
+          <span class="text-gray-500"> on {{ p.bearer }}, {{ ago(p.heard_at) }}, in its {{ p.via }}</span>
+          <span v-if="p.cut" class="text-amber-400"> (cut to fit the bearer: more links than shown)</span>
+        </div>
+        <div class="flex flex-wrap gap-x-3 gap-y-1">
+          <span v-for="l in p.links" :key="l.interface_id" class="font-mono">
+            <span class="text-gray-400">{{ l.interface_id }}</span> <span :class="peerStateClass(l.state)">{{ l.state }}</span>
+          </span>
+          <span v-if="!p.links.length" class="text-gray-500">no links</span>
+        </div>
+      </div>
     </div>
   </div>
 </template>

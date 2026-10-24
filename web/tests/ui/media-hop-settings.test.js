@@ -114,3 +114,53 @@ test('unsaved_mode_survives_status_poll', async () => {
   assert.equal(document.querySelector('[data-testid="hop-save"]').disabled, true)
   assert.equal(document.querySelector('[data-testid="hop-unsaved"]'), null)
 })
+
+// Part two: each link's last probe, and the peers' reported hop state, shown
+// for what it is (never acted on), cut marked; none with the switch off.
+test('peers_and_probes_are_shown', async () => {
+  const heard = new Date(Date.now() - 3 * 60000).toISOString()
+  const withPeers = {
+    ...watching,
+    links: watching.links.map(l => l.interface_id === 'aprs_0' ? { ...l, last_probe: '2026-10-23T14:05:00Z' } : l),
+    peers: [
+      { peer_id: 7, alias: 'parallax', bearer: 'mesh_0', via: 'reply', heard_at: heard, cut: true,
+        links: [{ interface_id: 'mesh_0', state: 'excluded' }, { interface_id: 'aprs_0', state: 'admitted' }] },
+      { peer_id: 9, alias: '', bearer: 'aprs_0', via: 'request', heard_at: heard, cut: false, links: [] }
+    ]
+  }
+  serve(async url => {
+    const u = new URL(url, 'http://review.local')
+    return json(u.pathname.endsWith('/mode') ? { mode: 'watch' } : withPeers)
+  })
+  mountRoot(MediaHopSettings)
+  await flush()
+  assert.notEqual(document.querySelector('[data-testid="hop-probe-aprs_0"]').textContent.trim(), '-')
+  assert.equal(document.querySelector('[data-testid="hop-probe-mesh_0"]').textContent.trim(), '-')
+  const p7 = document.querySelector('[data-testid="hop-peer-7"]').textContent
+  for (const want of ['parallax', 'on mesh_0', '3 min ago', 'in its reply', 'cut to fit the bearer', 'mesh_0', 'excluded', 'aprs_0', 'admitted']) {
+    assert.ok(p7.includes(want), `peer 7 missing ${want}: ${p7}`)
+  }
+  const p9 = document.querySelector('[data-testid="hop-peer-9"]').textContent
+  assert.ok(p9.includes('peer 9') && p9.includes('no links') && !p9.includes('cut'), p9)
+  assert.match(document.querySelector('[data-testid="hop-peers"]').textContent, /never takes one of our links out of use/)
+})
+
+test('no_peers_section_while_off', async () => {
+  serve(async url => {
+    const u = new URL(url, 'http://review.local')
+    return json(u.pathname.endsWith('/mode') ? { mode: 'off' } : { ...hopset('off'), peers: [] })
+  })
+  mountRoot(MediaHopSettings)
+  await flush()
+  assert.equal(document.querySelector('[data-testid="hop-peers"]'), null)
+})
+
+test('watch_with_no_peer_says_so', async () => {
+  serve(async url => {
+    const u = new URL(url, 'http://review.local')
+    return json(u.pathname.endsWith('/mode') ? { mode: 'watch' } : { ...watching, peers: [] })
+  })
+  mountRoot(MediaHopSettings)
+  await flush()
+  assert.match(document.querySelector('[data-testid="hop-peers-none"]').textContent, /No peer has reported yet/)
+})
