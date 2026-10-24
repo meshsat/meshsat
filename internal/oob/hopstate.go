@@ -87,26 +87,41 @@ func (s *Service) freeBearer(id string) bool { return s.d.FreeBearer != nil && s
 // when media hopping is not off and the reply goes on a free bearer. An
 // argument is the requester's hop state; anything else is refused, and an
 // empty argument is the plain STATUS-NET it always was.
+//
+// Once the status is in, the answer holds the media hopping interval
+// (hopHold): the requester's state is read in that interval, ours is
+// attached only with it held, and the hold goes back with the reply queued
+// (run), so the switch to off waits for every reply carrying our form. With
+// no interval to hold (the switch off) the answer is plain, whatever the
+// switch does after (R56-B2).
 func (s *Service) execStatusNet(ctx context.Context, o Origin, args []byte) Result {
+	var theirs hopwire.Report
 	if len(args) > 0 {
 		r, err := hopwire.Parse(string(args))
 		if err != nil {
 			return Result{Code: RCBadArgs}
 		}
-		if gen, on := s.hopSession(); s.d.HopPeer != nil && on {
-			s.d.HopPeer(gen, o.PeerID, o.Alias, o.Bearer, "request", r)
-		}
+		theirs = r
 	}
-	return Result{Code: RCOK, Body: s.withHopState(s.statusNetBody(ctx), o.Bearer)}
+	body := s.statusNetBody(ctx)
+	release, gen, on := s.hopHold()
+	if !on {
+		return Result{Code: RCOK, Body: body}
+	}
+	if len(args) > 0 && s.d.HopPeer != nil {
+		s.d.HopPeer(gen, o.PeerID, o.Alias, o.Bearer, "request", theirs)
+	}
+	return Result{Code: RCOK, Body: s.withHopState(body, o.Bearer), hold: release}
 }
 
 // withHopState appends our hop state to a STATUS-NET body, within what the
 // reply can carry on the bearer (MaxReplyChunks chunks), so the form is
 // never cut by the chunking: it is cut to fit, and says so, or left out.
 // Only on a free bearer: a reply over SMS, satellite or cellular is the
-// STATUS-NET it always was, byte for byte, and costs no more.
+// STATUS-NET it always was, byte for byte, and costs no more. The caller
+// holds the interval (execStatusNet).
 func (s *Service) withHopState(body, bearer string) string {
-	if s.d.HopState == nil || !s.hopOn() || !s.freeBearer(bearer) {
+	if s.d.HopState == nil || !s.freeBearer(bearer) {
 		return body
 	}
 	room := (BearerBudget(bearer)-ReplyHeaderLen)*MaxReplyChunks - len(body) - 1
@@ -200,12 +215,13 @@ func (s *Service) openPartsLocked(peer uint16) int {
 
 // noteAsked remembers a STATUS-NET request we sent a peer, so its reply's
 // hop state is read (by the request's counter, low 16 bits, as the reply
-// names it) in the same media hopping interval. Only while media hopping
-// is on or watching; a peer's oldest request is forgotten past
-// hopAskedPerPeer.
-func (s *Service) noteAsked(peer uint16, counter uint32) {
-	gen, on := s.hopSession()
-	if !on {
+// names it) in the media hopping interval gen the request was made in (Send
+// takes it before the request goes). Only while that interval lasts: a
+// request made with the switch off, or in an interval that ended while it
+// was being queued, is not remembered, and its reply is never read
+// (R56-B1). A peer's oldest request is forgotten past hopAskedPerPeer.
+func (s *Service) noteAsked(peer uint16, counter uint32, gen uint64) {
+	if cur, on := s.hopSession(); !on || cur != gen {
 		return
 	}
 	now := s.now()
@@ -363,29 +379,29 @@ type HopSet interface {
 	OnOff(f func())
 	SetOnChange(f func(gen uint64))
 	Go(gen uint64, f func(ctx context.Context))
-	Hold() (release func(), ok bool)
+	Hold() (release func(), gen uint64, ok bool)
 }
 
-// hopHold holds the switch's interval while a STATUS-NET is answered, so a
-// reply that carries our form is queued before the switch to off returns
-// (R55-B2). Without a switch followed, or with it off, nothing is held.
-func (s *Service) hopHold() func() {
+// hopHold holds the switch's interval for a STATUS-NET answer, so a reply
+// that carries our form is queued before the switch to off returns (R55-B2):
+// on is false, and nothing is held, with the switch off or no switch
+// followed; then the answer carries nothing of the exchange (R56-B2).
+func (s *Service) hopHold() (release func(), gen uint64, on bool) {
 	s.hopMu.Lock()
 	h := s.hopSet
 	s.hopMu.Unlock()
 	if h == nil {
-		return func() {}
+		return func() {}, 0, false
 	}
-	release, _ := h.Hold()
-	return release
+	return h.Hold()
 }
 
 // FollowHopSet makes the hop exchange follow media hopping's switch: what it
 // keeps goes when the switch goes off; a change of our links tells the peers
 // our state as output of the interval it happened in, and a STATUS-NET
 // reply carrying our form is too, and the switch to off cancels and waits
-// for both (R55-B1, R55-B2). A share ends with
-// parent too, and after a minute at most.
+// for both (R55-B1, R55-B2). A share ends with parent too, and after a
+// minute at most.
 func (s *Service) FollowHopSet(parent context.Context, h HopSet) {
 	s.hopMu.Lock()
 	s.hopSet = h

@@ -120,7 +120,16 @@ func (rc ResultCode) String() string {
 type Result struct {
 	Code     ResultCode
 	Body     string
-	FollowUp bool // send an unsolicited STATUS-NET style reply 30 s later
+	FollowUp bool   // send an unsolicited STATUS-NET style reply 30 s later
+	hold     func() // the media hopping interval held, given back by release
+}
+
+// release gives back the media hopping interval a STATUS-NET answer
+// carrying our hop state holds (execStatusNet), once its reply is queued.
+func (r Result) release() {
+	if r.hold != nil {
+		r.hold()
+	}
 }
 
 // Argument limits.

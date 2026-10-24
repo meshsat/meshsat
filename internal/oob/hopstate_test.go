@@ -47,7 +47,7 @@ func withHop(h *harness, on bool) *peerNotes {
 	}
 	h.svc.d.HopPeer = notes.note
 	h.svc.d.FreeBearer = func(id string) bool { return id == "aprs_0" || id == "mesh_0" }
-	h.svc.d.HopSession = func() (uint64, bool) { return 0, on }
+	setHopOn(h, func() bool { return on })
 	return notes
 }
 

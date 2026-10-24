@@ -69,6 +69,15 @@ func severs(o Origin, t ResetTarget) bool {
 // Execute runs one command for an origin and returns the result. It never
 // sends anything itself; the caller turns the result into a reply.
 func (s *Service) Execute(ctx context.Context, o Origin, cmd byte, args []byte) Result {
+	res := s.execute(ctx, o, cmd, args)
+	res.release()
+	return res
+}
+
+// execute is Execute keeping the media hopping interval a STATUS-NET answer
+// with our hop state holds: run gives it back once the reply is queued,
+// ExecuteLocal once the command is recorded (R56-B2).
+func (s *Service) execute(ctx context.Context, o Origin, cmd byte, args []byte) Result {
 	c, ok := CommandByCode(cmd)
 	if !ok {
 		return Result{Code: RCUnknownCmd}

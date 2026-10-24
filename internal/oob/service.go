@@ -628,15 +628,13 @@ var replyTimeout = 30 * time.Second
 
 // run executes a request and sends the reply.
 func (s *Service) run(peer *database.OOBPeer, ifaceID, fromAddr string, frame Frame) {
-	if frame.Cmd == CmdStatusNet {
-		// Its reply may carry our hop state: answered as output of the
-		// media hopping interval, so none leaves after the switch is off.
-		defer s.hopHold()()
-	}
 	ectx, ecancel := context.WithTimeout(context.Background(), ExecTimeout)
 	o := Origin{PeerID: peer.PeerID, Alias: peer.Alias, Role: peer.Role, Bearer: ifaceID, FromAddr: fromAddr}
-	res := s.Execute(ectx, o, frame.Cmd, frame.Args)
+	res := s.execute(ectx, o, frame.Cmd, frame.Args)
 	ecancel()
+	// A STATUS-NET answer carrying our hop state holds its media hopping
+	// interval until it is recorded and every chunk is queued (R56-B2).
+	defer res.release()
 	s.recordCommand(o, frame.Cmd, frame.Counter, res)
 	if frame.NoReply {
 		return
@@ -773,6 +771,14 @@ func (s *Service) Send(ctx context.Context, req SendRequest) (SendResult, error)
 	if _, ok := CommandByCode(req.Cmd); !ok {
 		return SendResult{}, errors.New("oob: unknown command")
 	}
+	// A STATUS-NET request belongs to the media hopping interval it is made
+	// in, taken now, before it goes: its reply is read in that interval or
+	// not at all (noteAsked, R56-B1).
+	var askGen uint64
+	var asking bool
+	if req.Cmd == CmdStatusNet {
+		askGen, asking = s.hopSession()
+	}
 	if len(req.Args) > MaxArgs-ExpiryLen {
 		return SendResult{}, ErrArgsLen
 	}
@@ -822,8 +828,8 @@ func (s *Service) Send(ctx context.Context, req SendRequest) (SendResult, error)
 	}
 	entry.DeliveryID = &delID
 	_, _ = s.d.DB.InsertOOBLog(entry)
-	if req.Cmd == CmdStatusNet {
-		s.noteAsked(peer.PeerID, counter)
+	if asking {
+		s.noteAsked(peer.PeerID, counter, askGen)
 	}
 	return SendResult{DeliveryID: delID, Counter: counter, Text: text, Address: addr,
 		ExpiresAt: time.Unix(int64(expires), 0).UTC().Format(time.RFC3339)}, nil
@@ -838,7 +844,8 @@ func (s *Service) ExecuteLocal(ctx context.Context, o Origin, cmd byte, args []b
 	if o.Role == "" {
 		o.Role = RoleControl
 	}
-	res := s.Execute(ctx, o, cmd, args)
+	res := s.execute(ctx, o, cmd, args)
+	defer res.release()
 	s.recordCommand(o, cmd, 0, res)
 	return res
 }

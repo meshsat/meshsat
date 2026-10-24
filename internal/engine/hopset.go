@@ -468,18 +468,19 @@ func (m *HopSetManager) OnOff(f func()) {
 }
 
 // Hold makes the caller's own work output of the interval now, as Go does
-// for a goroutine: ok is false with the switch off; otherwise the switch to
-// off waits until release is called (R55-B2). The OOB service holds the
-// interval while it answers a STATUS-NET with our form.
-func (m *HopSetManager) Hold() (release func(), ok bool) {
+// for a goroutine: ok is false with the switch off; otherwise gen is the
+// interval and the switch to off waits until release is called (R55-B2).
+// The OOB service holds the interval while it answers a STATUS-NET with our
+// form, from the moment it decides to attach it (R56-B2).
+func (m *HopSetManager) Hold() (release func(), gen uint64, ok bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.hopMode == HopOff || m.genCtx == nil {
-		return func() {}, false
+		return func() {}, m.gen, false
 	}
 	m.async.Add(1)
 	var once sync.Once
-	return func() { once.Do(m.async.Done) }, true
+	return func() { once.Do(m.async.Done) }, m.gen, true
 }
 
 // Go runs f on its own goroutine as output of the interval gen: not at all

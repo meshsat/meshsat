@@ -194,13 +194,17 @@ func TestHopIntervalChangeHookCarriesItsInterval(t *testing.T) {
 	}
 }
 
-// hold_settled_before_off_returns: work holding the interval holds off until
-// it is released; nothing is held with the switch off.
+// hold_settled_before_off_returns: work holding the interval (a later one,
+// after an off) is told which, and holds off until it is released; nothing
+// is held with the switch off.
 func TestHopIntervalHoldSettledBeforeOffReturns(t *testing.T) {
 	r := newHopRig(t, threeFree...)
-	release, ok := r.m.Hold()
-	if !ok {
-		t.Fatal("no hold with the switch on")
+	_, _ = r.m.SetMode(HopOff)
+	_, _ = r.m.SetMode(HopOn)
+	gen, _ := r.m.Session()
+	release, held, ok := r.m.Hold()
+	if !ok || held != gen {
+		t.Fatalf("hold with the switch on: ok %v, interval %d, want %d", ok, held, gen)
 	}
 	offed := make(chan struct{})
 	go func() {
@@ -219,7 +223,7 @@ func TestHopIntervalHoldSettledBeforeOffReturns(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("off never returned after the release")
 	}
-	if _, ok := r.m.Hold(); ok {
+	if _, _, ok := r.m.Hold(); ok {
 		t.Fatal("a hold with the switch off")
 	}
 }
