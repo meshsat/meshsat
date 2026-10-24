@@ -183,6 +183,19 @@ func TestStatusNetReplyReassembled(t *testing.T) {
 	if notes.count() != 1 {
 		t.Fatalf("noted %v", notes.notes)
 	}
+
+	// The first chunks alone already read as a form ("H1:", then "H1:a0Am0X"),
+	// a shorter one than the peer sent: nothing is noted until the last chunk,
+	// and then the whole form.
+	in(8, CmdStatusNet, RCOK, 45, 1, 3, "wlan0:up agent:none H1:")
+	in(9, CmdStatusNet, RCOK, 45, 2, 3, "a0Am0X")
+	if notes.count() != 1 {
+		t.Fatalf("a partial reply was noted: %v %v", notes.notes, notes.links)
+	}
+	in(10, CmdStatusNet, RCOK, 45, 3, 3, "t0S")
+	if notes.count() != 2 || len(notes.links[1]) != 3 {
+		t.Fatalf("the whole reply: %v %v", notes.notes, notes.links)
+	}
 }
 
 // share_hop_state_free_bearers_and_rate: our state goes to a peer on a free
