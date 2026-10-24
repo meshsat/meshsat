@@ -154,7 +154,8 @@ func TestStatusNetReplyOnAPaidBearerUnchanged(t *testing.T) {
 }
 
 // status_net_reply_chunks_not_kept_while_off (R3): with media hopping off a
-// peer's reply chunks are not kept, and turning it off drops what was kept.
+// peer's reply chunks are not kept, and turning it off drops what was kept
+// (the switch's reset; with the real switch, hopstate_interval_test.go).
 func TestStatusNetReplyChunksNotKeptWhileOff(t *testing.T) {
 	var on atomic.Bool
 	on.Store(true)
@@ -172,6 +173,7 @@ func TestStatusNetReplyChunksNotKeptWhileOff(t *testing.T) {
 		t.Fatalf("on: %d replies kept, want 1", n)
 	}
 	on.Store(false)
+	h.svc.ResetHop() // what the switch runs as it goes off (FollowHopSet)
 	h.svc.HandleInbound(context.Background(), "aprs_0", "PD0XYZ-7", statusReply(t, h, h.peer, h.key, 3, req2, 2, 2, "m0X"))
 	if n := h.openParts(h.peer.PeerID); n != 0 || notes.count() != 0 {
 		t.Fatalf("after off: %d kept, %d noted", n, notes.count())

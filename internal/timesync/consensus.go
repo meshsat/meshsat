@@ -93,8 +93,16 @@ type ifaceSchedule struct {
 	lastSent time.Time // last request we sent on it
 	// sent holds the timestamps of the requests sent on this interface that
 	// no answer on it has matched yet, for the probe (media hopping part
-	// two). Pruned with the pending requests. [MESHSAT-1650]
-	sent map[int64]time.Time
+	// two), each with the media hopping interval it was sent in. Pruned
+	// with the pending requests and dropped by ResetProbes. [MESHSAT-1650]
+	sent map[int64]sentMark
+}
+
+// sentMark is one request sent on an interface: when, and the media hopping
+// interval (gen) it went out in.
+type sentMark struct {
+	at  time.Time
+	gen uint64
 }
 
 // PeerState is a read-only view of one time-sync peer.
@@ -171,12 +179,14 @@ type MeshTimeConsensus struct {
 	ifaces    map[string]*ifaceSchedule
 
 	// probeFn is told the interface a request we sent on it was answered
-	// on: the probe of media hopping part two. It costs no airtime, since
-	// the probe is the scheduled request itself. probeOn says whether the
-	// probe is taken now (media hopping not off); nil means yes. Without a
-	// probe taken nothing is recorded per link. [MESHSAT-1650]
-	probeFn func(iface string)
-	probeOn func() bool
+	// on, and the media hopping interval the request went out in: the probe
+	// of media hopping part two. It costs no airtime, since the probe is the
+	// scheduled request itself. probeSess says which interval it is now and
+	// whether the probe is taken (media hopping not off); nil means always,
+	// interval 0. Without a probe taken nothing is recorded per link.
+	// [MESHSAT-1650]
+	probeFn   func(iface string, gen uint64)
+	probeSess func() (gen uint64, on bool)
 }
 
 // NewMeshTimeConsensus creates a new mesh time consensus instance.
@@ -241,36 +251,76 @@ func (mc *MeshTimeConsensus) airtimeFloorLocked(iface string) time.Duration {
 }
 
 // SetProbeFunc sets what is told, per interface, that a request sent on it
-// was answered on it (the media hopping probe). Only requests sent per
-// interface count; a broadcast request names no interface. [MESHSAT-1650]
-func (mc *MeshTimeConsensus) SetProbeFunc(fn func(iface string)) {
+// was answered on it (the media hopping probe), with the interval the
+// request went out in. Only requests sent per interface count; a broadcast
+// request names no interface. [MESHSAT-1650]
+func (mc *MeshTimeConsensus) SetProbeFunc(fn func(iface string, gen uint64)) {
 	mc.mu.Lock()
 	mc.probeFn = fn
 	mc.mu.Unlock()
 }
 
-// SetProbeEnabled sets whether the probe is taken now (the media hopping
-// switch not off). While it says no, the requests sent per link are not
-// recorded and no answer is a probe. [MESHSAT-1650]
-func (mc *MeshTimeConsensus) SetProbeEnabled(fn func() bool) {
+// SetProbeSession sets where the media hopping interval is read: its gen,
+// and whether the probe is taken now (the switch not off). While it says
+// no, the requests sent per link are not recorded and no answer is a probe;
+// a request recorded in one interval is no probe in another (R55-B1).
+// [MESHSAT-1650]
+func (mc *MeshTimeConsensus) SetProbeSession(fn func() (gen uint64, on bool)) {
 	mc.mu.Lock()
-	mc.probeOn = fn
+	mc.probeSess = fn
 	mc.mu.Unlock()
 }
 
-// probing returns the probe taker, or nil while no probe is taken.
-func (mc *MeshTimeConsensus) probing() func(string) {
+// probing returns the probe taker and the interval it is in now, or nil
+// while no probe is taken.
+func (mc *MeshTimeConsensus) probing() (func(string, uint64), uint64) {
 	mc.mu.RLock()
-	fn, on := mc.probeFn, mc.probeOn
+	fn, sess := mc.probeFn, mc.probeSess
 	mc.mu.RUnlock()
-	if fn == nil || (on != nil && !on()) {
-		return nil
+	if fn == nil {
+		return nil, 0
 	}
-	return fn
+	if sess == nil {
+		return fn, 0
+	}
+	gen, on := sess()
+	if !on {
+		return nil, 0
+	}
+	return fn, gen
 }
 
-// noteSent records that the request stamped nanos went out on ids.
-func (mc *MeshTimeConsensus) noteSent(ids []string, nanos int64, now time.Time) {
+// HopSet is media hopping's switch as the probes follow it
+// (engine.HopSetManager).
+type HopSet interface {
+	Probe(iface string, gen uint64)
+	Session() (gen uint64, on bool)
+	OnOff(f func())
+}
+
+// FollowHopSet makes an answer on the link its request went out on that
+// link's probe, in the media hopping interval the request was sent in, and
+// drops the per-link records when the switch goes off (R55-B1).
+func (mc *MeshTimeConsensus) FollowHopSet(h HopSet) {
+	mc.SetProbeFunc(h.Probe)
+	mc.SetProbeSession(h.Session)
+	h.OnOff(mc.ResetProbes)
+}
+
+// ResetProbes drops every per-link request record, and nothing else: the
+// peers, the schedule and the pending requests the consensus reads stay as
+// they are. Media hopping runs it when its switch goes off (R55-B1).
+func (mc *MeshTimeConsensus) ResetProbes() {
+	mc.ifaceMu.Lock()
+	defer mc.ifaceMu.Unlock()
+	for _, st := range mc.ifaces {
+		st.sent = nil
+	}
+}
+
+// noteSent records that the request stamped nanos went out on ids in the
+// media hopping interval gen.
+func (mc *MeshTimeConsensus) noteSent(ids []string, nanos int64, now time.Time, gen uint64) {
 	mc.ifaceMu.Lock()
 	defer mc.ifaceMu.Unlock()
 	for _, id := range ids {
@@ -280,26 +330,28 @@ func (mc *MeshTimeConsensus) noteSent(ids []string, nanos int64, now time.Time) 
 			mc.ifaces[id] = st
 		}
 		if st.sent == nil {
-			st.sent = map[int64]time.Time{}
+			st.sent = map[int64]sentMark{}
 		}
-		st.sent[nanos] = now
+		st.sent[nanos] = sentMark{at: now, gen: gen}
 	}
 }
 
 // answeredOn reports, once, whether the request stamped echo went out on
-// iface: the first matching answer on that interface takes it.
-func (mc *MeshTimeConsensus) answeredOn(iface string, echo int64) bool {
+// iface in the interval gen: the first matching answer on that interface
+// takes it, and a record of another interval is dropped unread.
+func (mc *MeshTimeConsensus) answeredOn(iface string, echo int64, gen uint64) bool {
 	mc.ifaceMu.Lock()
 	defer mc.ifaceMu.Unlock()
 	st := mc.ifaces[iface]
 	if st == nil || st.sent == nil {
 		return false
 	}
-	if _, ok := st.sent[echo]; !ok {
+	mark, ok := st.sent[echo]
+	if !ok {
 		return false
 	}
 	delete(st.sent, echo)
-	return true
+	return mark.gen == gen
 }
 
 // SetReplyFunc routes time sync responses to the interface the request
@@ -426,8 +478,8 @@ func (mc *MeshTimeConsensus) sendRequestAt(now time.Time) {
 		mc.sendFn(pkt)
 		return
 	}
-	if mc.probing() != nil {
-		mc.noteSent(due, nowNanos, now)
+	if probe, gen := mc.probing(); probe != nil {
+		mc.noteSent(due, nowNanos, now, gen)
 	}
 	for _, id := range due {
 		send(id, pkt)
@@ -577,8 +629,8 @@ func (mc *MeshTimeConsensus) HandleTimeSyncResponse(data []byte, sourceIface str
 	mc.notePeer(sourceIface, time.Now())
 	// An answer on the interface the request went out on is that link's
 	// probe. It reads its own record, so the consensus below is unchanged.
-	if probe := mc.probing(); probe != nil && sourceIface != "" && mc.answeredOn(sourceIface, echoTimestamp) {
-		probe(sourceIface)
+	if probe, gen := mc.probing(); probe != nil && sourceIface != "" && mc.answeredOn(sourceIface, echoTimestamp, gen) {
+		probe(sourceIface, gen)
 	}
 
 	// Look up the pending request to get the local send time.
@@ -717,8 +769,8 @@ func (mc *MeshTimeConsensus) pruneSent(cutoff time.Time) {
 	mc.ifaceMu.Lock()
 	defer mc.ifaceMu.Unlock()
 	for _, st := range mc.ifaces {
-		for ts, at := range st.sent {
-			if at.Before(cutoff) {
+		for ts, mark := range st.sent {
+			if mark.at.Before(cutoff) {
 				delete(st.sent, ts)
 			}
 		}

@@ -23,7 +23,7 @@ type probes struct {
 	n  map[string]int
 }
 
-func (p *probes) add(iface string) {
+func (p *probes) add(iface string, _ uint64) {
 	p.mu.Lock()
 	p.n[iface]++
 	p.mu.Unlock()

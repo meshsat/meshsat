@@ -125,8 +125,9 @@ func TestGetHopSetPeers(t *testing.T) {
 	if p := string(get()["peers"]); p != "[]" {
 		t.Fatalf("peers %s, want []", p)
 	}
-	hs.Probe("mesh_0")
-	hs.NotePeer(9, "tesseract", "mesh_0", "reply", hopwire.Report{Links: []hopwire.Link{{Iface: "aprs_0", State: hopwire.Excluded}}})
+	gen, _ := hs.Session()
+	hs.Probe("mesh_0", gen)
+	hs.NotePeer(gen, 9, "tesseract", "mesh_0", "reply", hopwire.Report{Links: []hopwire.Link{{Iface: "aprs_0", State: hopwire.Excluded}}})
 	raw := get()
 	if !strings.Contains(string(raw["peers"]), `"alias":"tesseract"`) || !strings.Contains(string(raw["peers"]), `"state":"excluded"`) {
 		t.Fatalf("peers %s", raw["peers"])

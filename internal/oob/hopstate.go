@@ -42,13 +42,43 @@ type hopPartsKey struct {
 
 type hopParts struct {
 	first  time.Time
+	gen    uint64
 	total  byte
 	chunks map[byte]string
 }
 
-// hopOn reports whether media hopping is on or watching. Nil means off:
-// then nothing of the exchange is sent, kept or read.
-func (s *Service) hopOn() bool { return s.d.HopOn != nil && s.d.HopOn() }
+// hopAskedMark is one STATUS-NET request of ours: when it went, and in which
+// media hopping interval.
+type hopAskedMark struct {
+	at  time.Time
+	gen uint64
+}
+
+// hopSession reports the media hopping interval now and whether media
+// hopping is on or watching. Nil means off: then nothing of the exchange
+// is sent, kept or read.
+func (s *Service) hopSession() (uint64, bool) {
+	if s.d.HopSession == nil {
+		return 0, false
+	}
+	return s.d.HopSession()
+}
+
+func (s *Service) hopOn() bool {
+	_, on := s.hopSession()
+	return on
+}
+
+// ResetHop drops every STATUS-NET request awaiting its reply and every reply
+// being put back together: media hopping runs it when its switch goes off,
+// so nothing gathered in one interval is read in the next (R55-B1). When
+// each peer was last told our state stays, so turning the switch off and on
+// again tells no peer more often than HopShareEvery.
+func (s *Service) ResetHop() {
+	s.hopMu.Lock()
+	s.hopParts, s.hopAsked = nil, nil
+	s.hopMu.Unlock()
+}
 
 // freeBearer reports whether the hop state may go on a bearer: a free one.
 func (s *Service) freeBearer(id string) bool { return s.d.FreeBearer != nil && s.d.FreeBearer(id) }
@@ -63,8 +93,8 @@ func (s *Service) execStatusNet(ctx context.Context, o Origin, args []byte) Resu
 		if err != nil {
 			return Result{Code: RCBadArgs}
 		}
-		if s.d.HopPeer != nil && s.hopOn() {
-			s.d.HopPeer(o.PeerID, o.Alias, o.Bearer, "request", r)
+		if gen, on := s.hopSession(); s.d.HopPeer != nil && on {
+			s.d.HopPeer(gen, o.PeerID, o.Alias, o.Bearer, "request", r)
 		}
 	}
 	return Result{Code: RCOK, Body: s.withHopState(s.statusNetBody(ctx), o.Bearer)}
@@ -94,17 +124,15 @@ func (s *Service) withHopState(body, bearer string) string {
 // every chunk is in, hands its hop state on. A reply missing a chunk is
 // dropped after hopPartsTTL; a lost chunk costs the update, nothing else.
 //
-// Only a reply to a STATUS-NET request we sent that peer is read, once; and
-// nothing at all while media hopping is off, which also drops whatever was
-// kept before it went off.
+// Only a reply to a STATUS-NET request we sent that peer in this media
+// hopping interval is read, once; and nothing at all while media hopping is
+// off (what was kept went with the switch, ResetHop).
 func (s *Service) hopReplyChunk(peer *database.OOBPeer, ifaceID string, ra ReplyArgs) {
 	if s.d.HopPeer == nil || ra.Total == 0 || ra.Seq == 0 || ra.Seq > ra.Total {
 		return
 	}
-	if !s.hopOn() {
-		s.hopMu.Lock()
-		s.hopParts, s.hopAsked = nil, nil
-		s.hopMu.Unlock()
+	gen, on := s.hopSession()
+	if !on {
 		return
 	}
 	now := s.now()
@@ -118,17 +146,21 @@ func (s *Service) hopReplyChunk(peer *database.OOBPeer, ifaceID string, ra Reply
 			delete(s.hopParts, k)
 		}
 	}
-	if at, ok := s.hopAsked[key]; !ok || now.Sub(at) > hopAskedTTL {
+	if mark, ok := s.hopAsked[key]; !ok || mark.gen != gen || now.Sub(mark.at) > hopAskedTTL {
 		s.hopMu.Unlock()
 		return
 	}
 	p := s.hopParts[key]
+	if p != nil && p.gen != gen {
+		delete(s.hopParts, key)
+		p = nil
+	}
 	if p == nil || p.total != ra.Total {
 		if len(s.hopParts) >= hopPartsMax || s.openPartsLocked(peer.PeerID) >= hopPartsPerPeer {
 			s.hopMu.Unlock()
 			return
 		}
-		p = &hopParts{first: now, total: ra.Total, chunks: map[byte]string{}}
+		p = &hopParts{first: now, gen: gen, total: ra.Total, chunks: map[byte]string{}}
 		s.hopParts[key] = p
 	}
 	p.chunks[ra.Seq] = string(ra.Body)
@@ -152,7 +184,7 @@ func (s *Service) hopReplyChunk(peer *database.OOBPeer, ifaceID string, ra Reply
 		log.Debug().Err(err).Uint16("peer", peer.PeerID).Msg("oob: STATUS-NET reply carries no readable hop state")
 		return
 	}
-	s.d.HopPeer(peer.PeerID, peer.Alias, ifaceID, "reply", r)
+	s.d.HopPeer(gen, peer.PeerID, peer.Alias, ifaceID, "reply", r)
 }
 
 // openPartsLocked counts the replies one peer has waiting. Caller holds hopMu.
@@ -168,23 +200,25 @@ func (s *Service) openPartsLocked(peer uint16) int {
 
 // noteAsked remembers a STATUS-NET request we sent a peer, so its reply's
 // hop state is read (by the request's counter, low 16 bits, as the reply
-// names it). Only while media hopping is on or watching; a peer's oldest
-// request is forgotten past hopAskedPerPeer.
+// names it) in the same media hopping interval. Only while media hopping
+// is on or watching; a peer's oldest request is forgotten past
+// hopAskedPerPeer.
 func (s *Service) noteAsked(peer uint16, counter uint32) {
-	if !s.hopOn() {
+	gen, on := s.hopSession()
+	if !on {
 		return
 	}
 	now := s.now()
 	s.hopMu.Lock()
 	defer s.hopMu.Unlock()
 	if s.hopAsked == nil {
-		s.hopAsked = map[hopPartsKey]time.Time{}
+		s.hopAsked = map[hopPartsKey]hopAskedMark{}
 	}
 	var oldest hopPartsKey
 	var oldestAt time.Time
 	n := 0
-	for k, at := range s.hopAsked {
-		if now.Sub(at) > hopAskedTTL {
+	for k, mark := range s.hopAsked {
+		if mark.gen != gen || now.Sub(mark.at) > hopAskedTTL {
 			delete(s.hopAsked, k)
 			continue
 		}
@@ -192,14 +226,14 @@ func (s *Service) noteAsked(peer uint16, counter uint32) {
 			continue
 		}
 		n++
-		if oldestAt.IsZero() || at.Before(oldestAt) {
-			oldest, oldestAt = k, at
+		if oldestAt.IsZero() || mark.at.Before(oldestAt) {
+			oldest, oldestAt = k, mark.at
 		}
 	}
 	if n >= hopAskedPerPeer {
 		delete(s.hopAsked, oldest)
 	}
-	s.hopAsked[hopPartsKey{peer: peer, counter: uint16(counter)}] = now
+	s.hopAsked[hopPartsKey{peer: peer, counter: uint16(counter)}] = hopAskedMark{at: now, gen: gen}
 }
 
 // HopShare is one peer ShareHopState told our state, or found no way to.
@@ -216,7 +250,10 @@ type HopShare struct {
 // is up (never SMS, satellite or cellular), at most once per HopShareEvery
 // per peer, and only while media hopping is on or watching (our form is ""
 // otherwise). Each request sent is audited. The engine calls it when one
-// of our links goes out of use or back into use. [MESHSAT-1650]
+// of our links goes out of use or back into use, as output of the interval
+// (FollowHopSet): once the switch is off our form is "" and no further peer
+// is told, the send under way gets the interval's cancelled context, and the
+// switch waits for that send and its audit (R55-B2). [MESHSAT-1650]
 func (s *Service) ShareHopState(ctx context.Context) []HopShare {
 	if !s.enabled() || s.d.DB == nil || s.d.HopState == nil || s.d.FreeBearer == nil || !s.hopOn() {
 		return nil
@@ -318,4 +355,48 @@ func (s *Service) freeBearerTo(p *database.OOBPeer, up map[string]bool) string {
 		}
 	}
 	return ""
+}
+
+// HopSet is media hopping's switch as the hop exchange follows it
+// (engine.HopSetManager).
+type HopSet interface {
+	OnOff(f func())
+	SetOnChange(f func(gen uint64))
+	Go(gen uint64, f func(ctx context.Context))
+	Hold() (release func(), ok bool)
+}
+
+// hopHold holds the switch's interval while a STATUS-NET is answered, so a
+// reply that carries our form is queued before the switch to off returns
+// (R55-B2). Without a switch followed, or with it off, nothing is held.
+func (s *Service) hopHold() func() {
+	s.hopMu.Lock()
+	h := s.hopSet
+	s.hopMu.Unlock()
+	if h == nil {
+		return func() {}
+	}
+	release, _ := h.Hold()
+	return release
+}
+
+// FollowHopSet makes the hop exchange follow media hopping's switch: what it
+// keeps goes when the switch goes off; a change of our links tells the peers
+// our state as output of the interval it happened in, and a STATUS-NET
+// reply carrying our form is too, and the switch to off cancels and waits
+// for both (R55-B1, R55-B2). A share ends with
+// parent too, and after a minute at most.
+func (s *Service) FollowHopSet(parent context.Context, h HopSet) {
+	s.hopMu.Lock()
+	s.hopSet = h
+	s.hopMu.Unlock()
+	h.OnOff(s.ResetHop)
+	h.SetOnChange(func(gen uint64) {
+		h.Go(gen, func(ctx context.Context) {
+			sctx, cancel := context.WithTimeout(ctx, time.Minute)
+			defer cancel()
+			defer context.AfterFunc(parent, cancel)()
+			s.ShareHopState(sctx)
+		})
+	})
 }

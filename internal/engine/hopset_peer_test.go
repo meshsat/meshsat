@@ -33,7 +33,7 @@ func TestHopSetPeerReportNeverASign(t *testing.T) {
 		r.m.Negative("mesh_0", "delivery", "!0000abcd", "no_ack") // one sign: suspect
 		mid := r.m.Status()
 		audits := len(r.audits)
-		r.m.NotePeer(7, "parallax", "mesh_0", "reply", allExcluded("mesh_0", "aprs_0", "tetra_0", "cellular_0"))
+		notePeerNow(r.m, 7, "parallax", "mesh_0", "reply", allExcluded("mesh_0", "aprs_0", "tetra_0", "cellular_0"))
 		r.after(30 * time.Second)
 		after := r.m.Status()
 		for i, l := range after.Links {
@@ -66,8 +66,8 @@ func TestHopSetModeOffKeepsNoPeerAndSendsNoForm(t *testing.T) {
 	if _, err := r.m.SetMode(HopOff); err != nil {
 		t.Fatal(err)
 	}
-	r.m.NotePeer(7, "parallax", "mesh_0", "request", allExcluded("mesh_0"))
-	r.m.Probe("mesh_0")
+	notePeerNow(r.m, 7, "parallax", "mesh_0", "request", allExcluded("mesh_0"))
+	probeNow(r.m, "mesh_0")
 	st := r.m.Status()
 	if len(st.Peers) != 0 || len(st.Links) != 0 {
 		t.Fatalf("off: peers %v links %v", st.Peers, st.Links)
@@ -78,7 +78,7 @@ func TestHopSetModeOffKeepsNoPeerAndSendsNoForm(t *testing.T) {
 	if _, err := r.m.SetMode(HopWatch); err != nil {
 		t.Fatal(err)
 	}
-	r.m.NotePeer(7, "parallax", "mesh_0", "request", allExcluded("mesh_0"))
+	notePeerNow(r.m, 7, "parallax", "mesh_0", "request", allExcluded("mesh_0"))
 	if len(r.m.Status().Peers) != 1 {
 		t.Fatal("watch: report not kept")
 	}
@@ -129,7 +129,7 @@ func TestHopSetProbeIsAPositiveSignOnAFreeLink(t *testing.T) {
 	r := newHopRig(t, threeFree...)
 	excludeMesh(t, r)
 	r.after(time.Second)
-	r.m.Probe("mesh_0")
+	probeNow(r.m, "mesh_0")
 	st := r.state(t, "mesh_0")
 	if st.State != HopRecovering || st.LastProbe == nil || !st.LastProbe.Equal(r.now) {
 		t.Fatalf("after a probe: %s, last probe %v", st.State, st.LastProbe)
@@ -141,7 +141,7 @@ func TestHopSetProbeIsAPositiveSignOnAFreeLink(t *testing.T) {
 	hearEvery(s, "aprs_0", time.Minute, 70*time.Minute)
 	for i := 0; i < 12; i++ {
 		s.after(time.Minute)
-		s.m.Probe("aprs_0")
+		probeNow(s.m, "aprs_0")
 	}
 	found := false
 	for _, sg := range s.state(t, "aprs_0").Signs {
@@ -156,13 +156,13 @@ func TestHopSetProbeIsAPositiveSignOnAFreeLink(t *testing.T) {
 	// A paid link takes no probe.
 	p := newHopRig(t, threeFree...)
 	p.m.Negative("cellular_0", "delivery", "+31", "no_ack")
-	p.m.Probe("cellular_0")
+	probeNow(p.m, "cellular_0")
 	st = p.state(t, "cellular_0")
 	if st.LastProbe != nil || st.LastPositive != nil || st.State != HopSuspect {
 		t.Fatalf("paid link after a probe: %s, positive %v, probe %v", st.State, st.LastPositive, st.LastProbe)
 	}
 	// A link outside the hop set takes none either, and nothing panics.
-	p.m.Probe("tcp_0")
+	probeNow(p.m, "tcp_0")
 }
 
 // on_change_once_per_evaluation_with_a_use_change: the hook runs when a link
@@ -171,7 +171,7 @@ func TestHopSetProbeIsAPositiveSignOnAFreeLink(t *testing.T) {
 func TestHopSetOnChange(t *testing.T) {
 	r := newHopRig(t, threeFree...)
 	var n atomic.Int32
-	r.m.SetOnChange(func() { n.Add(1) })
+	r.m.SetOnChange(func(uint64) { n.Add(1) })
 	r.m.Negative("mesh_0", "delivery", "!0000abcd", "no_ack")
 	if n.Load() != 0 {
 		t.Fatalf("suspect (still in use) ran the hook %d times", n.Load())
@@ -210,8 +210,8 @@ func TestHopSetStatusPeersShape(t *testing.T) {
 	if string(raw["peers"]) != "[]" {
 		t.Fatalf("peers %s, want []", raw["peers"])
 	}
-	r.m.Probe("aprs_0")
-	r.m.NotePeer(3, "tesseract", "aprs_0", "request", hopwire.Report{Cut: true, Links: []hopwire.Link{{Iface: "mesh_0", State: hopwire.Down}}})
+	probeNow(r.m, "aprs_0")
+	notePeerNow(r.m, 3, "tesseract", "aprs_0", "request", hopwire.Report{Cut: true, Links: []hopwire.Link{{Iface: "mesh_0", State: hopwire.Down}}})
 	b, _ = json.Marshal(r.m.Status())
 	var st struct {
 		Links []map[string]any `json:"links"`
@@ -244,4 +244,16 @@ func TestHopSetStatusPeersShape(t *testing.T) {
 	if !probed {
 		t.Error("aprs_0 shows no last_probe")
 	}
+}
+
+// probeNow takes a probe sent in the interval now.
+func probeNow(m *HopSetManager, iface string) {
+	gen, _ := m.Session()
+	m.Probe(iface, gen)
+}
+
+// notePeerNow notes a peer's report read in the interval now.
+func notePeerNow(m *HopSetManager, peerID uint16, alias, bearer, via string, r hopwire.Report) {
+	gen, _ := m.Session()
+	m.NotePeer(gen, peerID, alias, bearer, via, r)
 }

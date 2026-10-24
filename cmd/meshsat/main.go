@@ -36,7 +36,6 @@ import (
 	"meshsat/internal/federation"
 	"meshsat/internal/gateway"
 	"meshsat/internal/hemb"
-	"meshsat/internal/hopwire"
 	"meshsat/internal/hubreporter"
 	"meshsat/internal/hubroute"
 	"meshsat/internal/keystore"
@@ -1859,11 +1858,10 @@ func main() {
 	go hopSet.Start(ctx)
 	// Part two: a time-sync request answered on the link it went out on is
 	// that link's probe, a positive sign at no extra airtime (free links
-	// only, the schedule of MESHSAT-778). [MESHSAT-1650]
+	// only, the schedule of MESHSAT-778). Nothing is recorded per link while
+	// the switch is off, and the records go when it goes off. [MESHSAT-1650]
 	if tsConsensus != nil {
-		tsConsensus.SetProbeFunc(hopSet.Probe)
-		// Nothing is recorded per link while the switch is off.
-		tsConsensus.SetProbeEnabled(func() bool { return hopSet.Mode() != engine.HopOff })
+		tsConsensus.FollowHopSet(hopSet)
 	}
 	log.Info().Str("mode", string(hopMode)).Msg("media hopping")
 	dispatcher.SetRouteGate(hopSet.IntentGate())
@@ -2212,11 +2210,9 @@ func main() {
 			// Part two of media hopping: STATUS-NET carries each side's hop
 			// state, shown on Settings > Media Hopping, never acted on; it is
 			// shared on free bearers only. [MESHSAT-1650]
-			HopState: hopSet.Compact,
-			HopOn:    func() bool { return hopSet.Mode() != engine.HopOff },
-			HopPeer: func(peerID uint16, alias, bearer, via string, r hopwire.Report) {
-				hopSet.NotePeer(peerID, alias, bearer, via, r)
-			},
+			HopState:   hopSet.Compact,
+			HopSession: hopSet.Session,
+			HopPeer:    hopSet.NotePeer,
 			FreeBearer: func(ifaceID string) bool {
 				iface, err := db.GetInterface(ifaceID)
 				if err != nil || iface == nil {
@@ -2244,16 +2240,9 @@ func main() {
 			proc.SetOOBInbound(oobSvc.HandleInbound)
 			srv.SetOOBService(oobSvc)
 			// When one of our links goes out of use or back into use, the
-			// peers hear our hop state (and answer with theirs). [MESHSAT-1650]
-			hopSet.SetOnChange(func(s *oob.Service) func() {
-				return func() {
-					go func() {
-						sctx, cancel := context.WithTimeout(ctx, time.Minute)
-						defer cancel()
-						s.ShareHopState(sctx)
-					}()
-				}
-			}(oobSvc))
+			// peers hear our hop state (and answer with theirs); the switch
+			// to off ends that and drops what the exchange kept. [MESHSAT-1650]
+			oobSvc.FollowHopSet(ctx, hopSet)
 		}
 	} else {
 		log.Info().Msg("oob: keystore unavailable, management frames disabled")

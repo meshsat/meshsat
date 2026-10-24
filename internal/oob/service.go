@@ -112,14 +112,18 @@ type Deps struct {
 	// [MESHSAT-1650]
 	HopState func(budget int) string
 	// HopPeer is given a peer's hop state from its STATUS-NET request or
-	// reply (via "request" or "reply"), for display only. [MESHSAT-1650]
-	HopPeer func(peerID uint16, alias, bearer, via string, r hopwire.Report)
+	// reply (via "request" or "reply"), for display only, with the media
+	// hopping interval it was read in (HopSession). [MESHSAT-1650]
+	HopPeer func(gen uint64, peerID uint16, alias, bearer, via string, r hopwire.Report)
 	// FreeBearer reports whether an interface costs nothing to send on;
 	// our hop state is shared on free bearers only. Nil: none are.
 	FreeBearer func(ifaceID string) bool
-	// HopOn reports whether media hopping is on or watching. Nil or false:
-	// STATUS-NET carries, keeps and reads no hop state. [MESHSAT-1650]
-	HopOn func() bool
+	// HopSession reports the media hopping interval now (its gen) and
+	// whether media hopping is on or watching. Nil or not on: STATUS-NET
+	// carries, keeps and reads no hop state. What is kept is kept under its
+	// gen and read only in that interval; ResetHop drops it when the switch
+	// goes off (R55-B1). [MESHSAT-1650]
+	HopSession func() (gen uint64, on bool)
 }
 
 // Service is the OOB management frame service.
@@ -150,7 +154,8 @@ type Service struct {
 	hopMu     sync.Mutex
 	hopShared map[uint16]time.Time
 	hopParts  map[hopPartsKey]*hopParts
-	hopAsked  map[hopPartsKey]time.Time // our STATUS-NET requests awaiting their reply
+	hopAsked  map[hopPartsKey]hopAskedMark // our STATUS-NET requests awaiting their reply
+	hopSet    HopSet                       // the switch followed (FollowHopSet), nil if none
 }
 
 // LastUSBLocation is the hub port (e.g. "2-1.1") a device role was last
@@ -623,6 +628,11 @@ var replyTimeout = 30 * time.Second
 
 // run executes a request and sends the reply.
 func (s *Service) run(peer *database.OOBPeer, ifaceID, fromAddr string, frame Frame) {
+	if frame.Cmd == CmdStatusNet {
+		// Its reply may carry our hop state: answered as output of the
+		// media hopping interval, so none leaves after the switch is off.
+		defer s.hopHold()()
+	}
 	ectx, ecancel := context.WithTimeout(context.Background(), ExecTimeout)
 	o := Origin{PeerID: peer.PeerID, Alias: peer.Alias, Role: peer.Role, Bearer: ifaceID, FromAddr: fromAddr}
 	res := s.Execute(ectx, o, frame.Cmd, frame.Args)

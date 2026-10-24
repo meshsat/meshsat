@@ -24,7 +24,7 @@ type peerNotes struct {
 	links [][]hopwire.Link
 }
 
-func (p *peerNotes) note(peerID uint16, alias, bearer, via string, r hopwire.Report) {
+func (p *peerNotes) note(_ uint64, peerID uint16, alias, bearer, via string, r hopwire.Report) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.notes = append(p.notes, alias+" "+bearer+" "+via)
@@ -47,7 +47,7 @@ func withHop(h *harness, on bool) *peerNotes {
 	}
 	h.svc.d.HopPeer = notes.note
 	h.svc.d.FreeBearer = func(id string) bool { return id == "aprs_0" || id == "mesh_0" }
-	h.svc.d.HopOn = func() bool { return on }
+	h.svc.d.HopSession = func() (uint64, bool) { return 0, on }
 	return notes
 }
 

@@ -352,13 +352,24 @@ type HopSetManager struct {
 	publish   func(hemb.Event)
 	links     map[string]*hopLink
 	peers     map[uint16]HopPeerStatus // the latest report of each OOB peer, shown only
-	onChange  func()                   // a link went out of use or back into use
+	onChange  func(gen uint64)         // a link went out of use or back into use
 	refreshed time.Time
 	seq       uint64 // the arrival order of signs and state changes
 	// gen counts the switches to off; flushMu is held for reading while
 	// outputs run and for writing while the switch moves (R49-S1).
 	gen     uint64
 	flushMu sync.RWMutex
+	// An enabled interval runs from a switch out of off to the next switch
+	// to off, under one gen. What the hop exchange and the probes gather in
+	// it is kept under that gen and dropped when it ends: resets run then,
+	// and genCtx, which the interval's own goroutines (Go) run under, is
+	// cancelled, and off waits for them (R55-B1, R55-B2). modeMu keeps two
+	// switches from crossing.
+	modeMu    sync.Mutex
+	genCtx    context.Context
+	genCancel context.CancelFunc
+	async     sync.WaitGroup
+	resets    []func()
 }
 
 // NewHopSetManager makes a hop set over the links list returns, in mode.
@@ -366,7 +377,11 @@ func NewHopSetManager(cfg HopSetConfig, list func() ([]database.Interface, error
 	if _, ok := ParseHopMode(string(mode)); !ok {
 		mode = HopOff
 	}
-	return &HopSetManager{cfg: cfg, hopMode: mode, list: list, links: map[string]*hopLink{}, peers: map[uint16]HopPeerStatus{}}
+	m := &HopSetManager{cfg: cfg, hopMode: mode, list: list, links: map[string]*hopLink{}, peers: map[uint16]HopPeerStatus{}}
+	if mode != HopOff {
+		m.genCtx, m.genCancel = context.WithCancel(context.Background())
+	}
+	return m
 }
 
 // Gating reports whether the hop set is the route gate (mode on).
@@ -385,23 +400,104 @@ func (m *HopSetManager) Mode() HopMode {
 // gates. It waits for the outputs already running (audits, events), and
 // turning it off cancels every output prepared before it, so nothing of the
 // hop set's is audited or published once off has returned (R49-S1).
+//
+// Turning it off also ends the enabled interval: it cancels the interval's
+// goroutines (the STATUS-NET shares) and waits for them, so whatever they
+// were sending or auditing is done before off returns and nothing they had
+// prepared goes out after; then it runs the resets (OnOff), so no record of
+// a request, reply or probe from this interval is read in the next
+// (R55-B1, R55-B2).
 func (m *HopSetManager) SetMode(mode HopMode) (HopMode, error) {
 	if _, ok := ParseHopMode(string(mode)); !ok {
 		return "", fmt.Errorf("media hopping mode %q: want off, watch or on", mode)
 	}
-	m.flushMu.Lock()
-	defer m.flushMu.Unlock()
+	m.modeMu.Lock()
+	defer m.modeMu.Unlock()
 	m.mu.Lock()
 	prev := m.hopMode
 	m.hopMode = mode
-	if mode == HopOff {
+	var cancel context.CancelFunc
+	switch {
+	case mode == HopOff:
 		m.links = map[string]*hopLink{}
 		m.peers = map[uint16]HopPeerStatus{}
 		m.refreshed = time.Time{}
 		m.gen++
+		cancel, m.genCtx, m.genCancel = m.genCancel, nil, nil
+	case m.genCtx == nil:
+		m.genCtx, m.genCancel = context.WithCancel(context.Background())
 	}
+	resets := m.resets
 	m.mu.Unlock()
+	if mode == HopOff {
+		if cancel != nil {
+			cancel()
+		}
+		// Not under flushMu: an interval goroutine may still be waiting to
+		// flush (Compact evaluates), and with the gen moved its flush is a
+		// no-op that must not wait on us.
+		m.async.Wait()
+	}
+	m.flushMu.Lock()
+	defer m.flushMu.Unlock()
+	if mode == HopOff {
+		for _, f := range resets {
+			f()
+		}
+	}
 	return prev, nil
+}
+
+// Session is the enabled interval now: its gen, and whether media hopping is
+// on or watching. A record of the hop exchange or of a probe is kept under
+// the gen it was made in and read only while Session still says that gen,
+// on (R55-B1).
+func (m *HopSetManager) Session() (gen uint64, on bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.gen, m.hopMode != HopOff
+}
+
+// OnOff adds what runs each time the switch goes off, once the interval's
+// goroutines are done and before off returns: the OOB service and the time
+// consensus drop their records of the interval there (R55-B1).
+func (m *HopSetManager) OnOff(f func()) {
+	m.mu.Lock()
+	m.resets = append(m.resets, f)
+	m.mu.Unlock()
+}
+
+// Hold makes the caller's own work output of the interval now, as Go does
+// for a goroutine: ok is false with the switch off; otherwise the switch to
+// off waits until release is called (R55-B2). The OOB service holds the
+// interval while it answers a STATUS-NET with our form.
+func (m *HopSetManager) Hold() (release func(), ok bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.hopMode == HopOff || m.genCtx == nil {
+		return func() {}, false
+	}
+	m.async.Add(1)
+	var once sync.Once
+	return func() { once.Do(m.async.Done) }, true
+}
+
+// Go runs f on its own goroutine as output of the interval gen: not at all
+// when the switch is off or went off since gen, and with a context that the
+// switch to off cancels before it waits for f to return (R55-B2).
+func (m *HopSetManager) Go(gen uint64, f func(ctx context.Context)) {
+	m.mu.Lock()
+	if m.hopMode == HopOff || gen != m.gen || m.genCtx == nil {
+		m.mu.Unlock()
+		return
+	}
+	ctx := m.genCtx
+	m.async.Add(1)
+	m.mu.Unlock()
+	go func() {
+		defer m.async.Done()
+		f(ctx)
+	}()
 }
 
 // IntentGate is the gate the delivery intents read: the hop set while the
@@ -460,9 +556,9 @@ func (m *HopSetManager) SetPublisher(f func(hemb.Event)) {
 }
 
 // SetOnChange sets what runs, once per evaluation, when a link went out of
-// use or back into use (watch and on only): the OOB service tells the peers
-// our state then.
-func (m *HopSetManager) SetOnChange(f func()) {
+// use or back into use (watch and on only), given the interval's gen: the
+// OOB service tells the peers our state then, through Go.
+func (m *HopSetManager) SetOnChange(f func(gen uint64)) {
 	m.mu.Lock()
 	m.onChange = f
 	m.mu.Unlock()
@@ -557,6 +653,14 @@ func (m *HopSetManager) Positive(ifaceID, source string) {
 		m.mu.Unlock()
 		return
 	}
+	out := m.positiveLocked(l, source, now)
+	gen := m.gen
+	m.mu.Unlock()
+	m.flush(out, gen)
+}
+
+// positiveLocked takes a positive sign on l and evaluates. Caller holds mu.
+func (m *HopSetManager) positiveLocked(l *hopLink, source string, now time.Time) hopOut {
 	m.seq++
 	l.lastPositive, l.lastPositiveSeq = now, m.seq
 	if source == "probe" {
@@ -575,10 +679,7 @@ func (m *HopSetManager) Positive(ifaceID, source string) {
 		}
 		l.rx = l.rx[cut:]
 	}
-	out := m.evaluateLocked(now)
-	gen := m.gen
-	m.mu.Unlock()
-	m.flush(out, gen)
+	return m.evaluateLocked(now)
 }
 
 // hopProbeLink names the hop link a Reticulum routing interface's probe
@@ -600,29 +701,34 @@ func hopProbeLink(routingID string) string {
 // is heard on it. It answers earlier negative signs like any positive sign
 // but is no frame heard for the silence rule, and it is never taken on a paid
 // link (requests go out on free links only; design 4.3, MESHSAT-778). The
-// interface is the routing interface the answer came in on (hopProbeLink).
-func (m *HopSetManager) Probe(ifaceID string) {
+// interface is the routing interface the answer came in on (hopProbeLink);
+// gen is the interval the request was sent in, and a probe of an interval
+// that has ended is not taken (R55-B1).
+func (m *HopSetManager) Probe(ifaceID string, gen uint64) {
 	ifaceID = hopProbeLink(ifaceID)
 	m.mu.Lock()
-	if m.hopMode == HopOff {
+	if m.hopMode == HopOff || gen != m.gen {
 		m.mu.Unlock()
 		return
 	}
-	l := m.linkLocked(ifaceID, m.now())
-	free := l != nil && !l.paid
-	m.mu.Unlock()
-	if free {
-		m.Positive(ifaceID, "probe")
+	now := m.now()
+	l := m.linkLocked(ifaceID, now)
+	if l == nil || l.paid {
+		m.mu.Unlock()
+		return
 	}
+	out := m.positiveLocked(l, "probe", now)
+	m.mu.Unlock()
+	m.flush(out, gen)
 }
 
 // NotePeer keeps the hop state an OOB peer reported, for display. It never
 // touches a sign, a state or a gate decision. Nothing is kept with the
-// switch off.
-func (m *HopSetManager) NotePeer(peerID uint16, alias, bearer, via string, r hopwire.Report) {
+// switch off, nor a report read in an interval that has ended (gen).
+func (m *HopSetManager) NotePeer(gen uint64, peerID uint16, alias, bearer, via string, r hopwire.Report) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.hopMode == HopOff {
+	if m.hopMode == HopOff || gen != m.gen {
 		return
 	}
 	ps := HopPeerStatus{PeerID: peerID, Alias: alias, Bearer: bearer, Via: via, HeardAt: m.now(), Cut: r.Cut, Links: []HopPeerLink{}}
@@ -950,7 +1056,8 @@ func (m *HopSetManager) evaluateLocked(now time.Time) hopOut {
 		}
 	}
 	if changed && m.onChange != nil {
-		out = append(out, m.onChange)
+		f, gen := m.onChange, m.gen
+		out = append(out, func() { f(gen) })
 	}
 	return out
 }
