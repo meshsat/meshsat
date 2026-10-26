@@ -8,6 +8,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -27,6 +29,12 @@ type CommandDeps struct {
 	// SendText queues a text message to an interface via the delivery pipeline.
 	// Parameters: interfaceID, text. Returns deliveryID, msgRef, error.
 	SendText func(interfaceID, text string) (int64, string, error)
+	// SendTextTo queues a text to ONE node of a mesh interface, send_text's
+	// target_device, as the delivery's destination. [MESHSAT-1705]
+	SendTextTo func(interfaceID, destination, text string) (int64, string, error)
+	// SendTextToKeyed is SendTextTo under the command's request id and
+	// argument digest, as SendTextKeyed.
+	SendTextToKeyed func(requestID, fingerprint, interfaceID, destination, text string) (int64, string, error)
 
 	// SendMT sends a message via satellite (Iridium MO). Returns error.
 	SendMT func(ctx context.Context, payload []byte) error
@@ -287,7 +295,33 @@ func (ch *CommandHandler) sendText(cmd Command, ifaceID, text string) (int64, st
 	return ch.deps.SendText(ifaceID, text)
 }
 
-// handleSendText sends a text message via the delivery pipeline.
+// sendTextTo queues a command's text to one node: keyed by the command when it
+// can be.
+func (ch *CommandHandler) sendTextTo(cmd Command, ifaceID, dest, text string) (int64, string, error) {
+	if ch.deps.SendTextToKeyed != nil && cmd.RequestID != "" {
+		return ch.deps.SendTextToKeyed(cmd.RequestID, commandArgsDigest(cmd), ifaceID, dest, text)
+	}
+	return ch.deps.SendTextTo(ifaceID, dest, text)
+}
+
+// meshNodeID reports whether s names one mesh node, "!" and eight hex digits,
+// and returns it in lower case.
+func meshNodeID(s string) (string, bool) {
+	hexID, ok := strings.CutPrefix(strings.TrimSpace(s), "!")
+	if !ok || len(hexID) != 8 {
+		return "", false
+	}
+	if _, err := strconv.ParseUint(hexID, 16, 32); err != nil {
+		return "", false
+	}
+	return "!" + strings.ToLower(hexID), true
+}
+
+// handleSendText sends a text message via the delivery pipeline. With a
+// target_device ("!aabbccdd") it goes to that one node of a mesh interface
+// (mesh_0 when interface_id is empty); without one, to the interface as
+// before. Until MESHSAT-1705 target_device was read nowhere and a text the Hub
+// meant for one node went to the whole mesh.
 func (ch *CommandHandler) handleSendText(cmd Command) (json.RawMessage, error) {
 	if ch.deps.SendText == nil {
 		return nil, fmt.Errorf("dispatcher not available")
@@ -300,22 +334,46 @@ func (ch *CommandHandler) handleSendText(cmd Command) (json.RawMessage, error) {
 	if p.Text == "" {
 		return nil, fmt.Errorf("text is required")
 	}
-	if p.InterfaceID == "" {
-		return nil, fmt.Errorf("interface_id is required")
-	}
 
-	deliveryID, msgRef, err := ch.sendText(cmd, p.InterfaceID, p.Text)
+	var (
+		dest       string
+		deliveryID int64
+		msgRef     string
+		err        error
+	)
+	if strings.TrimSpace(cmd.TargetDevice) != "" {
+		var ok bool
+		if dest, ok = meshNodeID(cmd.TargetDevice); !ok {
+			return nil, fmt.Errorf("target_device %q is not a mesh node id (!aabbccdd)", cmd.TargetDevice)
+		}
+		if p.InterfaceID == "" {
+			p.InterfaceID = "mesh_0"
+		}
+		if !strings.HasPrefix(p.InterfaceID, "mesh_") {
+			return nil, fmt.Errorf("target_device names a mesh node; interface_id %q is not a mesh interface", p.InterfaceID)
+		}
+		if ch.deps.SendTextTo == nil {
+			return nil, fmt.Errorf("this bridge cannot address one mesh node")
+		}
+		deliveryID, msgRef, err = ch.sendTextTo(cmd, p.InterfaceID, dest, p.Text)
+	} else {
+		if p.InterfaceID == "" {
+			return nil, fmt.Errorf("interface_id is required")
+		}
+		deliveryID, msgRef, err = ch.sendText(cmd, p.InterfaceID, p.Text)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("queue send: %w", err)
 	}
 
 	result := struct {
-		DeliveryID int64  `json:"delivery_id"`
-		MsgRef     string `json:"msg_ref"`
-	}{deliveryID, msgRef}
+		DeliveryID  int64  `json:"delivery_id"`
+		MsgRef      string `json:"msg_ref"`
+		Destination string `json:"destination,omitempty"`
+	}{deliveryID, msgRef, dest}
 	data, _ := json.Marshal(result)
 	log.Info().Int64("delivery_id", deliveryID).Str("msg_ref", msgRef).
-		Str("interface", p.InterfaceID).Str("request_id", cmd.RequestID).
+		Str("interface", p.InterfaceID).Str("destination", dest).Str("request_id", cmd.RequestID).
 		Msg("commander: text queued for delivery")
 	return data, nil
 }
@@ -498,7 +556,10 @@ func (ch *CommandHandler) safeWithoutLog(name string) bool {
 	switch name {
 	case "ping":
 		return true
-	case "send_text", "send_mt":
+	case "send_text":
+		// Either way a send_text goes, its admission must be keyed.
+		return ch.deps.SendTextKeyed != nil && (ch.deps.SendTextTo == nil || ch.deps.SendTextToKeyed != nil)
+	case "send_mt":
 		return ch.deps.SendTextKeyed != nil
 	}
 	return false

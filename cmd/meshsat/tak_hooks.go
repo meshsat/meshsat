@@ -63,6 +63,28 @@ func localNodeNum(ctx context.Context, mesh transport.MeshTransport) (uint32, bo
 	return uint32(v), true
 }
 
+// heardMeshNodes is every node the radio heard within the given time: the
+// crews a TAK chat may be sent to from this Bridge. [MESHSAT-1705]
+func heardMeshNodes(ctx context.Context, mesh transport.MeshTransport, within time.Duration) []uint32 {
+	if mesh == nil {
+		return nil
+	}
+	cctx, cancel := context.WithTimeout(ctx, localNodeLookup)
+	defer cancel()
+	nodes, err := mesh.GetNodes(cctx)
+	if err != nil {
+		return nil
+	}
+	cutoff := time.Now().Add(-within).Unix()
+	var out []uint32
+	for _, n := range nodes {
+		if n.Num != 0 && n.LastHeard >= cutoff {
+			out = append(out, n.Num)
+		}
+	}
+	return out
+}
+
 // localNodePosition is the local node's position in the node table. A node
 // at 0,0 has none.
 func localNodePosition(ctx context.Context, mesh transport.MeshTransport) (lat, lon, altM float64, ok bool) {

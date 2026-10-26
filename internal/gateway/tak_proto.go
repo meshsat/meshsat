@@ -2,8 +2,10 @@ package gateway
 
 import (
 	"encoding/binary"
+	"encoding/xml"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	pb "meshsat/internal/gateway/takproto"
@@ -39,6 +41,7 @@ func CotEventToProto(ev CotEvent) (*pb.TakMessage, error) {
 		if ev.Detail.Contact != nil {
 			detail.Contact = &pb.Contact{
 				Callsign: ev.Detail.Contact.Callsign,
+				Endpoint: ev.Detail.Contact.Endpoint,
 			}
 		}
 		if ev.Detail.Group != nil {
@@ -73,17 +76,14 @@ func CotEventToProto(ev CotEvent) (*pb.TakMessage, error) {
 			}
 		}
 
-		// Carry remaining detail elements (emergency, remarks, etc.) as xmlDetail
-		xmlExtra := ""
-		if ev.Detail.Emergency != nil {
-			xmlExtra += fmt.Sprintf(`<emergency type="%s">%s</emergency>`, ev.Detail.Emergency.Type, ev.Detail.Emergency.Text)
+		// Carry the remaining detail elements as xmlDetail, through the XML
+		// encoder so a "<" or "&" in a text cannot break the event.
+		// [MESHSAT-1705]
+		xmlExtra, err := marshalXMLDetail(ev.Detail)
+		if err != nil {
+			return nil, err
 		}
-		if ev.Detail.Remarks != nil {
-			xmlExtra += fmt.Sprintf(`<remarks source="%s">%s</remarks>`, ev.Detail.Remarks.Source, ev.Detail.Remarks.Text)
-		}
-		if xmlExtra != "" {
-			detail.XmlDetail = xmlExtra
-		}
+		detail.XmlDetail = xmlExtra
 
 		cotPb.Detail = detail
 	}
@@ -119,7 +119,7 @@ func ProtoToCotEvent(msg *pb.TakMessage) (*CotEvent, error) {
 	if d != nil {
 		detail := &CotDetail{}
 		if ct := d.GetContact(); ct != nil {
-			detail.Contact = &CotContact{Callsign: ct.GetCallsign()}
+			detail.Contact = &CotContact{Callsign: ct.GetCallsign(), Endpoint: ct.GetEndpoint()}
 		}
 		if g := d.GetGroup(); g != nil {
 			detail.Group = &CotGroup{Name: g.GetName(), Role: g.GetRole()}
@@ -135,6 +135,12 @@ func ProtoToCotEvent(msg *pb.TakMessage) (*CotEvent, error) {
 		}
 		if v := d.GetTakv(); v != nil {
 			detail.Takv = &CotTakv{Device: v.GetDevice(), Platform: v.GetPlatform(), OS: v.GetOs(), Version: v.GetVersion()}
+		}
+		// Everything else (remarks, emergency, a GeoChat's routing) travels
+		// as XML; until MESHSAT-1705 it was dropped here, and with it the
+		// text of every chat a protobuf server sent.
+		if err := unmarshalXMLDetail(d.GetXmlDetail(), detail); err != nil {
+			return nil, err
 		}
 		ev.Detail = detail
 	}
@@ -203,4 +209,44 @@ func ReadTakProtoMessage(r io.Reader) (*pb.TakMessage, error) {
 		return nil, fmt.Errorf("tak proto unmarshal: %w", err)
 	}
 	return msg, nil
+}
+
+// xmlDetail is the part of a CoT detail TAK Protocol v1 carries as XML rather
+// than as typed fields.
+type xmlDetail struct {
+	XMLName    xml.Name              `xml:"detail"`
+	Emergency  *CotEmergency         `xml:"emergency,omitempty"`
+	Remarks    *CotRemarks           `xml:"remarks,omitempty"`
+	Chat       *CotChat              `xml:"__chat,omitempty"`
+	Link       *CotLink              `xml:"link,omitempty"`
+	ServerDest *CotServerDestination `xml:"__serverdestination,omitempty"`
+	Marti      *CotMarti             `xml:"marti,omitempty"`
+}
+
+// marshalXMLDetail writes the elements of d that have no typed protobuf field
+// as XML, escaped by the encoder; "" when there are none.
+func marshalXMLDetail(d *CotDetail) (string, error) {
+	out, err := xml.Marshal(xmlDetail{
+		Emergency: d.Emergency, Remarks: d.Remarks, Chat: d.Chat,
+		Link: d.Link, ServerDest: d.ServerDest, Marti: d.Marti,
+	})
+	if err != nil {
+		return "", fmt.Errorf("tak proto: marshal xml detail: %w", err)
+	}
+	s := strings.TrimSuffix(strings.TrimPrefix(string(out), "<detail>"), "</detail>")
+	return s, nil
+}
+
+// unmarshalXMLDetail reads a protobuf event's xmlDetail into d.
+func unmarshalXMLDetail(s string, d *CotDetail) error {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	var x xmlDetail
+	if err := xml.Unmarshal([]byte("<detail>"+s+"</detail>"), &x); err != nil {
+		return fmt.Errorf("tak proto: parse xml detail: %w", err)
+	}
+	d.Emergency, d.Remarks, d.Chat = x.Emergency, x.Remarks, x.Chat
+	d.Link, d.ServerDest, d.Marti = x.Link, x.ServerDest, x.Marti
+	return nil
 }

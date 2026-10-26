@@ -44,6 +44,52 @@ type CotDetail struct {
 	Emergency  *CotEmergency  `xml:"emergency,omitempty"`
 	Remarks    *CotRemarks    `xml:"remarks,omitempty"`
 	TakControl *CotTakControl `xml:"TakControl,omitempty"`
+	// A GeoChat's routing, as ATAK writes it (MESHSAT-1705): who the chat is
+	// to, who sent it and which server route it took.
+	Chat       *CotChat              `xml:"__chat,omitempty"`
+	Link       *CotLink              `xml:"link,omitempty"`
+	ServerDest *CotServerDestination `xml:"__serverdestination,omitempty"`
+	Marti      *CotMarti             `xml:"marti,omitempty"`
+}
+
+// CotChat is a GeoChat's __chat element: chatroom and id name the recipient
+// (its callsign and uid, or "All Chat Rooms" for the room), senderCallsign the
+// sender.
+type CotChat struct {
+	Parent         string        `xml:"parent,attr,omitempty"`
+	GroupOwner     string        `xml:"groupOwner,attr,omitempty"`
+	MessageID      string        `xml:"messageId,attr,omitempty"`
+	Chatroom       string        `xml:"chatroom,attr"`
+	ID             string        `xml:"id,attr"`
+	SenderCallsign string        `xml:"senderCallsign,attr"`
+	Group          *CotChatGroup `xml:"chatgrp,omitempty"`
+}
+
+// CotChatGroup is __chat's chatgrp: uid0 the sender, uid1 the recipient.
+type CotChatGroup struct {
+	UID0 string `xml:"uid0,attr"`
+	UID1 string `xml:"uid1,attr"`
+	ID   string `xml:"id,attr"`
+}
+
+// CotMarti is the server routing a TAK client asks for: one dest per contact
+// the event is for. A server delivers an event with a dest to those contacts
+// only.
+type CotMarti struct {
+	Dests []CotDest `xml:"dest"`
+}
+
+// CotDest names one recipient by uid (iTAK) or callsign (ATAK, WinTAK); a dest
+// naming a mission is a mission feed, not a person.
+type CotDest struct {
+	UID      string `xml:"uid,attr,omitempty"`
+	Callsign string `xml:"callsign,attr,omitempty"`
+	Mission  string `xml:"mission,attr,omitempty"`
+}
+
+// CotServerDestination is the route a chat came in on, as ATAK records it.
+type CotServerDestination struct {
+	Destinations string `xml:"destinations,attr"`
 }
 
 // CotTakControl carries TAK Protocol version negotiation parameters.
@@ -60,10 +106,16 @@ type CotTakv struct {
 	Version  string `xml:"version,attr"`
 }
 
-// CotContact identifies the event source callsign.
+// CotContact identifies the event source callsign. Endpoint "*:-1:stcp" says
+// the contact is reached through the server it came from, which is what lets a
+// TAK client offer chat with it. [MESHSAT-1705]
 type CotContact struct {
 	Callsign string `xml:"callsign,attr"`
+	Endpoint string `xml:"endpoint,attr,omitempty"`
 }
+
+// TAKContactEndpoint is a contact reached through its server.
+const TAKContactEndpoint = "*:-1:stcp"
 
 // CotGroup specifies team affiliation.
 type CotGroup struct {
@@ -94,9 +146,12 @@ type CotEmergency struct {
 	Text string `xml:",chardata"`
 }
 
-// CotRemarks holds freetext detail.
+// CotRemarks holds freetext detail. On a GeoChat, to is the recipient's uid
+// and time when it was written.
 type CotRemarks struct {
 	Source string `xml:"source,attr,omitempty"`
+	To     string `xml:"to,attr,omitempty"`
+	Time   string `xml:"time,attr,omitempty"`
 	Text   string `xml:",chardata"`
 }
 
@@ -148,7 +203,7 @@ func BuildPositionEvent(uid, callsign string, lat, lon, alt float64, staleSec in
 			Le:  10.0,
 		},
 		Detail: &CotDetail{
-			Contact: &CotContact{Callsign: callsign},
+			Contact: &CotContact{Callsign: callsign, Endpoint: TAKContactEndpoint},
 			Group:   &CotGroup{Name: "Cyan", Role: "Team Member"},
 			Precision: &CotPrecision{
 				AltSrc:      "GPS",
@@ -282,28 +337,16 @@ func BuildTelemetryEvent(uid, callsign string, lat, lon float64, staleSec int, d
 	}
 }
 
-// BuildChatEvent creates a CoT GeoChat event for text messages.
+// BuildChatEvent creates a GeoChat to All Chat Rooms for a text message, in
+// ATAK's form so a TAK client lists it in that room. [MESHSAT-1705]
 func BuildChatEvent(uid, callsign string, text string, staleSec int) CotEvent {
 	now := time.Now().UTC()
-	return CotEvent{
-		Version: "2.0",
-		UID:     uid + "-CHAT-" + strconv.FormatInt(now.UnixMilli(), 36),
-		Type:    CotEventTypeChat,
-		How:     "h-g-i-g-o",
-		Time:    now.Format(cotTimeFormat),
-		Start:   now.Format(cotTimeFormat),
-		Stale:   now.Add(time.Duration(staleSec) * time.Second).Format(cotTimeFormat),
-		Point: CotPoint{
-			Lat: 0, Lon: 0, Hae: 0, Ce: 9999999, Le: 9999999,
-		},
-		Detail: &CotDetail{
-			Contact: &CotContact{Callsign: callsign},
-			Remarks: &CotRemarks{
-				Source: callsign,
-				Text:   text,
-			},
-		},
-	}
+	ev := BuildGeoChat(ChatPeer{UID: uid, Callsign: callsign}, ChatPeer{UID: TAKChatRoom, Callsign: TAKChatRoom}, text)
+	ev.UID = uid + "-CHAT-" + strconv.FormatInt(now.UnixMilli(), 36)
+	ev.Stale = now.Add(time.Duration(staleSec) * time.Second).Format(cotTimeFormat)
+	ev.Detail.Contact = &CotContact{Callsign: callsign}
+	ev.Detail.Remarks.Source = callsign // as MeshSat Android's CotBuilder writes it
+	return ev
 }
 
 // CotLink represents a link element (used in routes to chain waypoints).
@@ -480,6 +523,14 @@ func CotEventToInboundMessage(ev *CotEvent) InboundMessage {
 	callsign := ""
 	if ev.Detail != nil && ev.Detail.Contact != nil {
 		callsign = ev.Detail.Contact.Callsign
+	}
+
+	// A GeoChat names its sender in __chat, not in a contact; keep who wrote
+	// it with the words. [MESHSAT-1705]
+	if ev.Type == CotEventTypeChat {
+		if from := ChatSender(ev); from.Callsign != "" && text != "" {
+			return InboundMessage{Text: from.Callsign + ": " + text, Source: "tak"}
+		}
 	}
 
 	// For position events, format as position text

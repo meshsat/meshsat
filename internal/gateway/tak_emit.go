@@ -47,6 +47,10 @@ type TAKHooks struct {
 	// Hub takes MQTT Export. Leave it nil without a Hub reporter; never set
 	// it to a nil *hubreporter.HubReporter.
 	Hub TAKHub
+	// Chat takes a GeoChat read from the TAK server and answers how many
+	// sends to this Bridge's crews it queued (TAKChat.Deliver). A chat it
+	// delivered does not also go to the rules. [MESHSAT-1705]
+	Chat func(ev *CotEvent) int
 }
 
 // SetHooks connects the gateway to the Bridge's own position, node id and
@@ -260,6 +264,17 @@ func (g *TAKGateway) SendOwnDeadman(lat, lon float64, lastSeen time.Time) error 
 func (g *TAKGateway) SendOwnChat(text string) error {
 	uid, callsign := g.own()
 	return withoutLinkDown(g.emit(BuildChatEvent(uid, callsign, text, g.config.CotStaleSec)))
+}
+
+// NodePeer is the uid and callsign this gateway exports a mesh node under.
+func (g *TAKGateway) NodePeer(node uint32) ChatPeer {
+	return ChatPeer{UID: TAKNodeUID(node), Callsign: TAKNodeCallsign(g.config.CallsignPrefix, node)}
+}
+
+// SendChat sends a GeoChat from one peer to another through every output: a
+// crew's answer to the dispatcher who wrote to it. [MESHSAT-1705]
+func (g *TAKGateway) SendChat(from, to ChatPeer, text string) error {
+	return withoutLinkDown(g.emit(BuildGeoChat(from, to, text)))
 }
 
 func (g *TAKGateway) selfPosition() (lat, lon, alt float64, ok bool) {

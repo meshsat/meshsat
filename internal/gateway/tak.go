@@ -608,6 +608,16 @@ func (g *TAKGateway) readWorker(ctx context.Context) {
 
 		GlobalTakEventBus.Publish(CotEventToRecord(ev, "inbound"))
 
+		// A chat to one of this Bridge's crews goes to that crew, once.
+		// [MESHSAT-1705]
+		if ev.Type == CotEventTypeChat {
+			if chat := g.hooksNow().Chat; chat != nil && chat(ev) > 0 {
+				g.msgsIn.Add(1)
+				g.lastActive.Store(time.Now().Unix())
+				continue
+			}
+		}
+
 		msg := CotEventToInboundMessage(ev)
 		select {
 		case g.inCh <- msg:
@@ -637,8 +647,8 @@ func (g *TAKGateway) writeWorker(ctx context.Context) {
 // (emit). The node keeps its per-node identity, "meshsat-%08x" and
 // "PREFIX-%04x".
 func (g *TAKGateway) sendMessage(msg *transport.MeshMessage) {
-	uid := fmt.Sprintf("meshsat-%08x", msg.From)
-	callsign := fmt.Sprintf("%s-%04x", g.config.CallsignPrefix, msg.From&0xFFFF)
+	node := g.NodePeer(msg.From)
+	uid, callsign := node.UID, node.Callsign
 
 	var ev CotEvent
 

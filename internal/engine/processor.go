@@ -38,6 +38,9 @@ type Processor struct {
 	// request (an acknowledgement or a NAK): the delivery intents'
 	// evidence for a mesh attempt. Nil = none. [MESHSAT-1581]
 	routingReceipt atomic.Pointer[func(ifaceID string, msg transport.MeshMessage)]
+	// directText sees every text a mesh node sends to this Bridge's own
+	// node (gateway.TAKChat.Reply). [MESHSAT-1705]
+	directText atomic.Pointer[func(from uint32, text string)]
 	// hop takes the hop set's passive evidence: a link that just received
 	// a frame carries. Nil = none. [MESHSAT-1650]
 	hop atomic.Pointer[hopSink]
@@ -183,6 +186,18 @@ func (p *Processor) SetRoutingReceiptHook(fn func(ifaceID string, msg transport.
 		return
 	}
 	p.routingReceipt.Store(&fn)
+}
+
+// SetMeshDirectTextHook hands fn every text a mesh node sends to this Bridge's
+// own node: a crew answering a dispatcher who wrote to it from TAK or the Hub
+// map. fn runs on its own goroutine and only observes; the rules see the text
+// as before. [MESHSAT-1705]
+func (p *Processor) SetMeshDirectTextHook(fn func(from uint32, text string)) {
+	if fn == nil {
+		p.directText.Store(nil)
+		return
+	}
+	p.directText.Store(&fn)
 }
 
 func (p *Processor) oobHandler() func(ctx context.Context, ifaceID, fromAddr, text string) bool {
@@ -666,6 +681,17 @@ func (p *Processor) handleMessage(event transport.MeshEvent) {
 		if oob := p.oobHandler(); oob != nil {
 			if oob(context.Background(), "mesh_0", fmt.Sprintf("!%08x", msg.From), msg.DecodedText) {
 				return
+			}
+		}
+	}
+
+	// A text to this Bridge's own node may be a crew answering a dispatcher.
+	// Observed only. [MESHSAT-1705]
+	if msg.PortNum == int(transport.PortNumTextMessage) && msg.DecodedText != "" && msg.From != msg.To {
+		if h := p.directText.Load(); h != nil {
+			if own := meshLocalNode(p.mesh); own != "" && fmt.Sprintf("!%08x", msg.To) == own {
+				from, text := msg.From, msg.DecodedText
+				go (*h)(from, text)
 			}
 		}
 	}

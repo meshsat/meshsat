@@ -52,6 +52,11 @@ const (
 	// of the tenant exported one level below it, with that bridge's id as the
 	// last segment.
 	topicTAKCoTIn = "%s/broadcast/tak/cot/in"
+
+	// A chat the Hub routes to THIS bridge because it owns the crew the chat
+	// is addressed to (meshsat-hub MESHSAT-1706), on the bridge's own subtree;
+	// only the Hub may publish it. [MESHSAT-1705]
+	topicTAKCoTInFor = "%s/bridge/%s/tak/cot/in"
 )
 
 // DefaultTopicRoot is the platform tenant's topic root.
@@ -168,6 +173,12 @@ func (t Topics) SOS(bridgeID, kind string) string {
 // {root}/bridge/<bridge id>/hub/caps (only the Hub may publish it).
 func (t Topics) HubCaps(bridgeID string) string {
 	return fmt.Sprintf("%s/bridge/%s/hub/caps", t.Root(), topicSegment(bridgeID))
+}
+
+// TAKCoTInFor is where the Hub delivers a chat addressed to one of this
+// bridge's crews: {root}/bridge/<bridge id>/tak/cot/in.
+func (t Topics) TAKCoTInFor(bridgeID string) string {
+	return fmt.Sprintf(topicTAKCoTInFor, t.Root(), topicSegment(bridgeID))
 }
 
 func (t Topics) takCoTIn() string { return fmt.Sprintf(topicTAKCoTIn, t.Root()) }

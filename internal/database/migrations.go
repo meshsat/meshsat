@@ -1872,6 +1872,16 @@ var migrations = []string{
 	// get theirs once, in postMigration; a later row at its first send
 	// (EnsureDeliveryMid). An intent's attempts carry the intent id. [MESHSAT-1641]
 	`ALTER TABLE message_deliveries ADD COLUMN mid TEXT NOT NULL DEFAULT '';`,
+
+	// v82: who last wrote to a mesh node from TAK or the Hub map, so the
+	// node's answer goes back to them: one row per node, the latest writer,
+	// read for a day. [MESHSAT-1705]
+	`CREATE TABLE IF NOT EXISTS tak_chat_threads (
+		node TEXT PRIMARY KEY,
+		peer_uid TEXT NOT NULL,
+		peer_callsign TEXT NOT NULL DEFAULT '',
+		last_at TEXT NOT NULL
+	);`,
 }
 
 // postMigration is what a migration needs to know that its SQL cannot see:

@@ -2414,6 +2414,34 @@ func main() {
 	// do, with or without a Hub link. [MESHSAT-1430]
 	srv.SetHubBridgeID(hubBridgeID)
 
+	// TAK direct messages [MESHSAT-1705]: a chat a dispatcher addresses to one
+	// of this Bridge's crews, from a TAK client or the Hub's map, goes to that
+	// node as a direct message through the ledger; a chat to this Bridge itself
+	// goes to the whole mesh; the node's answer goes back to the writer as a
+	// GeoChat. Fed by the Hub (this bridge's own tak/cot/in) and by the TAK
+	// server link.
+	takChat := gateway.NewTAKChat(gateway.TAKChatDeps{
+		Heard: func() []uint32 { return heardMeshNodes(ctx, mesh, gateway.TAKChatThreadLife) },
+		LocalNode: func() (uint32, bool) {
+			if mesh == nil {
+				return 0, false
+			}
+			return localNodeNum(ctx, mesh)
+		},
+		SendDM: func(node uint32, text string) error {
+			_, _, err := dispatcher.QueueDirectSendTo("mesh_0", text,
+				engine.DirectSendOptions{Destination: fmt.Sprintf("!%08x", node)})
+			return err
+		},
+		Broadcast: func(text string) error {
+			_, _, err := dispatcher.QueueDirectSend("mesh_0", text, "")
+			return err
+		},
+		Threads: db,
+		Gateway: gwMgr.GetTAKGateway,
+	})
+	proc.SetMeshDirectTextHook(func(from uint32, text string) { takChat.Reply(from, text) })
+
 	var hubReporter *hubreporter.HubReporter
 	var satFallback *hubreporter.SatFallback // [MESHSAT-963]
 	var hubRelay *relayclient.Client         // [MESHSAT-613]
@@ -2756,6 +2784,15 @@ func main() {
 				id, ref, _, err := dispatcher.QueueDirectSendKeyed(engine.HubCommandSource, requestID, fp, ifaceID, text, engine.DirectSendOptions{})
 				return id, ref, err
 			},
+			// send_text's target_device: one node of the mesh. [MESHSAT-1705]
+			SendTextTo: func(ifaceID, dest, text string) (int64, string, error) {
+				return dispatcher.QueueDirectSendTo(ifaceID, text, engine.DirectSendOptions{Destination: dest})
+			},
+			SendTextToKeyed: func(requestID, fp, ifaceID, dest, text string) (int64, string, error) {
+				id, ref, _, err := dispatcher.QueueDirectSendKeyed(engine.HubCommandSource, requestID, fp, ifaceID, text,
+					engine.DirectSendOptions{Destination: dest})
+				return id, ref, err
+			},
 			FlushBurst: func(ctx context.Context) ([]byte, int, error) {
 				return burstQueue.Flush(ctx)
 			},
@@ -2819,6 +2856,13 @@ func main() {
 			if err != nil {
 				return
 			}
+			// A chat on the broadcast is the room's or somebody else's; it is
+			// shown, never stored as a position under its message uid, and
+			// never sent to a radio from here. [MESHSAT-1705]
+			if ev.Type == gateway.CotEventTypeChat {
+				gateway.GlobalTakEventBus.Publish(gateway.CotEventToRecord(ev, "inbound"))
+				return
+			}
 			if ev.Point.Lat == 0 && ev.Point.Lon == 0 {
 				return
 			}
@@ -2846,6 +2890,17 @@ func main() {
 			log.Debug().Str("uid", ev.UID).Str("callsign", callsign).
 				Float64("lat", ev.Point.Lat).Float64("lon", ev.Point.Lon).
 				Msg("tak: CoT position stored from Hub relay")
+		})
+		// A chat the Hub routed here because this Bridge owns the crew it is
+		// addressed to. [MESHSAT-1705]
+		hubReporter.SetTAKChatHandler(func(cotXML []byte) {
+			ev, err := gateway.ParseCotEvent(cotXML)
+			if err != nil {
+				log.Debug().Err(err).Msg("tak chat: unreadable CoT from the Hub")
+				return
+			}
+			gateway.GlobalTakEventBus.Publish(gateway.CotEventToRecord(ev, "inbound"))
+			takChat.Deliver(ev)
 		})
 
 		// A bridge that has pinned no Hub directory key fetches it once over
@@ -2923,6 +2978,7 @@ func main() {
 	if hubReporter != nil {
 		takHooks.Hub = hubReporter
 	}
+	takHooks.Chat = takChat.Deliver // a chat the TAK server sends to one of our crews [MESHSAT-1705]
 	gwMgr.SetTAKHooks(takHooks)
 
 	// Dead man's switch [MESHSAT-996].

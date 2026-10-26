@@ -96,6 +96,7 @@ type HubReporter struct {
 	onConnect     func()            // MQTT session up [MESHSAT-963]
 	onLost        func()            // MQTT session lost
 	takCotHandler func([]byte)      // callback for inbound TAK CoT events from Hub
+	takChat       func([]byte)      // a chat the Hub routed to one of this bridge's crews [MESHSAT-1705]
 	msgIn         func([]byte)      // hub_msg deliveries (msg/in) [MESHSAT-1584]
 	msgStatus     func([]byte)      // hub_msg evidence and refusals (msg/status)
 	hubCaps       func(HubCaps)     // what the Hub understands (hub/caps, retained) [MESHSAT-1584]
@@ -795,9 +796,14 @@ func (r *HubReporter) subscribeCmd() {
 // map alongside mesh node positions. [MESHSAT-1462]
 func (r *HubReporter) subscribeTAKCoT() {
 	for _, topic := range r.topics.TAKCoTInFilters() {
-		if !r.subscribeTAKCoTFilter(topic) {
+		if !r.subscribeTAKCoTFilter(topic, r.onTAKCoT) {
 			return
 		}
+	}
+	// A chat to one of this bridge's crews comes on its own subtree, from the
+	// Hub alone. [MESHSAT-1705]
+	if !r.subscribeTAKCoTFilter(r.topics.TAKCoTInFor(r.cfg.BridgeID), r.onTAKChat) {
+		return
 	}
 	r.takSubscribed.Store(true)
 }
@@ -805,10 +811,10 @@ func (r *HubReporter) subscribeTAKCoT() {
 // subscribeTAKCoTFilter subscribes one filter, with retries. One filter per
 // SUBSCRIBE on purpose: a broker that refuses one of several in a single packet
 // leaves it unclear which are live.
-func (r *HubReporter) subscribeTAKCoTFilter(topic string) bool {
+func (r *HubReporter) subscribeTAKCoTFilter(topic string, handler mqtt.MessageHandler) bool {
 	const maxRetries = 5
 	for attempt := 1; attempt <= maxRetries; attempt++ {
-		token := r.client.Subscribe(topic, 1, r.onTAKCoT)
+		token := r.client.Subscribe(topic, 1, handler)
 		if !token.WaitTimeout(10 * time.Second) {
 			log.Error().Str("topic", topic).Int("attempt", attempt).Msg("hubreporter: TAK CoT subscribe timeout")
 			if attempt < maxRetries {
@@ -878,6 +884,25 @@ func (r *HubReporter) TAKRelayStats() TAKRelayStats {
 // Called by main.go to wire CoT parsing + position storage.
 func (r *HubReporter) SetTAKCoTHandler(fn func([]byte)) {
 	r.takCotHandler = fn
+}
+
+// SetTAKChatHandler sets the callback for a chat the Hub routed to one of this
+// bridge's crews (gateway.TAKChat.Deliver). [MESHSAT-1705]
+func (r *HubReporter) SetTAKChatHandler(fn func([]byte)) {
+	r.takChat = fn
+}
+
+// onTAKChat handles a chat delivered on this bridge's own tak/cot/in.
+func (r *HubReporter) onTAKChat(_ mqtt.Client, msg mqtt.Message) {
+	r.handleTAKChat(msg.Payload())
+}
+
+func (r *HubReporter) handleTAKChat(payload []byte) {
+	r.takMsgsIn.Add(1)
+	r.takLastActivity.Store(time.Now().Unix())
+	if r.takChat != nil {
+		r.takChat(payload)
+	}
 }
 
 // SetOutbox sets the offline message queue for store-and-forward.
