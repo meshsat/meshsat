@@ -158,6 +158,20 @@ func (db *DB) SetInterfaceTransforms(id, ingress, egress string) error {
 	return nil
 }
 
+// SetInterfaceDevice writes a link's bound device and port and no other
+// column, so a switch, a config or a transform chain written meanwhile is
+// kept (as SetInterfaceTransforms does). [MESHSAT-1678]
+func (db *DB) SetInterfaceDevice(id, deviceID, devicePort string) error {
+	res, err := db.Exec(`UPDATE interfaces SET device_id=?, device_port=?, updated_at=datetime('now') WHERE id=?`, deviceID, devicePort, id)
+	if err != nil {
+		return fmt.Errorf("set interface device: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("interface not found: %s", id)
+	}
+	return nil
+}
+
 // DeleteInterface removes an interface by ID.
 func (db *DB) DeleteInterface(id string) error {
 	_, err := db.Exec("DELETE FROM interfaces WHERE id = ?", id)

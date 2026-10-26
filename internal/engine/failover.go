@@ -5,6 +5,7 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/rs/zerolog/log"
@@ -64,20 +65,60 @@ func (fr *FailoverResolver) SetGatewayOnline(fn func(ifaceID string) bool) {
 }
 
 // online reports whether a member can carry traffic now: bound and online
-// in the interface manager, or served by a connected gateway.
-func (fr *FailoverResolver) online(ifaceID string, state InterfaceState) bool {
-	if state == StateOnline {
-		return true
+// in the interface manager, or served by a connected gateway. Two channel
+// types read otherwise [MESHSAT-1678]:
+//   - cell: the interface manager takes cell_0 as device-less, online
+//     whenever it is on (the v60 seed switches it on), but it carries
+//     nothing unless the cell gateway runs; it reads its gateway alone, so a
+//     kit with no cell configured has no phantom free link.
+//   - sms: Reticulum's packet interface over the cellular modem (main.go
+//     wraps cellular_0's transport), with no device of its own to bind; it
+//     reads as its modem's link does (smsCarrier), so the two names of one
+//     modem never disagree.
+func (fr *FailoverResolver) online(st *InterfaceStatus) bool {
+	switch st.ChannelType {
+	case "cell":
+		return fr.gatewayUp(st.ID)
+	case "sms":
+		return fr.carrierUp(smsCarrier(st.ID))
 	}
+	return st.State == StateOnline || fr.gatewayUp(st.ID)
+}
+
+// gatewayUp reports a connected gateway serving the link.
+func (fr *FailoverResolver) gatewayUp(ifaceID string) bool {
 	return fr.gwOnline != nil && fr.gwOnline(ifaceID)
 }
 
+// carrierUp reads the link that carries another (an sms link's cellular
+// link) by its own gateway and state, never followed further.
+func (fr *FailoverResolver) carrierUp(ifaceID string) bool {
+	if fr.gatewayUp(ifaceID) {
+		return true
+	}
+	if fr.ifaceMgr == nil {
+		return false
+	}
+	st, err := fr.ifaceMgr.GetStatus(ifaceID)
+	return err == nil && st.State == StateOnline
+}
+
+// smsCarrier names the cellular link whose modem an sms link rides: sms_N
+// rides cellular_N, and an sms link with another name the first modem's.
+func smsCarrier(smsID string) string {
+	if n, ok := strings.CutPrefix(smsID, "sms_"); ok && n != "" {
+		return "cellular_" + n
+	}
+	return "cellular_0"
+}
+
 // Online reports a link online as the failover groups see it (its interface
-// state, or a connected gateway behind it) and whether that is known: an
-// interface the manager doesn't have, with no gateway connected, is
-// unknown. The hop set reads it for known absence (R46-V4).
+// state, or a connected gateway behind it, read as online reads it) and
+// whether that is known: an interface the manager doesn't have, with no
+// gateway connected, is unknown. The hop set reads it for known absence
+// (R46-V4).
 func (fr *FailoverResolver) Online(ifaceID string) (online, known bool) {
-	if fr.gwOnline != nil && fr.gwOnline(ifaceID) {
+	if fr.gatewayUp(ifaceID) {
 		return true, true
 	}
 	if fr.ifaceMgr == nil {
@@ -87,7 +128,7 @@ func (fr *FailoverResolver) Online(ifaceID string) (online, known bool) {
 	if err != nil {
 		return false, false
 	}
-	return fr.online(ifaceID, st.State), true
+	return fr.online(st), true
 }
 
 // NewFailoverResolver creates a resolver.
@@ -179,7 +220,7 @@ func (fr *FailoverResolver) Resolve(targetID string) string {
 		if err != nil {
 			continue
 		}
-		if fr.online(m.InterfaceID, status.State) {
+		if fr.online(status) {
 			if ex, why := fr.excluded(m.InterfaceID); ex {
 				log.Warn().Str("group", group.ID).Str("member", m.InterfaceID).Str("why", why).
 					Int("priority", m.Priority).Msg("failover: member online but excluded, skipping")
@@ -234,7 +275,7 @@ func (fr *FailoverResolver) ResolveExcluding(targetID, exclude string) string {
 		if err != nil {
 			continue
 		}
-		if !fr.online(m.InterfaceID, status.State) {
+		if !fr.online(status) {
 			continue
 		}
 		if ex, _ := fr.excluded(m.InterfaceID); ex {
