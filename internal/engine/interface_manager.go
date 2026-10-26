@@ -79,6 +79,10 @@ type interfaceRuntime struct {
 	state        InterfaceState
 	errorMsg     string
 	lastActivity time.Time
+	// goneDevice is the bound device the scan last missed and goneSince
+	// when it first did; both clear when it is seen. [MESHSAT-1678]
+	goneDevice string
+	goneSince  time.Time
 }
 
 // InterfaceManager manages the lifecycle and device binding for all interfaces.
@@ -92,6 +96,7 @@ type InterfaceManager struct {
 	cancelFn     context.CancelFunc
 
 	scanInterval  time.Duration
+	rebindAfter   time.Duration // rebindAfterGone; how long a bound device is gone before its link follows another
 	onStateChange func(ifaceID, channelType string, newState InterfaceState)
 
 	// classify labels a serial port for the scan without opening it. It is
@@ -124,6 +129,7 @@ func NewInterfaceManager(db *database.DB) *InterfaceManager {
 		db:           db,
 		states:       make(map[string]*interfaceRuntime),
 		scanInterval: 5 * time.Second,
+		rebindAfter:  rebindAfterGone,
 	}
 }
 
@@ -534,6 +540,13 @@ func (m *InterfaceManager) scanDevices() {
 		})
 	}
 
+	m.reconcile(detected, time.Now())
+}
+
+// reconcile matches the devices one scan found to the links' bindings, at
+// now, and fires the state changes. It never touches a port: the scan has
+// labelled every device already.
+func (m *InterfaceManager) reconcile(detected []DetectedDevice, now time.Time) {
 	type stateChange struct {
 		ifaceID     string
 		channelType string
@@ -570,16 +583,21 @@ func (m *InterfaceManager) scanDevices() {
 		}
 
 		if found {
+			rt.goneDevice, rt.goneSince = "", time.Time{}
 			// Device present — promote to online (direct mode transports manage their own connections)
 			if rt.state == StateOffline || rt.state == StateBinding {
 				rt.state = StateOnline
 				rt.iface.DevicePort = port
-				rt.lastActivity = time.Now()
+				rt.lastActivity = now
 				log.Info().Str("id", rt.iface.ID).Str("port", port).Msg("ifacemgr: device detected, online")
 				changes = append(changes, stateChange{rt.iface.ID, rt.iface.ChannelType, StateOnline})
 			}
 		} else {
-			// Device gone
+			// Device gone. Since when is kept for the rebind below; a
+			// new binding starts the count again.
+			if rt.goneDevice != rt.iface.DeviceID {
+				rt.goneDevice, rt.goneSince = rt.iface.DeviceID, now
+			}
 			if rt.state == StateOnline || rt.state == StateBinding {
 				oldState := rt.state
 				rt.state = StateOffline
@@ -623,7 +641,7 @@ func (m *InterfaceManager) scanDevices() {
 			rt.iface.DeviceID = dev.DeviceID
 			rt.iface.DevicePort = dev.Port
 			rt.state = StateOnline
-			rt.lastActivity = time.Now()
+			rt.lastActivity = now
 			boundDeviceIDs[dev.DeviceID] = true
 			log.Info().Str("id", rt.iface.ID).Str("device", dev.DeviceID).Str("port", dev.Port).Msg("ifacemgr: auto-bound device, online")
 			changes = append(changes, stateChange{rt.iface.ID, rt.iface.ChannelType, StateOnline})
@@ -632,6 +650,12 @@ func (m *InterfaceManager) scanDevices() {
 				_ = m.db.UpdateInterface(&rt.iface)
 			}
 		}
+	}
+
+	// Rebind after the auto-bind, so an unbound link takes a device as it
+	// always did and a link that lost its device takes only one nobody has.
+	for _, rt := range m.rebindGoneLocked(detected, now) {
+		changes = append(changes, stateChange{rt.iface.ID, rt.iface.ChannelType, StateOnline})
 	}
 
 	// Tag detected devices with their bound interface
@@ -652,6 +676,88 @@ func (m *InterfaceManager) scanDevices() {
 	for _, c := range changes {
 		m.notifyStateChange(c.ifaceID, c.channelType, c.newState)
 	}
+}
+
+// rebindAfterGone is how long a link's bound device must have been off the
+// bus before the link follows another device of its type: longer than a
+// radio's reset or a hub port's cycle, so only a device that was swapped
+// out is given up. [MESHSAT-1678]
+const rebindAfterGone = 2 * time.Minute
+
+// rebindGoneLocked follows a swap. A link that is on, needs a device, and
+// whose bound device has been gone for rebindAfter, is bound to the device
+// of its type on the bus when that device is the only one of its type
+// there, no link has it, and no other link of its type has lost its device:
+// it comes online on it, the binding is stored, and the caller fires the
+// state change that starts its delivery worker, as when a bound device
+// comes back. The kits' mesh_0 stayed bound to a XIAO spare for five weeks after
+// the T-Echo swap of 18 Sep 2026 and read absent to the hop set and the
+// failover groups while the T-Echo worked; cellular_0 was bound to the other
+// kit's modem after the rebuild. Two devices of the type, the one there
+// bound to another link, or two links waiting leave every link as it is:
+// which device is a link's is then the operator's call (POST
+// /api/interfaces/{id}/bind). Returns the links it rebound. Caller holds
+// mu. [MESHSAT-1678]
+func (m *InterfaceManager) rebindGoneLocked(detected []DetectedDevice, now time.Time) []*interfaceRuntime {
+	// The links whose device is gone, by channel type, however long ago:
+	// one inside its grace still makes a second claimant.
+	waiting := map[string][]*interfaceRuntime{}
+	for _, rt := range m.states {
+		if !rt.iface.Enabled || rt.iface.DeviceID == "" || !channelNeedsDevice(rt.iface.ChannelType) {
+			continue
+		}
+		if rt.goneDevice != rt.iface.DeviceID {
+			continue // its device is on the bus
+		}
+		waiting[rt.iface.ChannelType] = append(waiting[rt.iface.ChannelType], rt)
+	}
+	var rebound []*interfaceRuntime
+	for channelType, rts := range waiting {
+		if len(rts) != 1 || now.Sub(rts[0].goneSince) < m.rebindAfter {
+			continue
+		}
+		rt := rts[0]
+		// The devices of the type on the bus, each once (a device's
+		// second port shares its id).
+		var present []DetectedDevice
+		seen := map[string]bool{}
+		for _, d := range detected {
+			if d.DeviceID == "" || seen[d.DeviceID] || !deviceTypeMatchesChannelType(d.DeviceType, channelType) {
+				continue
+			}
+			seen[d.DeviceID] = true
+			present = append(present, d)
+		}
+		if len(present) != 1 || m.boundToLocked(present[0]) != "" {
+			continue
+		}
+		dev, gone, goneFor := present[0], rt.iface.DeviceID, now.Sub(rt.goneSince)
+		rt.iface.DeviceID, rt.iface.DevicePort = dev.DeviceID, dev.Port
+		rt.state = StateOnline
+		rt.lastActivity = now
+		rt.goneDevice, rt.goneSince = "", time.Time{}
+		log.Warn().Str("id", rt.iface.ID).Str("gone", gone).Dur("gone_for", goneFor).
+			Str("device", dev.DeviceID).Str("port", dev.Port).
+			Msg("ifacemgr: bound device gone, link rebound to the one device of its type on the bus, online")
+		if m.db != nil {
+			if err := m.db.SetInterfaceDevice(rt.iface.ID, dev.DeviceID, dev.Port); err != nil {
+				log.Warn().Err(err).Str("id", rt.iface.ID).Msg("ifacemgr: rebind not stored")
+			}
+		}
+		rebound = append(rebound, rt)
+	}
+	return rebound
+}
+
+// boundToLocked names the link bound to a device, by its id or by its
+// VID:PID alone, as the device list tags it; "" when none. Caller holds mu.
+func (m *InterfaceManager) boundToLocked(d DetectedDevice) string {
+	for _, rt := range m.states {
+		if id := rt.iface.DeviceID; id != "" && (id == d.DeviceID || id == d.VIDPID) {
+			return rt.iface.ID
+		}
+	}
+	return ""
 }
 
 // deviceTypeMatchesChannelType pairs a classifier-emitted device type
