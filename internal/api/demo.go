@@ -49,6 +49,28 @@ type demoRun struct {
 	mu       sync.Mutex
 }
 
+// demoRunStatus is what GET /api/demo/{demo_id} returns: the fields of a
+// demoRun without its lock, so a snapshot can be passed by value. The
+// field names and tags must stay the same as demoRun's.
+type demoRunStatus struct {
+	ID       string              `json:"demo_id"`
+	Status   string              `json:"status"` // "running" | "complete"
+	Started  time.Time           `json:"started"`
+	Finished time.Time           `json:"finished,omitempty"`
+	Channels []demoChannelResult `json:"channels"`
+}
+
+// snapshot copies the run's state under its lock.
+func (run *demoRun) snapshot() demoRunStatus {
+	run.mu.Lock()
+	defer run.mu.Unlock()
+	return demoRunStatus{
+		ID: run.ID, Status: run.Status, Started: run.Started,
+		Finished: run.Finished,
+		Channels: append([]demoChannelResult(nil), run.Channels...),
+	}
+}
+
 type demoRegistry struct {
 	mu   sync.Mutex
 	runs map[string]*demoRun
@@ -191,7 +213,7 @@ func (s *Server) handleDemoRun(w http.ResponseWriter, r *http.Request) {
 // @Tags demo
 // @Produce json
 // @Param demo_id path string true "Demo run ID"
-// @Success 200 {object} demoRun
+// @Success 200 {object} demoRunStatus
 // @Failure 404 {object} map[string]string
 // @Router /api/demo/{demo_id} [get]
 func (s *Server) handleDemoStatus(w http.ResponseWriter, r *http.Request) {
@@ -201,13 +223,7 @@ func (s *Server) handleDemoStatus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "demo run not found (may have expired)")
 		return
 	}
-	run.mu.Lock()
-	out := demoRun{
-		ID: run.ID, Status: run.Status, Started: run.Started,
-		Finished: run.Finished,
-		Channels: append([]demoChannelResult(nil), run.Channels...),
-	}
-	run.mu.Unlock()
+	out := run.snapshot()
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(out)
 }
