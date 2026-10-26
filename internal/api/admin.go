@@ -84,6 +84,7 @@ func (s *Server) handleAdminFactoryReset(w http.ResponseWriter, r *http.Request)
 // @Param body body object{node_id=uint32} true "Destination node"
 // @Success 200 {object} map[string]string
 // @Failure 400 {object} map[string]string
+// @Failure 429 {object} map[string]string "the radio takes one traceroute every 30 s"
 // @Failure 503 {object} map[string]string
 // @Router /api/admin/traceroute [post]
 func (s *Server) handleTraceroute(w http.ResponseWriter, r *http.Request) {
@@ -105,7 +106,7 @@ func (s *Server) handleTraceroute(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.mesh.Traceroute(r.Context(), req.NodeID); err != nil {
-		writeError(w, http.StatusInternalServerError, "traceroute failed: "+err.Error())
+		writeError(w, radioSendStatus(err), "traceroute failed: "+err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "traceroute request sent"})
