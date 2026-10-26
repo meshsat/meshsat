@@ -271,7 +271,7 @@ func NewAPRSGateway(cfg APRSConfig, db *database.DB) *APRSGateway {
 		kiss = NewKISSSerialConn(cfg.KISSDevice, cfg.KISSBaud)
 		cfg.ExternalDirewolf = true
 	default:
-		kiss = NewKISSConn(fmt.Sprintf("%s:%d", cfg.KISSHost, cfg.KISSPort))
+		kiss = NewKISSConn(joinHostPort(cfg.KISSHost, cfg.KISSPort))
 	}
 	g := &APRSGateway{
 		config:  cfg,

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -151,7 +150,7 @@ func (g *CellGateway) Start(ctx context.Context) error {
 	}
 	ctx, g.cancel = context.WithCancel(ctx)
 	g.client = smpp.New(smpp.Config{
-		Addr:     g.config.Host + ":" + strconv.Itoa(g.config.Port),
+		Addr:     joinHostPort(g.config.Host, g.config.Port),
 		SystemID: g.config.SystemID,
 		Password: password,
 	}, smpp.Callbacks{

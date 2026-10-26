@@ -316,7 +316,7 @@ func (g *TAKGateway) Type() string {
 
 // dial establishes a TCP or TLS connection to the TAK server.
 func (g *TAKGateway) dial() (net.Conn, error) {
-	addr := fmt.Sprintf("%s:%d", g.config.Host, g.config.Port)
+	addr := joinHostPort(g.config.Host, g.config.Port)
 
 	if !g.config.SSL {
 		return net.DialTimeout("tcp", addr, 10*time.Second)
