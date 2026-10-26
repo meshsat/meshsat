@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"sync"
 	"time"
@@ -1101,4 +1102,14 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
+}
+
+// radioSendStatus is the status for a failed send to the mesh radio: 429 when
+// the radio's own interval for the packet's port has not passed (it would have
+// dropped the packet), 500 otherwise. [MESHSAT-1682]
+func radioSendStatus(err error) int {
+	if errors.Is(err, transport.ErrRadioPortBusy) {
+		return http.StatusTooManyRequests
+	}
+	return http.StatusInternalServerError
 }

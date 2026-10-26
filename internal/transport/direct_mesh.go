@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	pb "buf.build/gen/go/meshtastic/protobufs/protocolbuffers/go/meshtastic"
 	"github.com/rs/zerolog/log"
 	"go.bug.st/serial"
 )
@@ -41,7 +42,9 @@ const (
 const nodeInfoRequestInterval = 10 * time.Minute
 
 type DirectMeshTransport struct {
-	port string // "/dev/ttyACM0" or "auto"
+	// portPace spaces the packets the radio throttles per port. [MESHSAT-1682]
+	portPace portPacer
+	port     string // "/dev/ttyACM0" or "auto"
 
 	mu        sync.RWMutex
 	file      meshStream // a serial port, or a TCP link to meshtasticd [MESHSAT-1384]
@@ -1567,12 +1570,6 @@ func (t *DirectMeshTransport) emitEvent(event MeshEvent) {
 // ============================================================================
 
 func (t *DirectMeshTransport) SendMessage(ctx context.Context, req SendRequest) error {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	if !t.connected || t.file == nil {
-		return ErrNotConnected
-	}
-
 	var to uint32
 	if req.To != "" {
 		n, err := strconv.ParseUint(strings.TrimPrefix(req.To, "!"), 16, 32)
@@ -1583,8 +1580,21 @@ func (t *DirectMeshTransport) SendMessage(ctx context.Context, req SendRequest) 
 	}
 
 	packet := buildTextMessage(req.Text, to, uint32(req.Channel))
-	toRadio := buildToRadioPacket(packet)
-	return sendFrame(t.file, toRadio)
+	return t.sendPaced(ctx, int32(pb.PortNum_TEXT_MESSAGE_APP), buildToRadioPacket(packet))
+}
+
+// sendPaced writes a packet frame on port to the radio once the radio's own
+// interval for that port has passed since the previous one (portPacer); the
+// wait happens before the connection lock is taken. [MESHSAT-1682]
+func (t *DirectMeshTransport) sendPaced(ctx context.Context, port int32, toRadio []byte) error {
+	return t.portPace.send(ctx, port, func() error {
+		t.mu.RLock()
+		defer t.mu.RUnlock()
+		if !t.connected || t.file == nil {
+			return ErrNotConnected
+		}
+		return sendFrame(t.file, toRadio)
+	})
 }
 
 // SendMessageID sends a text as SendMessage does, under a packet id of its
@@ -1608,11 +1618,6 @@ func (t *DirectMeshTransport) SendMessageWithID(ctx context.Context, req SendReq
 	if id == 0 {
 		return fmt.Errorf("%w: packet id 0", ErrNotSubmitted)
 	}
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	if !t.connected || t.file == nil {
-		return ErrNotConnected
-	}
 	var to uint32
 	if req.To != "" {
 		n, err := strconv.ParseUint(strings.TrimPrefix(req.To, "!"), 16, 32)
@@ -1625,7 +1630,7 @@ func (t *DirectMeshTransport) SendMessageWithID(ctx context.Context, req SendReq
 	if packet == nil {
 		return fmt.Errorf("%w: could not encode the packet", ErrNotSubmitted)
 	}
-	return sendFrame(t.file, buildToRadioPacket(packet))
+	return t.sendPaced(ctx, int32(pb.PortNum_TEXT_MESSAGE_APP), buildToRadioPacket(packet))
 }
 
 // NewMeshPacketID is a random non-zero packet id.
@@ -1642,12 +1647,6 @@ func NewMeshPacketID() (uint32, error) {
 }
 
 func (t *DirectMeshTransport) SendRaw(ctx context.Context, req RawRequest) error {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	if !t.connected || t.file == nil {
-		return ErrNotConnected
-	}
-
 	var to uint32
 	if req.To != "" {
 		n, err := strconv.ParseUint(strings.TrimPrefix(req.To, "!"), 16, 32)
@@ -1663,8 +1662,7 @@ func (t *DirectMeshTransport) SendRaw(ctx context.Context, req RawRequest) error
 	}
 
 	packet := buildRawPacket(payload, req.PortNum, to, uint32(req.Channel), req.WantAck)
-	toRadio := buildToRadioPacket(packet)
-	return sendFrame(t.file, toRadio)
+	return t.sendPaced(ctx, int32(req.PortNum), buildToRadioPacket(packet))
 }
 
 // SendEncryptedRelay re-injects an encrypted Meshtastic payload into the mesh
@@ -1822,26 +1820,14 @@ func (t *DirectMeshTransport) AdminFactoryReset(_ context.Context, nodeNum uint3
 	return sendFrame(t.file, toRadio)
 }
 
-func (t *DirectMeshTransport) Traceroute(_ context.Context, nodeNum uint32) error {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	if !t.connected || t.file == nil {
-		return ErrNotConnected
-	}
+func (t *DirectMeshTransport) Traceroute(ctx context.Context, nodeNum uint32) error {
 	packet := buildTraceroutePacket(nodeNum)
-	toRadio := buildToRadioPacket(packet)
-	return sendFrame(t.file, toRadio)
+	return t.sendPaced(ctx, int32(pb.PortNum_TRACEROUTE_APP), buildToRadioPacket(packet))
 }
 
-func (t *DirectMeshTransport) SendWaypoint(_ context.Context, wp Waypoint) error {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	if !t.connected || t.file == nil {
-		return ErrNotConnected
-	}
+func (t *DirectMeshTransport) SendWaypoint(ctx context.Context, wp Waypoint) error {
 	packet := buildWaypointPacket(wp, 0, 0) // broadcast
-	toRadio := buildToRadioPacket(packet)
-	return sendFrame(t.file, toRadio)
+	return t.sendPaced(ctx, int32(pb.PortNum_WAYPOINT_APP), buildToRadioPacket(packet))
 }
 
 func (t *DirectMeshTransport) handleNeighborInfoPacket(pkt *ProtoMeshPacket) {
@@ -1951,15 +1937,9 @@ func (t *DirectMeshTransport) GetModuleConfigSection(_ context.Context, section 
 	return sendFrame(t.file, toRadio)
 }
 
-func (t *DirectMeshTransport) SendPosition(_ context.Context, lat, lon float64, alt int32) error {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	if !t.connected || t.file == nil {
-		return ErrNotConnected
-	}
+func (t *DirectMeshTransport) SendPosition(ctx context.Context, lat, lon float64, alt int32) error {
 	packet := buildPositionPacket(lat, lon, alt, uint32(time.Now().Unix()))
-	toRadio := buildToRadioPacket(packet)
-	return sendFrame(t.file, toRadio)
+	return t.sendPaced(ctx, int32(pb.PortNum_POSITION_APP), buildToRadioPacket(packet))
 }
 
 func (t *DirectMeshTransport) SetFixedPosition(_ context.Context, lat, lon float64, alt int32) error {

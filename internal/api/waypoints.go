@@ -15,6 +15,7 @@ import (
 // @Param body body transport.Waypoint true "Waypoint data"
 // @Success 200 {object} map[string]string
 // @Failure 400 {object} map[string]string
+// @Failure 429 {object} map[string]string "the radio takes one waypoint every 10 s"
 // @Failure 503 {object} map[string]string
 // @Router /api/waypoints [post]
 func (s *Server) handleSendWaypoint(w http.ResponseWriter, r *http.Request) {
@@ -34,7 +35,7 @@ func (s *Server) handleSendWaypoint(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.mesh.SendWaypoint(r.Context(), wp); err != nil {
-		writeError(w, http.StatusInternalServerError, "send waypoint failed: "+err.Error())
+		writeError(w, radioSendStatus(err), "send waypoint failed: "+err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "waypoint sent"})

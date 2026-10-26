@@ -104,6 +104,7 @@ func (s *Server) handleGetSelfPosition(w http.ResponseWriter, r *http.Request) {
 // @Param body body object{latitude=number,longitude=number,altitude=int} true "Position"
 // @Success 200 {object} map[string]string
 // @Failure 400 {object} map[string]string
+// @Failure 429 {object} map[string]string "the radio takes one position every 10 s"
 // @Failure 503 {object} map[string]string
 // @Router /api/position/send [post]
 func (s *Server) handleSendPosition(w http.ResponseWriter, r *http.Request) {
@@ -127,7 +128,7 @@ func (s *Server) handleSendPosition(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.mesh.SendPosition(r.Context(), req.Latitude, req.Longitude, req.Altitude); err != nil {
-		writeError(w, http.StatusInternalServerError, "send position failed: "+err.Error())
+		writeError(w, radioSendStatus(err), "send position failed: "+err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "position sent"})
