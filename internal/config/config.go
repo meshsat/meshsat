@@ -201,6 +201,9 @@ type Config struct {
 	LXMFEnforceStamps        bool   // MESHSAT_LXMF_ENFORCE_STAMPS: drop inbound messages without a valid stamp
 	LXMFMaxOutboundStampCost int    // MESHSAT_LXMF_MAX_OUTBOUND_STAMP_COST (default 16)
 	LXMFAnnounceIntervalSec  int    // MESHSAT_LXMF_ANNOUNCE_INTERVAL (default 1800)
+	LXMFInboundPerMinute     int    // MESHSAT_LXMF_INBOUND_PER_MINUTE: inbound messages taken a minute, more are dropped (default 60)
+	HubRNSJoin               bool   // MESHSAT_HUB_RNS_JOIN: keep the row the Hub manages for the workspace's Private Reticulum network (default true)
+	HubRNSEndpoint           string // MESHSAT_HUB_RNS_ENDPOINT: where that row connects (default rns.meshsat.net:4242)
 
 	// Hub uplink — connects bridge to MeshSat Hub MQTT broker
 	HubURL            string // MQTT broker URL (empty = hub disabled)
@@ -335,6 +338,9 @@ func Load() *Config {
 		LXMFEnforceStamps:            envBool("MESHSAT_LXMF_ENFORCE_STAMPS", false),
 		LXMFMaxOutboundStampCost:     envInt("MESHSAT_LXMF_MAX_OUTBOUND_STAMP_COST", 16),
 		LXMFAnnounceIntervalSec:      envInt("MESHSAT_LXMF_ANNOUNCE_INTERVAL", 1800),
+		LXMFInboundPerMinute:         envInt("MESHSAT_LXMF_INBOUND_PER_MINUTE", 60),
+		HubRNSJoin:                   envBool("MESHSAT_HUB_RNS_JOIN", true),
+		HubRNSEndpoint:               envStr("MESHSAT_HUB_RNS_ENDPOINT", "rns.meshsat.net:4242"),
 
 		HubURL:            envStr("MESHSAT_HUB_URL", ""),
 		BridgeID:          envStr("MESHSAT_BRIDGE_ID", defaultHostname()),

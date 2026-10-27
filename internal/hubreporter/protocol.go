@@ -175,6 +175,12 @@ func (t Topics) HubCaps(bridgeID string) string {
 	return fmt.Sprintf("%s/bridge/%s/hub/caps", t.Root(), topicSegment(bridgeID))
 }
 
+// RNS is one of a bridge's Reticulum access topics, {root}/bridge/<bridge id>/rns/<kind>:
+// "join" the bridge publishes to ask, "access" only the Hub may (MESHSAT-1715).
+func (t Topics) RNS(bridgeID, kind string) string {
+	return fmt.Sprintf("%s/bridge/%s/rns/%s", t.Root(), topicSegment(bridgeID), kind)
+}
+
 // TAKCoTInFor is where the Hub delivers a chat addressed to one of this
 // bridge's crews: {root}/bridge/<bridge id>/tak/cot/in.
 func (t Topics) TAKCoTInFor(bridgeID string) string {

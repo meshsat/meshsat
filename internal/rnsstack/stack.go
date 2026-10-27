@@ -57,6 +57,9 @@ type LXMFConfig struct {
 	EnforceStamps        bool
 	MaxOutboundStampCost int
 	AnnounceInterval     time.Duration
+	// InboundPerMinute caps inbound messages to the kit's address; beyond it
+	// they are dropped and counted. 0 takes the default (60).
+	InboundPerMinute int
 }
 
 // Stack is the built node plus the bridge destination and the LXMF router.
@@ -70,6 +73,9 @@ type Stack struct {
 	onInbound func(source, text string)
 
 	late *lateProofs // nil until EnableLateProofs
+
+	inbound *inboundLimit
+	now     func() time.Time
 }
 
 // SetInboundHook hands every accepted inbound LXMF message, after it is
@@ -223,6 +229,8 @@ func Build(ctx context.Context, cfg Config) (*Stack, error) {
 		}
 	}
 	if cfg.LXMF.Enabled {
+		st.now = time.Now
+		st.inbound = newInboundLimit(cfg.LXMF.InboundPerMinute, st.now())
 		st.LXMF = lxmf.New(node, lxmf.Config{
 			Identity:             cfg.Identity.ReticulumIdentity(),
 			DisplayName:          cfg.LXMF.DisplayName,
@@ -306,6 +314,16 @@ func (st *Stack) announcer(ctx context.Context) {
 // write records nothing, so the message can come again and be taken then
 // (r40 review R40-R2). [MESHSAT-1641]
 func (st *Stack) storeInbound(m *lxmf.Message) {
+	if st.inbound != nil {
+		ok, logNow := st.inbound.allow(st.now())
+		if !ok {
+			if logNow {
+				log.Warn().Str("source", hex.EncodeToString(m.Source[:])).Uint64("dropped", st.inbound.droppedCount()).
+					Msg("lxmf: inbound messages over the per-minute limit, dropped")
+			}
+			return
+		}
+	}
 	text := string(m.Content)
 	if len(m.Title) > 0 {
 		text = string(m.Title) + "\n" + text

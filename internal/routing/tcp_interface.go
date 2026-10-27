@@ -619,7 +619,14 @@ type TCPRNSConfig struct {
 	TLS            bool   `json:"tls"`
 	IFACNetname    string `json:"ifac_netname,omitempty"`
 	IFACPassphrase string `json:"ifac_passphrase,omitempty"`
+	// Managed is "hub" on the one row the Hub keeps for the workspace's
+	// Private network (MESHSAT-1715): it carries an access code, keeps the
+	// mark across an edit, and the Hub's next word sets it back.
+	Managed string `json:"managed,omitempty"`
 }
+
+// TCPRNSManagedHub marks the row the Hub keeps.
+const TCPRNSManagedHub = "hub"
 
 // Coded reports whether the row carries an access code.
 func (c TCPRNSConfig) Coded() bool { return c.IFACNetname != "" || c.IFACPassphrase != "" }

@@ -101,6 +101,8 @@ type HubReporter struct {
 	msgStatus     func([]byte)      // hub_msg evidence and refusals (msg/status)
 	hubCaps       func(HubCaps)     // what the Hub understands (hub/caps, retained) [MESHSAT-1584]
 	sosAck        func(SOSAck)      // the Hub has an SOS start or cancel (sos/ack)
+	rnsAccess     func([]byte)      // the workspace's Reticulum access (rns/access) [MESHSAT-1715]
+	rnsUp         func()            // rns/access is subscribed on this connection
 	signingKey    *ecdsa.PrivateKey // loaded from TLS key for birth signing
 	certPEM       string            // base64 PEM for inclusion in birth
 	tlsErr        error             // set when TLS material is present but unusable [MESHSAT-1027]
@@ -247,6 +249,7 @@ func (r *HubReporter) Start(ctx context.Context) error {
 		r.subscribeTAKCoT()
 		r.subscribeMsg()
 		r.subscribeSOS()
+		r.subscribeRNSAccess()
 
 		// Replay queued outbox messages
 		if ob != nil {

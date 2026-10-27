@@ -1341,6 +1341,7 @@ func main() {
 				EnforceStamps:        cfg.LXMFEnforceStamps,
 				MaxOutboundStampCost: cfg.LXMFMaxOutboundStampCost,
 				AnnounceInterval:     time.Duration(cfg.LXMFAnnounceIntervalSec) * time.Second,
+				InboundPerMinute:     cfg.LXMFInboundPerMinute,
 			},
 			OnAnnounce: func(ann *reticulum.Announce, raw []byte, iface string) {
 				legacy, lErr := routing.UnmarshalAnnounce(raw)
@@ -2913,6 +2914,17 @@ func main() {
 		// birth is published again so the Hub sees the key (C7.6).
 		go pinDirectoryKey(ctx, db, hubAPIURL, hubURL, hubReporter.RepublishBirth)
 
+		// The workspace's Private Reticulum network: the Hub hands this kit its
+		// network name and passphrase on rns/access, and the kit keeps one
+		// managed row that joins it as a leaf. [MESHSAT-1715]
+		if hubAccess, haErr := routing.NewHubAccess(routing.HubAccessConfig{Ifaces: dynIfaces, Enabled: cfg.HubRNSJoin,
+			Endpoint: cfg.HubRNSEndpoint, NodeRunning: rnsStack != nil, Ask: hubReporter.AskRNSAccess}); haErr != nil {
+			log.Warn().Err(haErr).Msg("rns: this kit does not join its workspace's Private network")
+		} else {
+			hubReporter.SetRNSAccessHandler(hubAccess.Apply, hubAccess.OnConnect)
+			hubAccess.Start(ctx)
+		}
+
 		if err := hubReporter.Start(ctx); err != nil {
 			// A first connect that has not succeeded yet is not a failure: the
 			// client keeps trying and will arm the birth/subscribe path the
@@ -2968,6 +2980,9 @@ func main() {
 		if satFallback != nil {
 			srv.SetSatFallback(satFallback)
 		}
+	} else if res, err := dynIfaces.ReconcileManaged(nil); err != nil || res != "none" {
+		// No Hub, nobody keeps the Hub's row current. [MESHSAT-1715]
+		log.Info().Err(err).Str("result", res).Msg("rns: no Hub connection, the Hub's row removed")
 	}
 
 	// TAK without a TAK server [MESHSAT-1421]: every TAK gateway, the one running

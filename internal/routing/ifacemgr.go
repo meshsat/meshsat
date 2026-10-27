@@ -114,6 +114,10 @@ type IfaceManager struct {
 	mu   sync.Mutex
 	inst map[string]*dynInstance
 	ctx  context.Context
+	// opMu runs one create, update, delete, restart or reconcile at a time:
+	// each spans an id allocation or a stop, save and start that mu alone
+	// does not hold together (MESHSAT-1715 review).
+	opMu sync.Mutex
 }
 
 // NewIfaceManager creates the manager.
@@ -226,6 +230,15 @@ func ValidateDynConfig(ifType string, raw json.RawMessage) (json.RawMessage, err
 				return nil, fmt.Errorf("tcp_rns: ifac_netname is at most 128 characters, ifac_passphrase 256")
 			}
 		}
+		c.Managed = strings.TrimSpace(c.Managed)
+		if c.Managed != "" && c.Managed != TCPRNSManagedHub {
+			return nil, fmt.Errorf("tcp_rns: managed is empty or %q", TCPRNSManagedHub)
+		}
+		// The row the Hub keeps never becomes an ordinary one: uncoded, it
+		// would run on the legacy layer, not as a leaf.
+		if c.Managed == TCPRNSManagedHub && !c.Coded() {
+			return nil, fmt.Errorf("tcp_rns: the row the Hub manages carries an access code")
+		}
 		// tls is kept as sent: port 443 turns TLS on at connect time
 		// (TCPRNSEffectiveTLS), not in the stored switch.
 		return json.Marshal(c)
@@ -279,6 +292,15 @@ func (m *IfaceManager) Seed(ifType string, cfg any) (string, error) {
 
 // Create validates, persists and (if enabled) starts a new instance.
 func (m *IfaceManager) Create(ifType string, raw json.RawMessage, enabled bool) (string, error) {
+	if ifType == DynTypeTCPRNS && markedManaged(raw) {
+		return "", errManagedByHub
+	}
+	m.opMu.Lock()
+	defer m.opMu.Unlock()
+	return m.create(ifType, raw, enabled)
+}
+
+func (m *IfaceManager) create(ifType string, raw json.RawMessage, enabled bool) (string, error) {
 	norm, err := ValidateDynConfig(ifType, raw)
 	if err != nil {
 		return "", err
@@ -307,6 +329,18 @@ func (m *IfaceManager) Create(ifType string, raw json.RawMessage, enabled bool) 
 
 // Update replaces an instance's config and enabled flag and restarts it.
 func (m *IfaceManager) Update(id string, raw json.RawMessage, enabled bool) error {
+	m.opMu.Lock()
+	defer m.opMu.Unlock()
+	m.mu.Lock()
+	in, ok := m.inst[id]
+	m.mu.Unlock()
+	if ok && in.row.Type == DynTypeTCPRNS && markedManaged(raw) && !markedManaged(json.RawMessage(in.row.Config)) {
+		return errManagedByHub
+	}
+	return m.update(id, raw, enabled)
+}
+
+func (m *IfaceManager) update(id string, raw json.RawMessage, enabled bool) error {
 	m.mu.Lock()
 	in, ok := m.inst[id]
 	m.mu.Unlock()
@@ -318,6 +352,7 @@ func (m *IfaceManager) Update(id string, raw json.RawMessage, enabled bool) erro
 	}
 	if in.row.Type == DynTypeTCPRNS {
 		raw = keepTCPRNSPassphrase(json.RawMessage(in.row.Config), raw)
+		raw = keepTCPRNSManaged(json.RawMessage(in.row.Config), raw)
 	}
 	norm, err := ValidateDynConfig(in.row.Type, raw)
 	if err != nil {
@@ -341,6 +376,8 @@ func (m *IfaceManager) Update(id string, raw json.RawMessage, enabled bool) erro
 
 // Restart stops and starts an instance.
 func (m *IfaceManager) Restart(id string) error {
+	m.opMu.Lock()
+	defer m.opMu.Unlock()
 	m.mu.Lock()
 	in, ok := m.inst[id]
 	m.mu.Unlock()
@@ -356,6 +393,12 @@ func (m *IfaceManager) Restart(id string) error {
 
 // Delete stops and removes an instance.
 func (m *IfaceManager) Delete(id string) error {
+	m.opMu.Lock()
+	defer m.opMu.Unlock()
+	return m.delete(id)
+}
+
+func (m *IfaceManager) delete(id string) error {
 	m.stop(id)
 	if err := m.cfg.DB.DeleteRoutingIface(id); err != nil {
 		return err
