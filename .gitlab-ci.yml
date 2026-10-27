@@ -192,7 +192,8 @@ test:
 # -----------------------------------------------------------------------------
 # TEST:INTEROP — Reticulum wire compatibility against upstream Python RNS/LXMF
 # (pinned in internal/interop/rnsenv). The venv is cached between pipelines.
-# allow_failure until the matrix has run green for two weeks. [MESHSAT-1348]
+# A required gate since 27 Oct 2026, after 82 green runs from 17 to 26 Oct.
+# [MESHSAT-1348, MESHSAT-1714]
 # -----------------------------------------------------------------------------
 test:interop:
   stage: validate
@@ -211,7 +212,6 @@ test:interop:
     - cd ${CI_PROJECT_DIR}
     - go mod download
     - make interop
-  allow_failure: true
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
 

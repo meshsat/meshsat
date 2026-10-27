@@ -21,8 +21,9 @@ test:
 
 # Reticulum interoperability against the pinned upstream Python RNS/LXMF
 # (internal/interop/rnsenv creates ~/.cache/meshsat/rns-venv-<ver> on first run).
+# Verbose, so a test that skips shows as SKIP in the CI log instead of hiding in "ok".
 interop:
-	MESHSAT_INTEROP=1 $(GO) test -count=1 -timeout 600s -run 'RNSGolden|MatchesRNS|ReadByBridge|MatchRNS|Interop' ./internal/reticulum/... ./internal/interop/...
+	MESHSAT_INTEROP=1 $(GO) test -count=1 -v -timeout 600s -run 'RNSGolden|MatchesRNS|ReadByBridge|MatchRNS|Interop' ./internal/reticulum/... ./internal/interop/...
 
 fmt:
 	gofmt -w .
