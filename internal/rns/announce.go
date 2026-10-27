@@ -55,8 +55,11 @@ func (n *Node) handleAnnounce(pkt *Packet) bool {
 	emitted := blobTimestamp(randomBlob)
 
 	n.mu.Lock()
+	// An announce heard on a leaf is learned and never rebroadcast, and it
+	// says nothing about announces held for the other interfaces (leaf.go).
+	fromLeaf := n.leaf[pkt.Iface]
 	// A rebroadcast by another node of an announce we hold for retransmission.
-	if h.HeaderType == reticulum.HeaderType2 {
+	if h.HeaderType == reticulum.HeaderType2 && !fromLeaf {
 		if e, ok := n.announceTable[h.DestHash]; ok {
 			if hops-1 == e.hops {
 				e.localRebroadcasts++
@@ -102,6 +105,11 @@ func (n *Node) handleAnnounce(pkt *Packet) bool {
 			}
 		}
 	}
+	// A path through a leaf never displaces a live path through another
+	// interface: packets in transit for that destination would be refused.
+	if shouldAdd && fromLeaf && existing != nil && !n.leaf[existing.Iface] && now.Before(existing.Expires) {
+		shouldAdd = false
+	}
 	if !shouldAdd {
 		n.mu.Unlock()
 		return true
@@ -124,7 +132,7 @@ func (n *Node) handleAnnounce(pkt *Packet) bool {
 		Announce:    ann,
 		PacketHash:  pkt.Hash,
 	}
-	if h.Context != reticulum.ContextPathResponse {
+	if h.Context != reticulum.ContextPathResponse && !fromLeaf {
 		n.announceTable[h.DestHash] = &announceEntry{
 			timestamp:         now,
 			retransmitTimeout: now.Add(time.Duration(rand.Float64() * reticulum.PathfinderRW * float64(time.Second))),
@@ -136,7 +144,7 @@ func (n *Node) handleAnnounce(pkt *Packet) bool {
 	}
 	// Answer waiting discovery path requests immediately.
 	var answerOn []string
-	if d, ok := n.discoveryPRs[h.DestHash]; ok {
+	if d, ok := n.discoveryPRs[h.DestHash]; ok && !fromLeaf {
 		answerOn = append(answerOn, d.requestingIfaces...)
 		delete(n.discoveryPRs, h.DestHash)
 	}
@@ -160,7 +168,7 @@ func (n *Node) handleAnnounce(pkt *Packet) bool {
 	delete(n.inflightPRs, h.DestHash)
 	n.mu.Unlock()
 
-	for _, ifc := range answerOn {
+	for _, ifc := range n.withoutLeaves(answerOn) {
 		if !n.paidGate(ifc, h.DestHash, paidAnnounce) {
 			continue
 		}
@@ -235,8 +243,8 @@ func (n *Node) processAnnounceTable(now time.Time) {
 			// Paid interfaces open to this destination join the flood, never
 			// the one the announce came in on: on a paid link that echo is a
 			// paid message for nothing.
-			ifaces = append(n.tx.Floodable(), n.paidTake(o.dest, paidAnnounce, o.source)...)
-		} else if !n.paidGate(ifaces[0], o.dest, paidAnnounce) {
+			ifaces = n.withoutLeaves(append(n.tx.Floodable(), n.paidTake(o.dest, paidAnnounce, o.source)...))
+		} else if n.IsLeaf(ifaces[0]) || !n.paidGate(ifaces[0], o.dest, paidAnnounce) {
 			continue // a path response on a paid link for an unlisted destination
 		}
 		for _, id := range ifaces {

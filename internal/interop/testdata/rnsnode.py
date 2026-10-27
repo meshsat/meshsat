@@ -13,6 +13,8 @@ Args:
   --name NAME           LXMF display name (default "rnsnode")
   --stamp-cost N        inbound stamp cost announced (0 = none)
   --enforce-stamps      enforce inbound stamps
+  --ifac-netname NAME   network name (IFAC) on the client and server interface
+  --ifac-passphrase P   passphrase (IFAC) on the client and server interface
 
 Commands (JSON objects):
   {"cmd":"announce"}                       announce the LXMF delivery destination
@@ -65,9 +67,18 @@ def main():
     ap.add_argument("--enforce-stamps", action="store_true")
     ap.add_argument("--loglevel", type=int, default=2)
     ap.add_argument("--keep-config", action="store_true", help="use the config already in --config-dir")
+    # An interface access code, as a Sideband user enters a network name and
+    # passphrase, or as the Hub's private network for a workspace (MESHSAT-1722).
+    ap.add_argument("--ifac-netname", default=None)
+    ap.add_argument("--ifac-passphrase", default=None)
     args = ap.parse_args()
 
     os.makedirs(args.config_dir, exist_ok=True)
+    ifac = ""
+    if args.ifac_netname:
+        ifac += f"    network_name = {args.ifac_netname}\n"
+    if args.ifac_passphrase:
+        ifac += f"    passphrase = {args.ifac_passphrase}\n"
     ifaces = ""
     if args.connect:
         host, port = args.connect.rsplit(":", 1)
@@ -77,7 +88,7 @@ def main():
     enabled = yes
     target_host = {host}
     target_port = {port}
-"""
+""" + ifac
     if args.listen:
         ifaces += f"""
   [[server]]
@@ -85,7 +96,7 @@ def main():
     enabled = yes
     listen_ip = 127.0.0.1
     listen_port = {args.listen}
-"""
+""" + ifac
     if args.keep_config: pass
     else:
       with open(os.path.join(args.config_dir, "config"), "w") as f:

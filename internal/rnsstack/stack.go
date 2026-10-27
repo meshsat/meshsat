@@ -29,7 +29,11 @@ import (
 type Config struct {
 	Identity *routing.Identity
 	Registry *routing.InterfaceRegistry
-	DB       *database.DB
+	// Coded are the access-coded tcp_rns rows (routing/coded.go): leaf
+	// interfaces of this node that no other part of the bridge can address.
+	// May be nil. [MESHSAT-1722]
+	Coded *routing.CodedIfaces
+	DB    *database.DB
 	// AnnounceInterval for the bridge destination; 0 disables the announcer.
 	AnnounceInterval time.Duration
 	AcceptLinks      bool
@@ -78,10 +82,19 @@ func (st *Stack) SetInboundHook(fn func(source, text string)) {
 	st.inboundMu.Unlock()
 }
 
-// registryTx adapts the interface registry to rns.Transmitter.
-type registryTx struct{ reg *routing.InterfaceRegistry }
+// registryTx adapts the interface registry, and the access-coded rows that
+// are kept out of it, to rns.Transmitter.
+type registryTx struct {
+	reg   *routing.InterfaceRegistry
+	coded *routing.CodedIfaces
+}
 
-func (t *registryTx) Transmit(ifaceID string, raw []byte) error { return t.reg.Send(ifaceID, raw) }
+func (t *registryTx) Transmit(ifaceID string, raw []byte) error {
+	if t.coded.Has(ifaceID) {
+		return t.coded.Send(ifaceID, raw)
+	}
+	return t.reg.Send(ifaceID, raw)
+}
 
 func (t *registryTx) Floodable() []string {
 	ifs := t.reg.Floodable()
@@ -89,14 +102,22 @@ func (t *registryTx) Floodable() []string {
 	for _, i := range ifs {
 		out = append(out, i.ID())
 	}
-	return out
+	return append(out, t.coded.Floodable()...)
 }
 
-func (t *registryTx) HWMTU(ifaceID string) int { return t.reg.GetMTU(ifaceID) }
+func (t *registryTx) HWMTU(ifaceID string) int {
+	if t.coded.Has(ifaceID) {
+		return t.coded.MTU(ifaceID)
+	}
+	return t.reg.GetMTU(ifaceID)
+}
 
 // Online lets the node skip a paid interface that is down instead of
 // booking an announce on it [MESHSAT-1547].
 func (t *registryTx) Online(ifaceID string) bool {
+	if t.coded.Has(ifaceID) {
+		return t.coded.Online(ifaceID)
+	}
 	ri := t.reg.Get(ifaceID)
 	return ri != nil && ri.IsOnline()
 }
@@ -105,6 +126,9 @@ func (t *registryTx) Online(ifaceID string) bool {
 // TCP, MQTT and the like are unlimited (0); the radios use the same table
 // as the time-sync limiter.
 func (t *registryTx) Bitrate(ifaceID string) int {
+	if t.coded.Has(ifaceID) {
+		return 0
+	}
 	if ri := t.reg.Get(ifaceID); ri != nil {
 		if bw := ri.Bitrate(); bw > 0 {
 			return bw
@@ -132,7 +156,7 @@ func Build(ctx context.Context, cfg Config) (*Stack, error) {
 		Identity:           cfg.Identity.ReticulumIdentity(),
 		ForwardHeader1From: map[string]bool{"mesh_0": true},
 		PathTTL:            cfg.PathTTL,
-	}, &registryTx{reg: cfg.Registry})
+	}, &registryTx{reg: cfg.Registry, coded: cfg.Coded})
 	if err != nil {
 		return nil, err
 	}
@@ -165,7 +189,9 @@ func Build(ctx context.Context, cfg Config) (*Stack, error) {
 		log.Info().Msg("rns: interface access codes enabled on tcp_0")
 	}
 	node.OnAnnounce = func(ann *reticulum.Announce, pkt *rns.Packet) {
-		if cfg.OnAnnounce != nil {
+		// What is heard on a coded row stays with the node: the legacy
+		// tables would route to it through the registry. [MESHSAT-1722]
+		if cfg.OnAnnounce != nil && !node.IsLeaf(pkt.Iface) {
 			cfg.OnAnnounce(ann, pkt.Raw, pkt.Iface)
 		}
 	}
@@ -178,7 +204,13 @@ func Build(ctx context.Context, cfg Config) (*Stack, error) {
 			}
 		}
 		st.loadPaths()
-		node.OnPathChanged = func(dest [rns.HashLen]byte, e *rns.PathEntry) { go st.persistPath(e) }
+		node.OnPathChanged = func(dest [rns.HashLen]byte, e *rns.PathEntry) {
+			// A path through a coded row is not kept across a restart: the
+			// row's id may name another row by then (MESHSAT-1724).
+			if !node.IsLeaf(e.Iface) {
+				go st.persistPath(e)
+			}
+		}
 	}
 	// The late-proof listener goes in before the node is reachable: Build
 	// returns the node to main.go, which only then hands it to the
@@ -202,6 +234,9 @@ func Build(ctx context.Context, cfg Config) (*Stack, error) {
 		log.Info().Str("lxmf_dest", st.LXMF.HashHex()).Str("display_name", cfg.LXMF.DisplayName).Int("stamp_cost", cfg.LXMF.StampCost).Msg("lxmf: delivery destination registered")
 	}
 	node.Start(ctx)
+	if cfg.Coded != nil {
+		cfg.Coded.Attach(node, st.announceOn)
+	}
 	if cfg.AnnounceInterval > 0 {
 		go st.announcer(ctx)
 	}
@@ -210,6 +245,20 @@ func Build(ctx context.Context, cfg Config) (*Stack, error) {
 		Str("dest_hash", cfg.Identity.DestHashHex()).Bool("accept_links", cfg.AcceptLinks).
 		Msg("rns: upstream-compatible Reticulum node started")
 	return st, nil
+}
+
+// announceOn announces this node's own destinations on one interface: a
+// coded row does it on every connect, which is also how the network on the
+// other side learns which access code the connection carries.
+func (st *Stack) announceOn(ifaceID string) {
+	if err := st.Node.Announce(st.Bridge, ifaceID, false); err != nil {
+		log.Warn().Err(err).Str("iface", ifaceID).Msg("rns: announce failed")
+	}
+	if st.LXMF != nil {
+		if err := st.Node.Announce(st.LXMF.Dest, ifaceID, false); err != nil {
+			log.Warn().Err(err).Str("iface", ifaceID).Msg("lxmf: announce failed")
+		}
+	}
 }
 
 func (st *Stack) announcer(ctx context.Context) {

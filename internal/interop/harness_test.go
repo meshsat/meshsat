@@ -53,6 +53,8 @@ type peerOpts struct {
 	stampCost int
 	enforce   bool
 	loglevel  int
+	// An access code on the peer's interfaces (MESHSAT-1722).
+	ifacNetname, ifacPassphrase string
 }
 
 func scriptPath(t *testing.T) string {
@@ -98,6 +100,12 @@ func startPeer(t *testing.T, o peerOpts) *peer {
 	}
 	if o.loglevel > 0 {
 		args = append(args, "--loglevel", fmt.Sprint(o.loglevel))
+	}
+	if o.ifacNetname != "" {
+		args = append(args, "--ifac-netname", o.ifacNetname)
+	}
+	if o.ifacPassphrase != "" {
+		args = append(args, "--ifac-passphrase", o.ifacPassphrase)
 	}
 	return startPeerArgs(t, py, cfgDir, args[1:], o.name)
 }

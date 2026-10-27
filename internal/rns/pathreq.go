@@ -57,6 +57,18 @@ func (n *Node) handlePathRequest(pkt *Packet) {
 	}
 	n.prTags[unique] = struct{}{}
 	n.stats.PathRequestsRx++
+	if n.leaf[pkt.Iface] {
+		// A leaf hears about our own destinations only (leaf.go).
+		local := n.dests[dest]
+		if local == nil {
+			n.stats.LeafRefused++
+		}
+		n.mu.Unlock()
+		if local != nil {
+			_ = n.Announce(local, pkt.Iface, true)
+		}
+		return
+	}
 	if _, inflight := n.inflightPRs[dest]; inflight {
 		// Batch onto the existing discovery.
 		d := n.discoveryPRs[dest]
@@ -87,6 +99,10 @@ func (n *Node) handlePathRequest(pkt *Packet) {
 	if e := n.paths.Get(dest); e != nil && e.Announce != nil {
 		if hasRequestor && e.NextHop == requestor {
 			log.Debug().Str("dest", hexh(dest)).Msg("rns: not answering path request, next hop is the requestor")
+			n.resolveInflight(dest)
+			return
+		}
+		if n.crossesLeaf(pkt.Iface, e.Iface) {
 			n.resolveInflight(dest)
 			return
 		}
@@ -132,7 +148,7 @@ func (n *Node) handlePathRequest(pkt *Packet) {
 	n.mu.Unlock()
 	var tag16 [HashLen]byte
 	copy(tag16[:], tag)
-	for _, id := range append(n.tx.Floodable(), n.paidTake(dest, paidPathRequest, pkt.Iface)...) {
+	for _, id := range n.withoutLeaves(append(n.tx.Floodable(), n.paidTake(dest, paidPathRequest, pkt.Iface)...)) {
 		if id != pkt.Iface {
 			n.sendPathRequest(dest, id, tag16)
 		}

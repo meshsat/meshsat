@@ -103,6 +103,20 @@ func (t *PathTable) Remove(dest [HashLen]byte) {
 	t.mu.Unlock()
 }
 
+// RemoveIface drops every destination reached through one interface.
+func (t *PathTable) RemoveIface(ifaceID string) int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	removed := 0
+	for k, e := range t.m {
+		if e.Iface == ifaceID {
+			delete(t.m, k)
+			removed++
+		}
+	}
+	return removed
+}
+
 // Expire removes entries whose Expires passed more than a week ago. RNS keeps
 // expired entries around as candidates; we keep them one extra TTL.
 func (t *PathTable) Expire(now time.Time) int {

@@ -607,11 +607,22 @@ const (
 // TCPRNSConfig is the stored config of a tcp_rns interface, MeshSat Android's
 // "RNS TCP" settings: the host and port of a stock Reticulum node (Python RNS
 // TCPServerInterface, or the Hub's endpoint) and the TLS switch.
+//
+// IFACNetname and IFACPassphrase, set together, are the access code of a
+// private Reticulum network (on the Hub: a workspace's Private address,
+// rns.meshsat.net:4242). Such a row is coded: only the node's own traffic
+// crosses it (coded.go). The passphrase never leaves the bridge's API.
+// [MESHSAT-1722]
 type TCPRNSConfig struct {
-	Host string `json:"host"`
-	Port int    `json:"port"`
-	TLS  bool   `json:"tls"`
+	Host           string `json:"host"`
+	Port           int    `json:"port"`
+	TLS            bool   `json:"tls"`
+	IFACNetname    string `json:"ifac_netname,omitempty"`
+	IFACPassphrase string `json:"ifac_passphrase,omitempty"`
 }
+
+// Coded reports whether the row carries an access code.
+func (c TCPRNSConfig) Coded() bool { return c.IFACNetname != "" || c.IFACPassphrase != "" }
 
 // TCPRNSEffectiveTLS says whether a tcp_rns connection is wrapped in TLS: the
 // switch, or port 443 whatever the switch says (Android GatewayService.kt:1713).
@@ -641,12 +652,17 @@ func (c TCPRNSConfig) Addr() string {
 	return net.JoinHostPort(c.hostname(), strconv.Itoa(c.port()))
 }
 
-// Summary is the status line: host:port, then ", TLS" when the link is TLS.
+// Summary is the status line: host:port, then ", TLS" when the link is TLS
+// and ", network <name>" when it is coded.
 func (c TCPRNSConfig) Summary() string {
+	s := c.Addr()
 	if TCPRNSEffectiveTLS(c.TLS, c.port()) {
-		return c.Addr() + ", TLS"
+		s += ", TLS"
 	}
-	return c.Addr()
+	if c.Coded() {
+		s += ", network " + c.IFACNetname
+	}
+	return s
 }
 
 // TCPRNSClient is the tcp_rns interface: one outbound TCP connection to a
@@ -661,6 +677,8 @@ type TCPRNSClient struct {
 	cfg        TCPRNSConfig
 	clientCert func() (*tls.Certificate, error)
 	callback   func(packet []byte)
+	onConnect  func()      // after each connection is up, before its first read
+	coded      *codedEntry // a coded row's entry, bound to its frames (coded.go)
 
 	// Tests only: rootCAs replaces the system roots, dialAddr is where the
 	// TCP connection goes while TLS still checks cfg.Host, retry and timeout
@@ -687,6 +705,10 @@ type TCPRNSClient struct {
 func NewTCPRNSClient(name string, cfg TCPRNSConfig, clientCert func() (*tls.Certificate, error), callback func(packet []byte)) *TCPRNSClient {
 	return &TCPRNSClient{name: name, cfg: cfg, clientCert: clientCert, callback: callback, retry: tcpRNSReconnect, timeout: tcpRNSConnectTimeout}
 }
+
+// SetOnConnect sets a hook called after each connection is up; set it
+// before Start. A coded row announces the node's own destinations there.
+func (c *TCPRNSClient) SetOnConnect(fn func()) { c.onConnect = fn }
 
 // Start connects in the background and keeps reconnecting until Stop or ctx ends.
 func (c *TCPRNSClient) Start(ctx context.Context) error {
@@ -737,6 +759,9 @@ func (c *TCPRNSClient) run(ctx context.Context) {
 				ev = log.Debug()
 			}
 			ev.Str("iface", c.name).Str("remote", c.cfg.Summary()).Msg("tcp_rns: connected")
+			if c.onConnect != nil {
+				go c.onConnect()
+			}
 			rerr := readHDLC(conn, ctx.Done(), c.deliver)
 			refused, first := c.detach(conn, rerr)
 			switch {

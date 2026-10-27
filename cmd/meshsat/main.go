@@ -1075,9 +1075,13 @@ func main() {
 	// routing_ifaces and managed from Settings > Routing; the MESHSAT_*
 	// variables only seed a first instance of each type on a fresh
 	// database. [MESHSAT-1349, MESHSAT-1350]
+	// Access-coded tcp_rns rows join a workspace's private network on the
+	// Hub; they belong to the Reticulum node alone. [MESHSAT-1722]
+	codedIfaces := routing.NewCodedIfaces()
 	dynIfaces := routing.NewIfaceManager(routing.IfaceManagerConfig{
 		DB:         db,
 		Registry:   ifaceReg,
+		Coded:      codedIfaces,
 		Sink:       proc,
 		BLEAdapter: cfg.BLEAdapter,
 		OnRNodeSupervised: func(id string, r *routing.RNodeInterface) {
@@ -1323,6 +1327,7 @@ func main() {
 		st, rErr := rnsstack.Build(ctx, rnsstack.Config{
 			Identity:         routingID,
 			Registry:         ifaceReg,
+			Coded:            codedIfaces,
 			DB:               db,
 			AnnounceInterval: time.Duration(cfg.AnnounceIntervalSec) * time.Second,
 			AcceptLinks:      cfg.RNSAcceptLinks,

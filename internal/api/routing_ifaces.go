@@ -22,7 +22,9 @@ import (
 func (s *Server) SetIfaceManager(m *routing.IfaceManager) { s.dynIfaces = m }
 
 // dynIfaceRequest is the body of POST and PUT. Config is the type's own JSON;
-// for tcp_rns it is {"host":string,"port":int,"tls":bool} (routing.TCPRNSConfig).
+// for tcp_rns it is {"host":string,"port":int,"tls":bool}, plus
+// "ifac_netname" and "ifac_passphrase" for a row with an access code
+// (routing.TCPRNSConfig).
 type dynIfaceRequest struct {
 	Type    string          `json:"type"`
 	Enabled *bool           `json:"enabled,omitempty"`
@@ -51,7 +53,7 @@ func (s *Server) dynIfaceErr(w http.ResponseWriter, err error) {
 
 // handleListDynIfaces lists the dynamic Reticulum interfaces.
 // @Summary List dynamic Reticulum interfaces
-// @Description RNode, UDP, AutoInterface, KISS TNC and RNS TCP client (tcp_rns) instances with their running state and live statistics. For tcp_rns: online means connected, last_error is the last connect or TLS handshake error (a connection clears it), summary is "host:port" or "host:port, TLS", stats are rx_bytes and tx_bytes.
+// @Description RNode, UDP, AutoInterface, KISS TNC and RNS TCP client (tcp_rns) instances with their running state and live statistics. For tcp_rns: online means connected, last_error is the last connect or TLS handshake error (a connection clears it), summary is "host:port" or "host:port, TLS", followed by ", network <name>" for a row with an access code, stats are rx_bytes and tx_bytes. A row with an access code has coded true and its config without ifac_passphrase.
 // @Tags routing
 // @Produce json
 // @Success 200 {array} routing.DynIfaceStatus
@@ -69,6 +71,7 @@ func (s *Server) handleListDynIfaces(w http.ResponseWriter, r *http.Request) {
 // @Summary Create a dynamic Reticulum interface
 // @Description Validates the type-specific config, persists it and starts the interface when enabled (the default). Type is one of rnode, udp, auto, kiss, tcp_rns; the id is <type>_<n>, so the first tcp_rns is tcp_rns_0 (MeshSat Android's link id).
 // @Description tcp_rns is a TCP client to a stock Reticulum node, HDLC framed, with config {"host":string,"port":int,"tls":bool}: host is required ("tcp_rns: host required"), port defaults to 4242 and must be 1-65535, and TLS is used when tls is true or the port is 443. TLS is 1.2 or later, verified against the system roots and the host name (SNI sent); when the server asks for a client certificate, the Hub client certificate from the Hub settings is presented if both its certificate and key are stored. Connect timeout 10 s, reconnect every 5 s.
+// @Description With "ifac_netname" and "ifac_passphrase" (both or neither; at most 128 and 256 characters) the row carries an interface access code: it joins a private Reticulum network, such as a workspace's Private address on the MeshSat Hub at rns.meshsat.net:4242, and carries only this bridge's own Reticulum traffic. The node never relays between it and the other interfaces, the legacy routing layer cannot use it, and a path learned on it is not stored. It needs the Reticulum node. The passphrase is never shown again.
 // @Tags routing
 // @Accept json
 // @Produce json
@@ -132,6 +135,7 @@ func (s *Server) handleGetDynIface(w http.ResponseWriter, r *http.Request) {
 // handleUpdateDynIface replaces a dynamic interface's config and restarts it.
 // @Summary Update a dynamic Reticulum interface
 // @Description Replaces the config (omit it to keep the stored one), sets enabled (omit it to keep the stored flag), and restarts the interface. enabled:false stops it and keeps its config (a tcp_rns keeps its host, port and tls while off).
+// @Description A tcp_rns config with the stored ifac_netname, host, port and TLS switch and an empty or missing ifac_passphrase keeps the stored passphrase, so a config read back from GET can be saved as it is; a change of host, port or TLS needs the passphrase again.
 // @Tags routing
 // @Accept json
 // @Produce json

@@ -106,6 +106,7 @@ type Node struct {
 
 	receipts map[[FullHashLen]byte]*Receipt
 	ifac     map[string]*reticulum.IFAC
+	leaf     map[string]bool // interfaces that carry only our own traffic (leaf.go) [MESHSAT-1722]
 
 	paid      map[string]*PaidPolicy // paid interfaces open to listed destinations [MESHSAT-1547]
 	paidLast  map[paidKey]time.Time
@@ -144,6 +145,9 @@ type Stats struct {
 	// paid interface under its policy; PaidSuppressed those held back
 	// (destination not listed, or its interval not yet passed).
 	PaidTx, PaidSuppressed uint64
+	// LeafRefused counts announces, path requests and packets not relayed
+	// into or out of a leaf interface (leaf.go).
+	LeafRefused uint64
 }
 
 // ErrNoPath is returned when a packet cannot be delivered.
@@ -188,6 +192,7 @@ func New(cfg Config, tx Transmitter) (*Node, error) {
 		pathWaiters:   make(map[[HashLen]byte][]chan struct{}),
 		receipts:      make(map[[FullHashLen]byte]*Receipt),
 		ifac:          make(map[string]*reticulum.IFAC),
+		leaf:          make(map[string]bool),
 		paid:          make(map[string]*PaidPolicy),
 		paidLast:      make(map[paidKey]time.Time),
 		crossings:     make(map[crossingKey]time.Time),

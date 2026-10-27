@@ -67,6 +67,9 @@ type IfaceManagerConfig struct {
 	OnRNodeUnsupervised func(id string)
 	// ExcludePort keeps the device supervisor off a KISS TNC's serial port.
 	ExcludePort func(path string)
+	// Coded holds the access-coded tcp_rns rows (coded.go); rnsstack reads
+	// it as part of the node's transmitter. Nil refuses to start a coded row.
+	Coded *CodedIfaces
 	// ClientCert supplies the certificate a tcp_rns TLS connection presents
 	// when the server asks for one; it is called at each such handshake.
 	// main.go returns the Hub client certificate and key from hub_connection
@@ -87,14 +90,18 @@ type DynIfaceStatus struct {
 	Config    json.RawMessage `json:"config"`
 	LastError string          `json:"last_error,omitempty"`
 	Summary   string          `json:"summary"`
-	Stats     any             `json:"stats,omitempty"`
-	UpdatedAt string          `json:"updated_at,omitempty"`
+	// Coded: a tcp_rns row with an access code. Its config is shown without
+	// the passphrase, and the row is not among the registry's interfaces.
+	Coded     bool   `json:"coded,omitempty"`
+	Stats     any    `json:"stats,omitempty"`
+	UpdatedAt string `json:"updated_at,omitempty"`
 }
 
 type dynInstance struct {
 	row     database.RoutingIface
 	iface   dynIface
 	ri      *ReticulumInterface
+	coded   bool
 	running bool
 	lastErr string
 	summary string
@@ -210,6 +217,15 @@ func ValidateDynConfig(ifType string, raw json.RawMessage) (json.RawMessage, err
 		if c.Port < 1 || c.Port > 65535 {
 			return nil, fmt.Errorf("tcp_rns: port must be 1-65535")
 		}
+		c.IFACNetname = strings.TrimSpace(c.IFACNetname)
+		if c.Coded() {
+			if c.IFACNetname == "" || c.IFACPassphrase == "" {
+				return nil, fmt.Errorf("tcp_rns: ifac_netname and ifac_passphrase go together")
+			}
+			if len(c.IFACNetname) > 128 || len(c.IFACPassphrase) > 256 {
+				return nil, fmt.Errorf("tcp_rns: ifac_netname is at most 128 characters, ifac_passphrase 256")
+			}
+		}
 		// tls is kept as sent: port 443 turns TLS on at connect time
 		// (TCPRNSEffectiveTLS), not in the stored switch.
 		return json.Marshal(c)
@@ -271,7 +287,7 @@ func (m *IfaceManager) Create(ifType string, raw json.RawMessage, enabled bool) 
 	if err != nil {
 		return "", err
 	}
-	if m.cfg.Registry != nil && m.cfg.Registry.Get(id) != nil {
+	if (m.cfg.Registry != nil && m.cfg.Registry.Get(id) != nil) || m.cfg.Coded.Has(id) {
 		return "", fmt.Errorf("interface id %s is already registered", id)
 	}
 	row := database.RoutingIface{ID: id, Type: ifType, Enabled: enabled, Config: string(norm)}
@@ -299,6 +315,9 @@ func (m *IfaceManager) Update(id string, raw json.RawMessage, enabled bool) erro
 	}
 	if raw == nil {
 		raw = json.RawMessage(in.row.Config)
+	}
+	if in.row.Type == DynTypeTCPRNS {
+		raw = keepTCPRNSPassphrase(json.RawMessage(in.row.Config), raw)
 	}
 	norm, err := ValidateDynConfig(in.row.Type, raw)
 	if err != nil {
@@ -401,8 +420,26 @@ func (m *IfaceManager) status(in *dynInstance) DynIfaceStatus {
 		ID: in.row.ID, Type: in.row.Type, Enabled: in.row.Enabled, Running: in.running,
 		Config: json.RawMessage(in.row.Config), LastError: in.lastErr, Summary: in.summary, UpdatedAt: in.row.UpdatedAt,
 	}
+	if in.row.Type == DynTypeTCPRNS {
+		var c TCPRNSConfig
+		if err := json.Unmarshal([]byte(in.row.Config), &c); err != nil {
+			s.Config = json.RawMessage(`{}`) // never the stored text, which may hold a passphrase
+		} else if c.Coded() {
+			c.IFACPassphrase = ""
+			s.Config, _ = json.Marshal(c)
+			s.Coded = true
+		}
+	}
 	if in.iface != nil && in.running {
 		s.Online = in.iface.IsOnline()
+		if in.coded && !m.cfg.Coded.Armed(in.row.ID) {
+			// Connected, but the node is not running: nothing is sent and
+			// everything received is dropped.
+			if s.Online {
+				s.LastError = "connected, but the Reticulum node is not running: nothing crosses this row"
+			}
+			s.Online = false
+		}
 		switch x := in.iface.(type) {
 		case *RNodeInterface:
 			st := x.Stats()
@@ -483,6 +520,17 @@ func (m *IfaceManager) build(row database.RoutingIface) (dynIface, reticulum.Int
 		if err := json.Unmarshal([]byte(row.Config), &c); err != nil {
 			return nil, "", 0, "", err
 		}
+		if c.Coded() {
+			// Frames go to the node and nowhere else (coded.go).
+			coded := m.cfg.Coded
+			if coded == nil {
+				return nil, "", 0, "", fmt.Errorf("%s has an access code and needs the Reticulum node (MESHSAT_RNS_ENABLED)", row.ID)
+			}
+			e := &codedEntry{}
+			client := NewTCPRNSClient(row.ID, c, m.cfg.ClientCert, func(packet []byte) { coded.deliver(row.ID, e, packet) })
+			client.coded = e
+			return client, reticulum.IfaceTCP, TCPRNSHWMTU, c.Summary(), nil
+		}
 		return NewTCPRNSClient(row.ID, c, m.cfg.ClientCert, cb), reticulum.IfaceTCP, TCPRNSHWMTU, c.Summary(), nil
 	}
 	return nil, "", 0, "", fmt.Errorf("unknown interface type %q", row.Type)
@@ -512,6 +560,9 @@ func (m *IfaceManager) start(id string) error {
 		base = context.Background()
 	}
 	ctx, cancel := context.WithCancel(base)
+	if client, ok := iface.(*TCPRNSClient); ok && client.cfg.Coded() {
+		return m.startCoded(ctx, cancel, in, row, client, mtu, summary)
+	}
 	if err := iface.Start(ctx); err != nil {
 		cancel()
 		m.setErr(id, err)
@@ -544,6 +595,40 @@ func (m *IfaceManager) start(id string) error {
 	return nil
 }
 
+// startCoded starts an access-coded tcp_rns row: registered with the node's
+// coded set before the connection starts, and never with the registry or
+// the processor (coded.go).
+func (m *IfaceManager) startCoded(ctx context.Context, cancel context.CancelFunc, in *dynInstance, row database.RoutingIface, client *TCPRNSClient, mtu int, summary string) error {
+	id := row.ID
+	f, err := reticulum.NewIFAC(client.cfg.IFACNetname, client.cfg.IFACPassphrase, reticulum.DefaultIFACSize)
+	if err != nil {
+		cancel()
+		m.setErr(id, err)
+		return err
+	}
+	e := client.coded
+	e.ifac, e.send, e.online, e.mtu = f, client.Send, client.IsOnline, mtu
+	m.cfg.Coded.add(id, e)
+	client.SetOnConnect(func() { m.cfg.Coded.up(id) })
+	if err := client.Start(ctx); err != nil {
+		cancel()
+		m.cfg.Coded.remove(id)
+		m.setErr(id, err)
+		return err
+	}
+	m.mu.Lock()
+	in.iface = client
+	in.ri = nil
+	in.coded = true
+	in.running = true
+	in.lastErr = ""
+	in.summary = summary
+	in.cancel = cancel
+	m.mu.Unlock()
+	log.Info().Str("iface", id).Str("type", row.Type).Str("summary", summary).Msg("ifacemgr: interface started with an access code; it carries only this node's own traffic")
+	return nil
+}
+
 func (m *IfaceManager) stop(id string) {
 	m.mu.Lock()
 	in, ok := m.inst[id]
@@ -551,12 +636,23 @@ func (m *IfaceManager) stop(id string) {
 		m.mu.Unlock()
 		return
 	}
-	iface, cancel := in.iface, in.cancel
+	iface, cancel, coded := in.iface, in.cancel, in.coded
 	in.running = false
 	in.iface = nil
 	in.ri = nil
+	in.coded = false
 	in.cancel = nil
 	m.mu.Unlock()
+
+	if coded {
+		iface.Stop()
+		if cancel != nil {
+			cancel()
+		}
+		m.cfg.Coded.remove(id)
+		log.Info().Str("iface", id).Msg("ifacemgr: interface stopped")
+		return
+	}
 
 	if r, ok := iface.(*RNodeInterface); ok && r.NeedsSupervisor() && m.cfg.OnRNodeUnsupervised != nil {
 		m.cfg.OnRNodeUnsupervised(id)
@@ -580,4 +676,30 @@ func (m *IfaceManager) setErr(id string, err error) {
 	if in, ok := m.inst[id]; ok {
 		in.lastErr = err.Error()
 	}
+}
+
+// keepTCPRNSPassphrase returns next with the stored passphrase filled in when
+// next is the same network at the same address without one: the API never
+// shows the passphrase, so a config read back and saved carries it empty. A
+// new host, port or TLS switch needs the passphrase again, or the row could
+// be pointed at a server that collects frames tagged with the code.
+func keepTCPRNSPassphrase(stored, next json.RawMessage) json.RawMessage {
+	var old, nw TCPRNSConfig
+	if json.Unmarshal(stored, &old) != nil || json.Unmarshal(next, &nw) != nil {
+		return next
+	}
+	if nw.IFACPassphrase != "" || old.IFACPassphrase == "" || strings.TrimSpace(nw.IFACNetname) != old.IFACNetname ||
+		strings.TrimSpace(nw.Host) != old.Host || nw.port() != old.port() || nw.TLS != old.TLS {
+		return next
+	}
+	var m map[string]json.RawMessage
+	if json.Unmarshal(next, &m) != nil {
+		return next
+	}
+	m["ifac_passphrase"], _ = json.Marshal(old.IFACPassphrase)
+	out, err := json.Marshal(m)
+	if err != nil {
+		return next
+	}
+	return out
 }
