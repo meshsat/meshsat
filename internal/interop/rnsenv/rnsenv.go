@@ -11,6 +11,11 @@
 //  3. when MESHSAT_INTEROP=1 and neither exists: create 2 with
 //     python3 -m venv + pip install rns==<RNSVersion> lxmf==<LXMFVersion>
 //
+// With MESHSAT_INTEROP=1 the lookup holds a lock file beside the venv, so
+// two test binaries started together (internal/reticulum and
+// internal/interop under one `go test`) never see a venv whose python3
+// exists before pip has installed RNS.
+//
 // In CI (CI set) without MESHSAT_INTEROP=1 the tests skip without touching
 // the network. A venv whose RNS or LXMF version differs from the pin fails
 // loudly instead of silently testing against the wrong release.
@@ -25,13 +30,16 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 )
 
 // Pinned upstream versions. Bump them together with the interop matrix.
+// 1.5.7 / 1.2.1 since 27 Oct 2026 (was 1.5.4 / 1.1.0): what Sideband and
+// MeshChat users run, and LXMF 1.2 changed the slow-link timers.
 const (
-	RNSVersion  = "1.5.4"
-	LXMFVersion = "1.1.0"
+	RNSVersion  = "1.5.7"
+	LXMFVersion = "1.2.1"
 )
 
 var (
@@ -86,6 +94,14 @@ func venvDir() string {
 func resolve() {
 	dir := venvDir()
 	py := filepath.Join(dir, "bin", "python3")
+	if os.Getenv("MESHSAT_INTEROP") == "1" {
+		unlock, err := lockFile(dir + ".lock")
+		if err != nil {
+			resolveErr = err
+			return
+		}
+		defer unlock()
+	}
 	if _, err := os.Stat(py); err != nil {
 		if os.Getenv("MESHSAT_INTEROP") != "1" {
 			resolveErr = skipError(fmt.Sprintf("Python RNS %s venv not present at %s (set MESHSAT_INTEROP=1 to create it)", RNSVersion, dir))
@@ -101,6 +117,26 @@ func resolve() {
 		return
 	}
 	pythonBin = py
+}
+
+// lockFile takes an exclusive lock held across processes until the returned
+// function is called.
+func lockFile(path string) (func(), error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("lock %s: %v", path, err)
+	}
+	return func() {
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		_ = f.Close()
+	}, nil
 }
 
 func create(dir string) error {

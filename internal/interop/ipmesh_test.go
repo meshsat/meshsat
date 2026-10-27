@@ -1,6 +1,6 @@
 package interop
 
-// The IP-mesh and TNC interface types against stock rnsd 1.5.4:
+// The IP-mesh and TNC interface types against the pinned stock rnsd:
 // UDPInterface on loopback, KISSInterface over a software TNC pair, and
 // AutoInterface on a veth pair inside a user network namespace (the
 // runner's own interfaces carry no link-local IPv6). [MESHSAT-1350]

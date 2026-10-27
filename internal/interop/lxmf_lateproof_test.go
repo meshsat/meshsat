@@ -14,8 +14,8 @@ import (
 )
 
 // A-13 against upstream: the bridge stops waiting the moment its LXMF
-// packet is out, so the stock Python receiver's proof (RNS 1.5.4, LXMF
-// 1.1.0) arrives after the wait. It reaches Node.OnUnmatchedProof and
+// packet is out, so the stock Python receiver's proof (the pinned RNS and
+// LXMF) arrives after the wait. It reaches Node.OnUnmatchedProof and
 // validates against the hash and key Prepare reported, which is all the
 // ledger needs to record it. [MESHSAT-1584]
 func TestInteropLXMFLateProofReachesTheHook(t *testing.T) {

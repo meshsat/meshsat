@@ -203,7 +203,7 @@ test:interop:
     MESHSAT_INTEROP: "1"
     MESHSAT_RNS_VENV: "${CI_PROJECT_DIR}/.cache/rns-venv"
   cache:
-    key: rns-venv-1.5.4
+    key: rns-venv-1.5.7
     paths:
       - .cache/rns-venv
   before_script:

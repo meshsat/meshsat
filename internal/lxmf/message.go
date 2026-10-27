@@ -1,6 +1,7 @@
 // Package lxmf implements the Lightweight Extensible Message Format on top of
-// internal/rns, wire-compatible with Python LXMF 1.1.0 (LXMF/LXMessage.py,
-// LXMF/LXMRouter.py, LXMF/LXStamper.py). [MESHSAT-1348]
+// internal/rns, written against Python LXMF 1.1.0 (LXMF/LXMessage.py,
+// LXMF/LXMRouter.py, LXMF/LXStamper.py) and verified against the release
+// pinned in internal/interop/rnsenv. [MESHSAT-1348]
 package lxmf
 
 import (

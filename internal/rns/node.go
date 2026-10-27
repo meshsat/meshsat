@@ -2,9 +2,9 @@
 // the wire formats in internal/reticulum: packet filtering and deduplication,
 // the path table with RNS replacement rules, announce rebroadcast as a
 // transport node, HEADER_2 forwarding with link and reverse tables, path
-// requests, links, packet proofs and receipts. It is written against Python
-// RNS 1.5.4 (RNS/Transport.py, RNS/Link.py) and verified against it by the
-// tests in internal/interop.
+// requests, links, packet proofs and receipts. It was written against Python
+// RNS 1.5.4 (RNS/Transport.py, RNS/Link.py) and the tests in internal/interop
+// verify it against the release pinned in internal/interop/rnsenv.
 //
 // The node knows nothing about serial ports or sockets: a Transmitter puts
 // raw packets on named interfaces and the owner feeds received packets to
