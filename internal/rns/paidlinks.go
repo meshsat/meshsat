@@ -56,6 +56,12 @@ type PaidPolicy struct {
 // MaxPaidExtraHops keeps an inflated path well inside PATHFINDER_M.
 const MaxPaidExtraHops = 32
 
+// DefaultPaidExtraHops is what the API gives a paid link that is opened
+// without extra_hops. By the rule 6 x (hops + 3) >= 2 x one-way delay it
+// covers about 60 s each way, and it is MeshSat Android's default too, as
+// the Reticulum contract between the kits and the phone says. [MESHSAT-1714]
+const DefaultPaidExtraHops = 20
+
 func (p *PaidPolicy) allows(dest [HashLen]byte) bool {
 	for _, d := range p.Dests {
 		if d == dest {

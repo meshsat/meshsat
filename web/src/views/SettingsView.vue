@@ -1709,7 +1709,9 @@ watch(() => store.paidLinks, (links) => {
       paidDrafts.value[link.id] = {
         dests: (link.policy?.dests || []).join('\n'),
         minutes: Math.round((link.policy?.min_interval_sec || 300) / 60),
-        hops: link.policy?.extra_hops || 0,
+        // A closed link starts at 20 extra hops, the contract default, so
+        // opening it covers a satellite round trip. [MESHSAT-1714]
+        hops: link.policy?.dests?.length ? (link.policy.extra_hops ?? 0) : 20,
       }
     }
   }

@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"sort"
 
@@ -71,7 +72,7 @@ func (s *Server) handleGetPaidLinks(w http.ResponseWriter, r *http.Request) {
 // handleSetPaidLink replaces the allow-list of one paid interface. An empty
 // list closes the link again.
 // @Summary Set the Reticulum allow-list of a paid link
-// @Description Each listed destination's announces and path requests cross the link at most once per min_interval_sec (default 300). Both ends of the link should list the same destinations.
+// @Description Each listed destination's announces and path requests cross the link at most once per min_interval_sec (default 300). Both ends of the link should list the same destinations. A body that lists destinations without extra_hops gets 20 extra hops (about 60 s each way); an explicit 0 stays 0.
 // @Tags routing
 // @Accept json
 // @Produce json
@@ -97,8 +98,8 @@ func (s *Server) handleSetPaidLink(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, id+" is floodable, so it carries every announce already; an allow-list is for paid links")
 		return
 	}
-	var req rns.PaidPolicyJSON
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	req, err := decodePaidPolicyRequest(r.Body)
+	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
@@ -113,6 +114,29 @@ func (s *Server) handleSetPaidLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, s.paidLinkView(id))
+}
+
+// decodePaidPolicyRequest reads a PUT body. A body that opens the link
+// (destinations listed) without extra_hops gets rns.DefaultPaidExtraHops,
+// so a stock client's link timers cover the satellite round trip; with 0 a
+// direct LXMF message across a satellite times out. An explicit 0 stays 0.
+// [MESHSAT-1714]
+func decodePaidPolicyRequest(body io.Reader) (rns.PaidPolicyJSON, error) {
+	var raw struct {
+		rns.PaidPolicyJSON
+		ExtraHops *int `json:"extra_hops"`
+	}
+	if err := json.NewDecoder(body).Decode(&raw); err != nil {
+		return rns.PaidPolicyJSON{}, err
+	}
+	req := raw.PaidPolicyJSON
+	switch {
+	case raw.ExtraHops != nil:
+		req.ExtraHops = *raw.ExtraHops
+	case len(req.Dests) > 0:
+		req.ExtraHops = rns.DefaultPaidExtraHops
+	}
+	return req, nil
 }
 
 // handleDeletePaidLink closes a paid link to every destination again.

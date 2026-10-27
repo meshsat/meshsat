@@ -140,7 +140,8 @@ func TestMeasureLXMFAcrossSlowPaidLink(t *testing.T) {
 			}
 		})
 	}
-	extra := 0
+	// The kits' default; MESHSAT_SLOWLINK_EXTRA_HOPS=0 measures without it. [MESHSAT-1714]
+	extra := rns.DefaultPaidExtraHops
 	if v := os.Getenv("MESHSAT_SLOWLINK_EXTRA_HOPS"); v != "" {
 		if _, err := fmt.Sscan(v, &extra); err != nil {
 			t.Fatal(err)
@@ -246,7 +247,8 @@ func TestMeasureBridgeLXMFAcrossSlowPaidLink(t *testing.T) {
 		}
 		delay = d
 	}
-	extra := 0
+	// The kits' default; MESHSAT_SLOWLINK_EXTRA_HOPS=0 measures without it. [MESHSAT-1714]
+	extra := rns.DefaultPaidExtraHops
 	if v := os.Getenv("MESHSAT_SLOWLINK_EXTRA_HOPS"); v != "" {
 		if _, err := fmt.Sscan(v, &extra); err != nil {
 			t.Fatal(err)
