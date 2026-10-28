@@ -118,7 +118,7 @@ func TestAChatThatCameAsAFrameIsDeliveredLikeTheGeoChat(t *testing.T) {
 }
 
 func TestACrewNotHeardIsReportedUndeliveredOnTheFramesBearer(t *testing.T) {
-	// parallax has not heard MESHSAT-c2ec for a day: the integrating
+	// parallax has not heard MESHSAT-0c0d for a day: the integrating
 	// session's live proof expects exactly this word back over SMS.
 	r, l, _ := frameRig(true, 0x0000beef)
 	f := vecChat(t)
@@ -134,7 +134,7 @@ func TestACrewNotHeardIsReportedUndeliveredOnTheFramesBearer(t *testing.T) {
 	}
 	raw, _ := hex.DecodeString(got[0][4:])
 	st, err := crewchat.DecodeStatus(raw[4:])
-	if err != nil || st.Status != "undelivered" || st.Reason != "not_heard" || st.Detail != "the kit has not heard MESHSAT-c2ec in the last day" {
+	if err != nil || st.Status != "undelivered" || st.Reason != "not_heard" || st.Detail != "the kit has not heard MESHSAT-0c0d in the last day" {
 		t.Errorf("C3 %+v %v", st, err)
 	}
 	if len(raw) > 120 {

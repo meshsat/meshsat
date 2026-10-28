@@ -18,7 +18,7 @@ const (
 	vecAt        = int64(1793188800) // 2026-10-28T12:00:00Z
 	vecC1        = "4305" + "0102030405060708090a0b0c0d0e0f10" + "0a0b0c0d" + vecOpHash + "04416e6e61" + "07c48020f29794"
 	vecC2        = "4d530143" + "0102030405060708090a0b0c0d0e0f10" + "0a0b0c0d" + "6ae1e3c0" + "01" + "86206d7920f579"
-	vecC3Detail  = "the kit has not heard MESHSAT-c2ec in the last day"
+	vecC3Detail  = "the kit has not heard MESHSAT-0c0d in the last day"
 	vecC3Head    = "4d530144" + "0102030405060708090a0b0c0d0e0f10" + "0a0b0c0d" + "6ae1e3c0" + "04" + "01" + "32"
 )
 
