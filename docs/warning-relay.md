@@ -88,8 +88,36 @@ events, `Processor.Emit`), so the web app and a notifier reading the stream (the
 `data` is the row as `GET /api/warnings` lists it (`bearers` a JSON string there too), plus
 `label` and `expired` (true when the digest arrived expired and went nowhere). A Cancel comes
 with `msg_type` `Cancel` and `cancelled` true, its `ref` naming the warning withdrawn; a test with
-`test` true. A redelivery is no event. There is no Warnings page in the Bridge's web app yet; the
-event is there for it and for the notifier.
+`test` true. A redelivery is no event. The web app's Warnings page and banner (below) and the
+notifier read it.
+
+## The web app
+
+The Bridge's web app has a **Warnings** page at `/warnings` (`web/src/views/WarningsView.vue`,
+"Public warnings" in the operator's More menu and on the engineer's tab strip): the rows
+`GET /api/warnings` holds, in force first, then newest first, each with its TEST, UPDATE or
+CANCELLED mark, the event, the severity (with urgency, certainty and category), the words,
+sent and expires in the operator's local time with the UTC form on hover, the source and the
+label line, how it arrived (Hub, or satellite with the interface on hover), when it arrived, and
+what it went out on (`mesh alert`, `mesh text`, `APRS bulletin`, `2G cell`, `LXMF`; `none` when
+nothing was queued). The state word on each row is `in force`, `expired`, `cancelled` (a Cancel
+named it), `replaced` (an Update named it) or `cancellation` (the Cancel itself).
+
+The page and the banners share one Pinia store (`web/src/stores/warnings.js`): it reads the
+list when its first consumer mounts, again on every `warning` event of the event stream (the
+event's row goes into the list at once, the read is the authority), whenever the stream opens,
+and once a minute as the safety net; its clock ticks every 15 s so a banner drops the minute its
+warning expires. In force is the Bridge's own rule (`warnings.InForce`), the headline is
+`warnings.headline` and the label line `warnings.LabelFor`, rendered again in the store with the
+same words.
+
+The banner (`web/src/components/WarningBanner.vue`) stands at the top of the Dashboard in both
+shells while a warning is in force: one block per warning, `[TEST ][UPDATE: ]WARNING <event>
+<severity> until <HH:MM> UTC` with the warning's words beside it and the label line small
+beneath; red for a real warning, amber for a test; a tap opens the page. On the booth screen
+(`/ttc`) the same component is one line under the header, beside the prepaid SMS banner: the
+newest warning's headline, the label after it, and `+N more` when more are in force. Nothing
+renders when none is.
 
 ## The Community Post banner
 
@@ -107,7 +135,8 @@ view; there is nothing to configure.
 
 ## Owed
 
-A Warnings page in the Bridge's web app (the event and `GET /api/warnings` are its inputs); a
-live digest through the LXMF leg on a kit with a peer heard, and through the Post banner on a
+A live digest through the LXMF leg on a kit with a peer heard, and through the Post banner on a
 kit running the portal (the mesh leg was proven live on 28 Oct 2026; the cell leg's bench tests
-T1 to T7 are listed in `docs/cell-broadcast.md`).
+T1 to T7 are listed in `docs/cell-broadcast.md`); the Warnings page and the banner seen on a
+kit's panel with a live digest (they are proven against the event stream and the API in
+`web/tests/ui/warnings.test.js` only).

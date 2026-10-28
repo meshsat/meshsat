@@ -25,6 +25,7 @@ import TtcDeviceTDeck from '@/components/TtcDeviceTDeck.vue'
 import TtcDeviceTEcho from '@/components/TtcDeviceTEcho.vue'
 import TtcDeviceTDeckPro from '@/components/TtcDeviceTDeckPro.vue'
 import PowerWidget from '@/components/PowerWidget.vue'
+import WarningBanner from '@/components/WarningBanner.vue'
 
 const router = useRouter()
 const route = useRoute()
@@ -1162,6 +1163,10 @@ onUnmounted(() => {
       <span class="inline-block w-1.5 h-1.5 rounded-full" :class="smsCredit.state === 'failed' ? 'bg-red-400' : 'bg-amber-400 animate-pulse'" />
       <span>{{ smsCredit.detail }}</span>
     </div>
+
+    <!-- a relayed public warning in force at this kit: one line, the headline the
+         mesh got and the label after it; nothing when none is in force [MESHSAT-1734] -->
+    <WarningBanner compact />
 
     <!-- ROUTE VIEW -->
     <main v-show="view === 'route'" class="flex-1 flex flex-col min-h-0">

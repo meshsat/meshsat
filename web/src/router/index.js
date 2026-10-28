@@ -18,6 +18,7 @@ const routes = [
   { path: '/radio', name: 'radio', component: () => import('@/views/RadioConfigView.vue') },
   { path: '/tak', name: 'tak', component: () => import('@/views/TakView.vue') },
   { path: '/post', name: 'post', component: () => import('@/views/PostView.vue') },
+  { path: '/warnings', name: 'warnings', component: () => import('@/views/WarningsView.vue') },
   { path: '/ttc', name: 'ttc', component: () => import('@/views/TtcView.vue') },
   { path: '/spectrum', name: 'spectrum', component: () => import('@/views/SpectrumView.vue') },
   { path: '/spectrum/:band', name: 'spectrum-band', component: () => import('@/views/SpectrumBandDetailView.vue'), props: true },

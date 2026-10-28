@@ -17,6 +17,7 @@
   "nav.zigbee":     "Sensors",
   "nav.tak":        "Tactical map",
   "nav.post":       "Community Post",
+  "nav.warnings":   "Public warnings",
   "nav.spectrum":   "RF spectrum",
   "nav.audit":      "Activity log",
   "nav.settings":   "Settings",

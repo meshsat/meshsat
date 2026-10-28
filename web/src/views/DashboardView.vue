@@ -7,6 +7,7 @@ import { formatRelativeTime, formatTimestamp, formatLastHeard, formatAccuracy, f
 import SpectrumWidget from '@/components/SpectrumWidget.vue'
 import GatewayRateSparkline from '@/components/GatewayRateSparkline.vue'
 import TetraWidget from '@/components/TetraWidget.vue'
+import WarningBanner from '@/components/WarningBanner.vue'
 import { useDashboardLayout } from '@/composables/useDashboardLayout'
 
 const store = useMeshsatStore()
@@ -1226,6 +1227,7 @@ function eventDescription(event) {
   if (type === 'cellular') return msg || 'Cellular modem event'
   // Device health watchdog (MESHSAT-817) and APRS receive watchdog (MESHSAT-814)
   if (type === 'sms_credit_low' || type === 'sms_credit_alert' || type === 'sms_credit_reset') return msg || 'SMS bundle counter' // [MESHSAT-1161]
+  if (type === 'warning') return msg ? `public warning relayed: ${msg}` : 'public warning relayed' // [MESHSAT-1734]
   if (type === 'device_unhealthy') return `device unhealthy: ${msg}`
   if (type === 'device_heal_step') return `heal step: ${msg}`
   if (type === 'device_recovered') return `device recovered: ${msg}`
@@ -1706,6 +1708,11 @@ function widgetGridClass(id) {
 
 <template>
   <div class="max-w-[1400px] mx-auto" @click="closeDropdowns">
+
+    <!-- A relayed public warning in force at this kit, above everything,
+         in both shells: the headline the mesh got and the label line
+         beneath; nothing when none is in force. [MESHSAT-1734] -->
+    <WarningBanner />
 
     <!-- ═══ Operator Dashboard (IQ-70 glanceable) ═══
          4-tile layout for field operators. No chart waveforms, no

@@ -17,6 +17,7 @@
   "nav.zigbee":     "ZigBee",
   "nav.tak":        "TAK/CoT",
   "nav.post":       "Community Post",
+  "nav.warnings":   "Public warnings",
   "nav.spectrum":   "Spectrum (RTL-SDR)",
   "nav.audit":      "Audit log",
   "nav.settings":   "Settings",
