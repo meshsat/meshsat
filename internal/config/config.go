@@ -228,6 +228,19 @@ type Config struct {
 	// sends a short MO to fetch waiting MTs; 0 turns it off. [MESHSAT-1282]
 	IMTMTPollMin int
 
+	// The Community Post, a kit's no-app front door on its own listener
+	// (internal/post). Off until PostListen is set. [MESHSAT-1733]
+	PostListen      string // the portal's listener inside the container, e.g. 0.0.0.0:8081; "" = off
+	PostURL         string // the URL the captive detection sends a phone to (the AP address)
+	PostOperator    string // the operator's name on the "about this post" page
+	PostBearer      string // "auto" (the kit's satellite link) or an interface id
+	PostPerHour     int    // posts per phone per hour (0 = no ceiling)
+	PostPerDay      int    // posts per phone per day (0 = no ceiling)
+	PostMaxChars    int    // characters a post may carry
+	PostMaxBytes    int    // bytes a post may carry
+	PostBoardDays   int    // days a safe-and-well line stays
+	PostAutoApprove bool   // the approval queue off: a post leaves at once
+
 	// Hub WebSocket relay: serve this bridge's API to the tenant's other
 	// bridges (phones) through the Hub when no direct path exists [MESHSAT-613]
 	HubRelayEnabled bool   // default true; needs a Hub connection and a re-issued certificate
@@ -364,6 +377,17 @@ func Load() *Config {
 
 		HubRelayEnabled: envBool("MESHSAT_HUB_RELAY_ENABLED", true),
 		HubAPIURL:       envStr("MESHSAT_HUB_API_URL", ""),
+
+		PostListen:      envStr("MESHSAT_POST_LISTEN", ""),
+		PostURL:         envStr("MESHSAT_POST_URL", "http://10.44.0.1/"),
+		PostOperator:    envStr("MESHSAT_POST_OPERATOR", ""),
+		PostBearer:      envStr("MESHSAT_POST_BEARER", "auto"),
+		PostPerHour:     envInt("MESHSAT_POST_PER_HOUR", 3),
+		PostPerDay:      envInt("MESHSAT_POST_PER_DAY", 10),
+		PostMaxChars:    envInt("MESHSAT_POST_MAX_CHARS", 150),
+		PostMaxBytes:    envInt("MESHSAT_POST_MAX_BYTES", 240),
+		PostBoardDays:   envInt("MESHSAT_POST_BOARD_DAYS", 30),
+		PostAutoApprove: envBool("MESHSAT_POST_AUTO_APPROVE", false),
 	}
 }
 

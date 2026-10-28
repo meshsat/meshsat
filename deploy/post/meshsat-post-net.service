@@ -1,0 +1,14 @@
+[Unit]
+Description=MeshSat Community Post: the post's interface (USB WiFi dongle, never wlan0)
+Documentation=file:/usr/local/share/doc/meshsat/community-post.md
+After=network.target
+Conflicts=meshsat-p2p-link.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/meshsat-post-net up
+ExecStop=/usr/local/bin/meshsat-post-net down
+
+# No [Install] section on purpose: these units are started together by
+# scripts/post-up.sh for a post that is open, and never at boot by an install.

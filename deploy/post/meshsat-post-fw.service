@@ -1,0 +1,13 @@
+[Unit]
+Description=MeshSat Community Post: the post's own nftables table (53/67/80 in, nothing forwarded)
+After=meshsat-post-net.service
+Requires=meshsat-post-net.service
+BindsTo=meshsat-post-net.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /run/meshsat-post/nftables.conf
+ExecStop=/usr/sbin/nft delete table inet meshsat_post
+
+# No [Install] section on purpose (see meshsat-post-net.service).

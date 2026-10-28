@@ -16,6 +16,7 @@
   "nav.meshtastic": "Mesh radio",
   "nav.zigbee":     "Sensors",
   "nav.tak":        "Tactical map",
+  "nav.post":       "Community Post",
   "nav.spectrum":   "RF spectrum",
   "nav.audit":      "Activity log",
   "nav.settings":   "Settings",

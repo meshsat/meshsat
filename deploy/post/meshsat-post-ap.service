@@ -1,0 +1,13 @@
+[Unit]
+Description=MeshSat Community Post: open access point (hostapd)
+After=meshsat-post-net.service
+Requires=meshsat-post-net.service
+BindsTo=meshsat-post-net.service
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/hostapd /run/meshsat-post/hostapd.conf
+Restart=on-failure
+RestartSec=5
+
+# No [Install] section on purpose (see meshsat-post-net.service).

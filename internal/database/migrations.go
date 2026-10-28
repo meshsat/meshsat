@@ -1904,6 +1904,56 @@ var migrations = []string{
 		UNIQUE (message_id, idx)
 	);
 	CREATE INDEX IF NOT EXISTS idx_lxmf_attachments_hash ON lxmf_attachments(lxmf_hash);`,
+	// v84: the Community Post, a kit's no-app front door (internal/post).
+	// post_messages is what people wrote on the portal, one row per pickup
+	// code; post_replies what came back for a code; post_board the opt-in
+	// safe-and-well board, each row with its own expiry; post_sessions the
+	// per-phone quota counters and the captive-portal sign-in mark. Every
+	// table is self-contained: nothing else references them. [MESHSAT-1733]
+	`CREATE TABLE IF NOT EXISTS post_messages (
+		code        TEXT PRIMARY KEY,
+		session     TEXT NOT NULL,
+		recipient   TEXT NOT NULL,
+		text        TEXT NOT NULL,
+		name        TEXT NOT NULL DEFAULT '',
+		class       TEXT NOT NULL DEFAULT 'routine',
+		status      TEXT NOT NULL,
+		lang        TEXT NOT NULL DEFAULT 'en',
+		msg_ref     TEXT NOT NULL DEFAULT '',
+		delivery_id INTEGER NOT NULL DEFAULT 0,
+		created_at  TEXT NOT NULL,
+		updated_at  TEXT NOT NULL
+	);
+	CREATE INDEX IF NOT EXISTS idx_post_messages_status ON post_messages(status, created_at);
+	CREATE INDEX IF NOT EXISTS idx_post_messages_recipient ON post_messages(recipient, created_at);
+	CREATE TABLE IF NOT EXISTS post_replies (
+		id          INTEGER PRIMARY KEY AUTOINCREMENT,
+		code        TEXT NOT NULL,
+		from_addr   TEXT NOT NULL,
+		text        TEXT NOT NULL,
+		received_at TEXT NOT NULL
+	);
+	CREATE INDEX IF NOT EXISTS idx_post_replies_code ON post_replies(code, received_at);
+	CREATE TABLE IF NOT EXISTS post_board (
+		id         INTEGER PRIMARY KEY AUTOINCREMENT,
+		name       TEXT NOT NULL,
+		name_key   TEXT NOT NULL,
+		status     TEXT NOT NULL,
+		place      TEXT NOT NULL DEFAULT '',
+		created_at TEXT NOT NULL,
+		expires_at TEXT NOT NULL
+	);
+	CREATE INDEX IF NOT EXISTS idx_post_board_name ON post_board(name_key, expires_at);
+	CREATE TABLE IF NOT EXISTS post_sessions (
+		client_key   TEXT PRIMARY KEY,
+		created_at   TEXT NOT NULL,
+		last_seen_at TEXT NOT NULL,
+		hour_bucket  TEXT NOT NULL DEFAULT '',
+		hour_count   INTEGER NOT NULL DEFAULT 0,
+		day_bucket   TEXT NOT NULL DEFAULT '',
+		day_count    INTEGER NOT NULL DEFAULT 0,
+		signed_in    INTEGER NOT NULL DEFAULT 0
+	);`,
 }
 
 // postMigration is what a migration needs to know that its SQL cannot see:

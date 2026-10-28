@@ -41,6 +41,10 @@ type Processor struct {
 	// directText sees every text a mesh node sends to this Bridge's own
 	// node (gateway.TAKChat.Reply). [MESHSAT-1705]
 	directText atomic.Pointer[func(from uint32, text string)]
+	// gatewayText sees every text a gateway receives, as it came off the
+	// link and before the chain: the Community Post's reply parser
+	// (post.Service.HandleInbound). [MESHSAT-1733]
+	gatewayText atomic.Pointer[func(ifaceID, from, text string)]
 	// hop takes the hop set's passive evidence: a link that just received
 	// a frame carries. Nil = none. [MESHSAT-1650]
 	hop atomic.Pointer[hopSink]
@@ -198,6 +202,19 @@ func (p *Processor) SetMeshDirectTextHook(fn func(from uint32, text string)) {
 		return
 	}
 	p.directText.Store(&fn)
+}
+
+// SetGatewayTextHook hands fn every text a gateway receives, with the
+// interface it came on and the peer address, exactly as it came off the link
+// and before the interface's chain or the rules see it: the Community Post
+// reads the Hub's "[from <address>] ..." replies there. fn runs on its own
+// goroutine and only observes. [MESHSAT-1733]
+func (p *Processor) SetGatewayTextHook(fn func(ifaceID, from, text string)) {
+	if fn == nil {
+		p.gatewayText.Store(nil)
+		return
+	}
+	p.gatewayText.Store(&fn)
 }
 
 func (p *Processor) oobHandler() func(ctx context.Context, ifaceID, fromAddr, text string) bool {
@@ -1317,6 +1334,12 @@ func (p *Processor) StartGatewayReceiver(ctx context.Context, gw gateway.Gateway
 					if oob(ctx, sourceIface, msg.FromAddr, p.DecodeIngress(sourceIface, msg.Text)) {
 						continue
 					}
+				}
+				// The Community Post reads the Hub's replies off the raw
+				// text, observing only. [MESHSAT-1733]
+				if h := p.gatewayText.Load(); h != nil {
+					iface, from, text := sourceIface, fromAddr, msg.Text
+					go (*h)(iface, from, text)
 				}
 
 				log.Info().Str("source", msg.Source).Str("from", fromAddr).Str("text", msg.Text).Msg("gateway inbound message")

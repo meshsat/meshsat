@@ -1,0 +1,13 @@
+[Unit]
+Description=MeshSat Community Post: DHCP and catch-all DNS on the post's interface (dnsmasq)
+After=meshsat-post-net.service
+Requires=meshsat-post-net.service
+BindsTo=meshsat-post-net.service
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/dnsmasq --keep-in-foreground --conf-file=/run/meshsat-post/dnsmasq.conf --pid-file=/run/meshsat-post/dnsmasq.pid
+Restart=on-failure
+RestartSec=5
+
+# No [Install] section on purpose (see meshsat-post-net.service).

@@ -1,0 +1,96 @@
+#!/bin/sh
+# MeshSat Community Post: the post's interface, up or down. [MESHSAT-1733]
+#
+# `up` finds the USB WiFi dongle (the MT7612U, wlx*), takes it from
+# wpa_supplicant, gives it the post's address, renders the hostapd, dnsmasq
+# and nftables files from the templates with the values in
+# /etc/default/meshsat-post, and sets the two sysctls the ruleset needs.
+# `down` undoes that. The kit's own wlan0 is never named and never touched:
+# it is the only management path to a sealed box.
+#
+# The dongle is also the kit-to-kit P2P bearer (meshsat-p2p-link). One or
+# the other: `up` refuses while that unit is active.
+set -eu
+
+[ -r /etc/default/meshsat-post ] && . /etc/default/meshsat-post
+IFACE="${MESHSAT_POST_IFACE:-}"
+ADDR_CIDR="${MESHSAT_POST_ADDR:-10.44.0.1/24}"
+SSID="${MESHSAT_POST_SSID:-MeshSat Post}"
+CHANNEL="${MESHSAT_POST_CHANNEL:-6}"
+COUNTRY="${MESHSAT_POST_COUNTRY:-NL}"
+TXPOWER="${MESHSAT_POST_TXPOWER:-15}"
+BACKEND="${MESHSAT_POST_BACKEND:-127.0.0.1:8081}"
+DHCP_FROM="${MESHSAT_POST_DHCP_FROM:-10.44.0.10}"
+DHCP_TO="${MESHSAT_POST_DHCP_TO:-10.44.0.200}"
+TEMPLATES="${MESHSAT_POST_TEMPLATES:-/usr/local/share/meshsat-post}"
+RUN=/run/meshsat-post
+
+ADDR="${ADDR_CIDR%%/*}"
+BACKEND_IP="${BACKEND%%:*}"
+BACKEND_PORT="${BACKEND##*:}"
+
+find_iface() {
+  if [ -n "$IFACE" ]; then
+    [ -e "/sys/class/net/$IFACE" ] || { echo "meshsat-post-net: $IFACE is not present" >&2; exit 1; }
+    echo "$IFACE"
+    return
+  fi
+  i=$(ls /sys/class/net | grep '^wlx' | head -1)
+  [ -n "$i" ] || { echo "meshsat-post-net: no USB WiFi interface (wlx*) present" >&2; exit 1; }
+  echo "$i"
+}
+
+render() {
+  sed -e "s|@IFACE@|$IFACE|g" -e "s|@ADDR@|$ADDR|g" -e "s|@SSID@|$SSID|g" -e "s|@CHANNEL@|$CHANNEL|g" \
+      -e "s|@COUNTRY@|$COUNTRY|g" -e "s|@BACKEND@|$BACKEND|g" -e "s|@BACKEND_IP@|$BACKEND_IP|g" \
+      -e "s|@BACKEND_PORT@|$BACKEND_PORT|g" -e "s|@DHCP_FROM@|$DHCP_FROM|g" -e "s|@DHCP_TO@|$DHCP_TO|g" \
+      "$TEMPLATES/$1" > "$RUN/$1"
+}
+
+case "${1:-}" in
+  up)
+    case "$IFACE" in wlan0) echo "meshsat-post-net: refusing to use wlan0, the management path" >&2; exit 1;; esac
+    if systemctl is-active --quiet meshsat-p2p-link.service 2>/dev/null; then
+      echo "meshsat-post-net: meshsat-p2p-link is active on the same dongle; stop it first" >&2
+      exit 1
+    fi
+    IFACE=$(find_iface)
+    case "$IFACE" in wlan0) echo "meshsat-post-net: refusing to use wlan0, the management path" >&2; exit 1;; esac
+    mkdir -p "$RUN"
+    for f in hostapd.conf dnsmasq.conf nftables.conf; do
+      [ -r "$TEMPLATES/$f" ] || { echo "meshsat-post-net: template $TEMPLATES/$f missing" >&2; exit 1; }
+      render "$f"
+    done
+    echo "$IFACE" > "$RUN/iface"
+    # wpa_supplicant claims the dongle on some kits; the AP needs it alone.
+    pkill -f "wpa_supplicant.*$IFACE" 2>/dev/null || true
+    ip link set "$IFACE" down 2>/dev/null || true
+    iw dev "$IFACE" set type managed 2>/dev/null || true
+    ip addr flush dev "$IFACE" 2>/dev/null || true
+    ip addr add "$ADDR_CIDR" dev "$IFACE"
+    ip link set "$IFACE" up
+    # The Dutch limit at 2.4 GHz is 100 mW EIRP; the dongle's antennas add
+    # ~5 dBi, so the radio is capped well under it.
+    iw dev "$IFACE" set txpower fixed "$((TXPOWER * 100))" 2>/dev/null || true
+    iw dev "$IFACE" set power_save off 2>/dev/null || true
+    sysctl -q -w "net.ipv6.conf.$IFACE.disable_ipv6=1" || true
+    # The portal listener is published on the host's loopback; the DNAT in
+    # the ruleset needs this to reach it from the post's interface.
+    sysctl -q -w "net.ipv4.conf.$IFACE.route_localnet=1"
+    echo "meshsat-post-net: $IFACE up at $ADDR_CIDR, SSID '$SSID', channel $CHANNEL, country $COUNTRY, portal backend $BACKEND"
+    ;;
+  down)
+    IFACE=$(cat "$RUN/iface" 2>/dev/null || true)
+    if [ -n "$IFACE" ] && [ -e "/sys/class/net/$IFACE" ]; then
+      sysctl -q -w "net.ipv4.conf.$IFACE.route_localnet=0" 2>/dev/null || true
+      ip addr flush dev "$IFACE" 2>/dev/null || true
+      ip link set "$IFACE" down 2>/dev/null || true
+    fi
+    rm -f "$RUN/iface" "$RUN/hostapd.conf" "$RUN/dnsmasq.conf" "$RUN/nftables.conf"
+    echo "meshsat-post-net: down"
+    ;;
+  *)
+    echo "usage: meshsat-post-net up|down" >&2
+    exit 2
+    ;;
+esac

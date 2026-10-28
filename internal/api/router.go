@@ -20,6 +20,7 @@ import (
 	"meshsat/internal/keystore"
 	"meshsat/internal/lxmf"
 	"meshsat/internal/oob"
+	cpost "meshsat/internal/post"
 	"meshsat/internal/rns"
 	"meshsat/internal/routing"
 	"meshsat/internal/rules"
@@ -34,6 +35,7 @@ type Server struct {
 	db            *database.DB
 	mesh          transport.MeshTransport
 	processor     *engine.Processor
+	post          *cpost.Service // the Community Post's operator side; nil = not configured [MESHSAT-1733]
 	gwManager     *gateway.Manager
 	accessEval    *rules.AccessEvaluator
 	tleMgr        *engine.TLEManager
@@ -513,6 +515,15 @@ func (s *Server) Router() http.Handler {
 		r.Get("/tak/events/recent", s.handleTAKRecentEvents)
 		r.Post("/tak/chat", s.handleTAKSendChat)
 		r.Post("/tak/nineline", s.handleTAKSendNineLine)
+
+		// The Community Post's operator side: the approval queue and the
+		// settings. The portal itself is on its own listener. [MESHSAT-1733]
+		r.Get("/post/config", s.handleGetPostConfig)
+		r.Put("/post/config", s.handleSetPostConfig)
+		r.Get("/post/queue", s.handleGetPostQueue)
+		r.Get("/post/{code}", s.handleGetPost)
+		r.Post("/post/{code}/approve", s.handleApprovePost)
+		r.Post("/post/{code}/refuse", s.handleRefusePost)
 
 		// Iridium modem info
 		r.Get("/iridium/modem", s.handleGetSatModemInfo)

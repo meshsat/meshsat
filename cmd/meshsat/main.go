@@ -41,6 +41,7 @@ import (
 	"meshsat/internal/keystore"
 	"meshsat/internal/lxmf"
 	"meshsat/internal/oob"
+	"meshsat/internal/post"
 	"meshsat/internal/relayclient"
 	"meshsat/internal/reticulum"
 	"meshsat/internal/rnode"
@@ -2454,6 +2455,47 @@ func main() {
 	})
 	proc.SetMeshDirectTextHook(func(from uint32, text string) { takChat.Reply(from, text) })
 
+	// The Community Post [MESHSAT-1733]: the no-app front door on its own
+	// listener, off until MESHSAT_POST_LISTEN is set. The operator API under
+	// /api/post answers 503 until then. An approved post leaves as one plain
+	// "@" lane text on the kit's satellite link; the Hub's "[from ...]"
+	// replies come back through the gateway text hook.
+	var postSvc *post.Service
+	var postServer *http.Server
+	if cfg.PostListen != "" {
+		postSvc = post.New(post.Config{
+			Listen: cfg.PostListen, PortalURL: cfg.PostURL, Operator: cfg.PostOperator, Bearer: cfg.PostBearer,
+			PostsPerHour: cfg.PostPerHour, PostsPerDay: cfg.PostPerDay, MaxTextChars: cfg.PostMaxChars, MaxBytes: cfg.PostMaxBytes,
+			BoardRetention: time.Duration(cfg.PostBoardDays) * 24 * time.Hour, AutoApprove: cfg.PostAutoApprove,
+		}, post.Deps{
+			DB:    db,
+			Queue: dispatcher,
+			Bearer: func() (string, bool) {
+				if cfg.PostBearer != "" && cfg.PostBearer != "auto" {
+					return cfg.PostBearer, gwMgr.GatewayByInterfaceID(cfg.PostBearer) != nil
+				}
+				// The kit's satellite link, whichever modem it carries;
+				// a post waits in the ledger until the link is up.
+				id, _ := hubUplinkSatInterface(hubUplinkGatewayStatus(gwMgr), time.Now())
+				return id, gwMgr.GatewayByInterfaceID(id) != nil
+			},
+		})
+		srv.SetPost(postSvc)
+		proc.SetGatewayTextHook(postSvc.HandleInbound)
+		postServer = &http.Server{
+			Addr:              cfg.PostListen,
+			Handler:           postSvc.Handler(),
+			ReadHeaderTimeout: 5 * time.Second,
+			ReadTimeout:       10 * time.Second,
+			WriteTimeout:      10 * time.Second,
+			IdleTimeout:       30 * time.Second,
+			MaxHeaderBytes:    8 << 10,
+		}
+		go postSvc.Run(ctx, 15*time.Second)
+		log.Info().Str("listen", cfg.PostListen).Str("url", cfg.PostURL).Bool("auto_approve", postSvc.Settings().AutoApprove).
+			Msg("community post armed")
+	}
+
 	var hubReporter *hubreporter.HubReporter
 	var satFallback *hubreporter.SatFallback // [MESHSAT-963]
 	var hubRelay *relayclient.Client         // [MESHSAT-613]
@@ -3526,6 +3568,16 @@ func main() {
 			log.Fatal().Err(err).Msg("HTTP server failed")
 		}
 	}()
+	// The Community Post's portal, on its own address; a failure here never
+	// takes the Bridge down. [MESHSAT-1733]
+	if postServer != nil {
+		go func() {
+			log.Info().Str("listen", postServer.Addr).Msg("community post portal listening")
+			if err := postServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Error().Err(err).Msg("community post portal failed; the post is off")
+			}
+		}()
+	}
 
 	// Wait for shutdown signal
 	sig := <-sigCh
@@ -3589,6 +3641,11 @@ func main() {
 	defer shutdownCancel()
 	if err := httpServer.Shutdown(shutdownCtx); err != nil {
 		log.Error().Err(err).Msg("HTTP server shutdown error")
+	}
+	if postServer != nil {
+		if err := postServer.Shutdown(shutdownCtx); err != nil {
+			log.Error().Err(err).Msg("community post portal shutdown error")
+		}
 	}
 
 	log.Info().Msg("MeshSat stopped")
