@@ -93,9 +93,11 @@ func TestParseMid(t *testing.T) {
 	}
 }
 
-// The mid's room at the packet limits (r40 review, decision 4): with it, 259
-// bytes of content fill a single packet and 260 do not; 283 fill a link
-// packet and 284 do not. Without it the limits are 295 and 319.
+// The mid's room at the packet limits (r40 review, decision 4): with it, 252
+// bytes of content fill a single packet and 253 do not (under 256 bytes the
+// content's msgpack header is a byte shorter); 283 fill a link packet and
+// 284 do not. Without it the limits are 287 (LXMF 1.2, MESHSAT-1751; 295
+// under 1.1) and 319.
 func TestMidRoomAtThePacketLimits(t *testing.T) {
 	var mid [16]byte
 	size := func(n int, fields lxmf.Value) int {
@@ -107,12 +109,12 @@ func TestMidRoomAtThePacketLimits(t *testing.T) {
 		fields   lxmf.Value
 		fits     bool
 	}{
-		{259, lxmf.PacketMaxContent, lxmf.MidFields(mid), true},
-		{260, lxmf.PacketMaxContent, lxmf.MidFields(mid), false},
+		{252, lxmf.PacketMaxContent, lxmf.MidFields(mid), true},
+		{253, lxmf.PacketMaxContent, lxmf.MidFields(mid), false},
 		{283, lxmf.LinkMaxContent, lxmf.MidFields(mid), true},
 		{284, lxmf.LinkMaxContent, lxmf.MidFields(mid), false},
-		{295, lxmf.PacketMaxContent, lxmf.MapOf(), true},
-		{296, lxmf.PacketMaxContent, lxmf.MapOf(), false},
+		{287, lxmf.PacketMaxContent, lxmf.MapOf(), true},
+		{288, lxmf.PacketMaxContent, lxmf.MapOf(), false},
 	} {
 		if got := size(c.n, c.fields) <= c.limit; got != c.fits {
 			t.Fatalf("%d bytes (content size %d) within %d: %v, want %v", c.n, size(c.n, c.fields), c.limit, got, c.fits)

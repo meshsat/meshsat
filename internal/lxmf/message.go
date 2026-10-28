@@ -15,18 +15,21 @@ import (
 
 // Sizes and limits (LXMessage.py).
 const (
-	AppName          = "lxmf"
-	DeliveryAspect   = "delivery"
-	DeliveryName     = AppName + "." + DeliveryAspect
-	DestLen          = 16
-	SigLen           = 64
-	StampLen         = 32
-	TimestampSize    = 8
-	StructOverhead   = 8
-	Overhead         = 2*DestLen + SigLen + TimestampSize + StructOverhead // 112
-	EncryptedPktMDU  = reticulum.EncryptedMDU + TimestampSize              // 391
-	PacketMaxContent = EncryptedPktMDU - Overhead + DestLen                // 295
-	LinkMaxContent   = 431 - Overhead                                      // 319 at MTU 500
+	AppName        = "lxmf"
+	DeliveryAspect = "delivery"
+	DeliveryName   = AppName + "." + DeliveryAspect
+	DestLen        = 16
+	SigLen         = 64
+	StampLen       = 32
+	TimestampSize  = 8
+	StructOverhead = 8
+	Overhead       = 2*DestLen + SigLen + TimestampSize + StructOverhead // 112
+	// EncryptedPktMDU is LXMF 1.2's ENCRYPTED_PACKET_MDU: the encrypted
+	// MDU itself. 1.1 added the timestamp size (391) and so chose a single
+	// packet for a message eight bytes too long for one (MESHSAT-1751).
+	EncryptedPktMDU  = reticulum.EncryptedMDU               // 383
+	PacketMaxContent = EncryptedPktMDU - Overhead + DestLen // 287
+	LinkMaxContent   = 431 - Overhead                       // 319 at MTU 500
 )
 
 // Method is how a message travels.

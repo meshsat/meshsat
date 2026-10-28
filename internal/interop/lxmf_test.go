@@ -252,12 +252,13 @@ func TestInteropLXMFMidFieldBothWays(t *testing.T) {
 		t.Fatalf("python got fields %v, want %s", rcv["fields_hex"], fx.FieldsHex)
 	}
 
-	// The boundary with the mid (r40 review, decision 4): 259 bytes still go
-	// as one packet, 260 over a link, and stock LXMF takes both.
+	// The boundary with the mid (r40 review, decision 4; LXMF 1.2's single
+	// packet limit since MESHSAT-1751): 252 bytes still go as one packet,
+	// 253 over a link, and stock LXMF takes both.
 	for _, c := range []struct {
 		n    int
 		want lxmf.Method
-	}{{259, lxmf.Opportunistic}, {260, lxmf.Direct}} {
+	}{{252, lxmf.Opportunistic}, {253, lxmf.Direct}} {
 		body := strings.Repeat("b", c.n)
 		_, res, err := r.Send(ctx, h16(p.Delivery), []byte(body), nil, lxmf.MidFields(mid), 0)
 		if err != nil {
