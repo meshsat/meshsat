@@ -1064,7 +1064,7 @@ func (d *Dispatcher) dispatchAccess(sourceInterface string, msg rules.RouteMessa
 			if words, ok := cannedText(text); ok {
 				text = words
 			}
-			r := d.queueLXMFForward(m.Rule, sourceInterface, destInterface, msgRef, text, fwdOpts, visited, maxRetries, ttlSeconds, origin, workPrefix)
+			r := d.queueLXMFForward(m.Rule, sourceInterface, destInterface, msgRef, text, fwdOpts, visited, maxRetries, ttlSeconds, origin, workPrefix, msg.Omitted)
 			res.Queued, res.Existing, res.Skipped, res.Failed = res.Queued+r.Queued, res.Existing+r.Existing, res.Skipped+r.Skipped, res.Failed+r.Failed
 			if r.Queued > 0 {
 				d.noteDelivered(destInterface, wire)
@@ -1162,6 +1162,7 @@ func (d *Dispatcher) dispatchAccess(sourceInterface string, msg rules.RouteMessa
 				Visited:     visited,
 				QoSLevel:    m.Rule.QoSLevel,
 				Destination: destination,
+				Reason:      omittedReason(msg.Omitted),
 			}
 
 			// Set TTL expiry if configured (P0 critical messages exempt — never expire)
@@ -1251,13 +1252,24 @@ func (d *Dispatcher) cellDestinations(ifaceID string, opts forwardOptions) []str
 // lxmfHashLen is the hex length of an lxmf.delivery destination hash.
 const lxmfHashLen = 32
 
+// omittedReason is the ledger row's reason for a text whose source message
+// carried more (a voice note, a photo) than the rules forward: the row says
+// what went out and what stayed on the kit. "" when nothing was left out.
+// [MESHSAT-1735]
+func omittedReason(omitted string) string {
+	if omitted == "" {
+		return ""
+	}
+	return "text only; not carried: " + omitted
+}
+
 // queueLXMFForward queues what an access rule forwards to lxmf_0: one
 // class-lxmf row per destination in forward_options.lxmf_destinations, the
 // body {content, title} the LXMF sender reads. A rule that names no valid
 // destination queues nothing: an LXMF message has no default recipient.
 // [MESHSAT-1554]
 func (d *Dispatcher) queueLXMFForward(rule database.AccessRule, sourceInterface, destInterface, msgRef, text string,
-	opts forwardOptions, visited string, maxRetries, ttlSeconds int, origin *dispatchOrigin, workPrefix string) DispatchResult {
+	opts forwardOptions, visited string, maxRetries, ttlSeconds int, origin *dispatchOrigin, workPrefix, omitted string) DispatchResult {
 	var res DispatchResult
 	if text == "" {
 		res.Skipped++
@@ -1294,6 +1306,7 @@ func (d *Dispatcher) queueLXMFForward(rule database.AccessRule, sourceInterface,
 			QoSLevel:    rule.QoSLevel,
 			Destination: dest,
 			Class:       database.DeliveryClassLXMF,
+			Reason:      omittedReason(omitted),
 		}
 		if ttlSeconds > 0 && rule.Priority > 0 {
 			del.TTLSeconds = ttlSeconds

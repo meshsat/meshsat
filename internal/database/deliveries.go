@@ -140,10 +140,10 @@ func insertDelivery(q execer, d MessageDelivery) (int64, error) {
 		class = DeliveryClassMessage
 	}
 	res, err := q.Exec(`INSERT INTO message_deliveries
-		(msg_ref, rule_id, channel, status, priority, payload, text_preview, retries, max_retries, next_retry, visited, ttl_seconds, expires_at, qos_level, seq_num, signature, signer_id, precedence, destination, delivery_class)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		(msg_ref, rule_id, channel, status, priority, payload, text_preview, retries, max_retries, next_retry, visited, ttl_seconds, expires_at, qos_level, seq_num, signature, signer_id, precedence, destination, delivery_class, reason)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		d.MsgRef, d.RuleID, d.Channel, d.Status, d.Priority, d.Payload, d.TextPreview, d.Retries, d.MaxRetries, d.NextRetry, visited,
-		d.TTLSeconds, d.ExpiresAt, d.QoSLevel, d.SeqNum, d.Signature, d.SignerID, precedence, d.Destination, class)
+		d.TTLSeconds, d.ExpiresAt, d.QoSLevel, d.SeqNum, d.Signature, d.SignerID, precedence, d.Destination, class, d.Reason)
 	if err != nil {
 		return 0, fmt.Errorf("insert delivery: %w", err)
 	}

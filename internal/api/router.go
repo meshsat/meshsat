@@ -868,6 +868,9 @@ func (s *Server) Router() http.Handler {
 		r.Get("/lxmf/peers", s.handleLXMFPeers)
 		r.Post("/lxmf/send", s.handleLXMFSend)
 		r.Post("/lxmf/announce", s.handleLXMFAnnounce)
+		// A message's voice note and photo [MESHSAT-1735]
+		r.Get("/lxmf/messages/{id}/attachments", s.handleLXMFAttachments)
+		r.Get("/lxmf/messages/{id}/attachments/{n}", s.handleLXMFAttachment)
 
 		// Geofence zones
 		r.Get("/geofences", s.handleGetGeofences)

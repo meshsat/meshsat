@@ -39,6 +39,7 @@ import (
 	"meshsat/internal/hubreporter"
 	"meshsat/internal/hubroute"
 	"meshsat/internal/keystore"
+	"meshsat/internal/lxmf"
 	"meshsat/internal/oob"
 	"meshsat/internal/relayclient"
 	"meshsat/internal/reticulum"
@@ -1342,6 +1343,7 @@ func main() {
 				MaxOutboundStampCost: cfg.LXMFMaxOutboundStampCost,
 				AnnounceInterval:     time.Duration(cfg.LXMFAnnounceIntervalSec) * time.Second,
 				InboundPerMinute:     cfg.LXMFInboundPerMinute,
+				AttachmentStoreBytes: cfg.LXMFAttachmentStoreBytes,
 			},
 			OnAnnounce: func(ann *reticulum.Announce, raw []byte, iface string) {
 				legacy, lErr := routing.UnmarshalAnnounce(raw)
@@ -1961,12 +1963,16 @@ func main() {
 			// An inbound LXMF message meets the access rules as lxmf_0, sender
 			// "lxmf:<hash>", so a rule can carry it on (over a satellite to a
 			// MeshSat app on the far side, the Data Slayer path). [MESHSAT-1554]
-			rnsStack.SetInboundHook(func(source, text string) {
+			// A voice note or a photo in the message stays on the kit
+			// (GET /api/lxmf/messages/{id}/attachments): the rules forward
+			// the text, and each delivery says so. [MESHSAT-1735]
+			rnsStack.SetInboundHook(func(source, text string, attachments []lxmf.Attachment) {
 				dispatcher.DispatchAccess("lxmf_0", rules.RouteMessage{
 					Text:    text,
 					From:    "lxmf:" + source,
 					PortNum: 1,
 					Plain:   true,
+					Omitted: lxmf.DescribeAttachments(attachments),
 				}, []byte(text))
 			})
 		}

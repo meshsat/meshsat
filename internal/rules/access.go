@@ -22,6 +22,11 @@ type RouteMessage struct {
 	RawData []byte   // original payload
 	Visited []string // visited interface IDs for loop prevention
 	Plain   bool     // text already in the clear: skip the source interface's ingress transforms [MESHSAT-962]
+	// Omitted names what the source message carried that the text does not
+	// (a voice note or a photo in its LXMF fields): every delivery the rules
+	// make of the text records it as the row's reason, since no bearer the
+	// rules forward to carries them. "" when nothing was left out. [MESHSAT-1735]
+	Omitted string
 }
 
 // AccessFilters is the parsed representation of an access rule's filters JSON.

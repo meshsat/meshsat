@@ -1882,6 +1882,28 @@ var migrations = []string{
 		peer_callsign TEXT NOT NULL DEFAULT '',
 		last_at TEXT NOT NULL
 	);`,
+
+	// v83: the voice notes and photos an LXMF message carries in its audio
+	// and image fields (LXMF FIELD_AUDIO, FIELD_IMAGE), kept beside the
+	// message row (messages.id) the text was filed under, received and sent
+	// alike; idx is the attachment's place in the message (the image first);
+	// mode is the audio mode, format the image format. A kit keeps at most
+	// MESHSAT_LXMF_ATTACHMENT_STORE_BYTES of them, oldest out first.
+	// [MESHSAT-1735]
+	`CREATE TABLE IF NOT EXISTS lxmf_attachments (
+		id          INTEGER PRIMARY KEY AUTOINCREMENT,
+		message_id  INTEGER NOT NULL,
+		lxmf_hash   TEXT NOT NULL,
+		idx         INTEGER NOT NULL,
+		kind        TEXT NOT NULL,
+		mode        INTEGER NOT NULL DEFAULT 0,
+		format      TEXT NOT NULL DEFAULT '',
+		size        INTEGER NOT NULL,
+		data        BLOB NOT NULL,
+		received_at TEXT NOT NULL DEFAULT (datetime('now')),
+		UNIQUE (message_id, idx)
+	);
+	CREATE INDEX IF NOT EXISTS idx_lxmf_attachments_hash ON lxmf_attachments(lxmf_hash);`,
 }
 
 // postMigration is what a migration needs to know that its SQL cannot see:

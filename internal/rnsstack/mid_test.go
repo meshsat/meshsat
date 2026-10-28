@@ -45,7 +45,7 @@ func TestInboundRepeatOfAMidIsDroppedAcrossARestart(t *testing.T) {
 	db := openDB(t, path)
 	hooked := 0
 	st := &Stack{cfg: Config{DB: db}}
-	st.SetInboundHook(func(string, string) { hooked++ })
+	st.SetInboundHook(func(string, string, []lxmf.Attachment) { hooked++ })
 	var src, other [lxmf.DestLen]byte
 	src[0], other[0] = 1, 2
 	st.storeInbound(midMsg(src, 1))
@@ -58,7 +58,7 @@ func TestInboundRepeatOfAMidIsDroppedAcrossARestart(t *testing.T) {
 	db = openDB(t, path)
 	defer func() { _ = db.Close() }()
 	st = &Stack{cfg: Config{DB: db}}
-	st.SetInboundHook(func(string, string) { hooked++ })
+	st.SetInboundHook(func(string, string, []lxmf.Attachment) { hooked++ })
 	st.storeInbound(midMsg(src, 3))
 	if n := countLXMF(t, db); n != 1 || hooked != 1 {
 		t.Fatalf("after a restart: filed %d, hooked %d, want 1 and 1", n, hooked)
@@ -80,7 +80,7 @@ func TestReviewR40RetryAfterInboxInsertFailure(t *testing.T) {
 	db := openDB(t, path)
 	hooked := 0
 	st := &Stack{cfg: Config{DB: db}}
-	st.SetInboundHook(func(string, string) { hooked++ })
+	st.SetInboundHook(func(string, string, []lxmf.Attachment) { hooked++ })
 	if _, err := db.Exec(`CREATE TRIGGER r40_fail BEFORE INSERT ON messages BEGIN SELECT RAISE(ABORT, 'test: inbox write fails'); END;`); err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +100,7 @@ func TestReviewR40RetryAfterInboxInsertFailure(t *testing.T) {
 	db = openDB(t, path)
 	defer func() { _ = db.Close() }()
 	st = &Stack{cfg: Config{DB: db}}
-	st.SetInboundHook(func(string, string) { hooked++ })
+	st.SetInboundHook(func(string, string, []lxmf.Attachment) { hooked++ })
 	st.storeInbound(midMsg(src, 2))
 	st.storeInbound(midMsg(src, 3))
 	if n := countLXMF(t, db); n != 1 || hooked != 1 {
@@ -115,7 +115,7 @@ func TestInboundConcurrentRepeatsFileOnce(t *testing.T) {
 	var mu sync.Mutex
 	hooked := 0
 	st := &Stack{cfg: Config{DB: db}}
-	st.SetInboundHook(func(string, string) { mu.Lock(); hooked++; mu.Unlock() })
+	st.SetInboundHook(func(string, string, []lxmf.Attachment) { mu.Lock(); hooked++; mu.Unlock() })
 	var src [lxmf.DestLen]byte
 	src[0] = 9
 	var wg sync.WaitGroup

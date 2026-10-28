@@ -16,7 +16,7 @@ func TestInboundOverTheLimitIsNotFiledNorHandedOn(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
 	hooked := 0
 	st := &Stack{cfg: Config{DB: db}, now: func() time.Time { return now }, inbound: newInboundLimit(3, now)}
-	st.SetInboundHook(func(string, string) { hooked++ })
+	st.SetInboundHook(func(string, string, []lxmf.Attachment) { hooked++ })
 	var src [lxmf.DestLen]byte
 	src[0] = 7
 	for i := 0; i < 5; i++ {

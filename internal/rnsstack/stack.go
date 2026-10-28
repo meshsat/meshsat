@@ -7,6 +7,7 @@ package rnsstack
 import (
 	"context"
 	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -60,7 +61,15 @@ type LXMFConfig struct {
 	// InboundPerMinute caps inbound messages to the kit's address; beyond it
 	// they are dropped and counted. 0 takes the default (60).
 	InboundPerMinute int
+	// AttachmentStoreBytes is what the kit keeps of voice notes and photos
+	// (lxmf_attachments) all together, oldest out first; 0 takes
+	// DefaultAttachmentStoreBytes. [MESHSAT-1735]
+	AttachmentStoreBytes int64
 }
+
+// DefaultAttachmentStoreBytes is the kit's store of attachments when the
+// configuration names none: 16 MiB, a few thousand voice notes.
+const DefaultAttachmentStoreBytes = 16 << 20
 
 // Stack is the built node plus the bridge destination and the LXMF router.
 type Stack struct {
@@ -70,7 +79,7 @@ type Stack struct {
 	cfg    Config
 
 	inboundMu sync.RWMutex
-	onInbound func(source, text string)
+	onInbound func(source, text string, attachments []lxmf.Attachment)
 
 	late *lateProofs // nil until EnableLateProofs
 
@@ -79,10 +88,12 @@ type Stack struct {
 }
 
 // SetInboundHook hands every accepted inbound LXMF message, after it is
-// filed, to fn with the sender's lxmf.delivery hash (hex) and the text,
-// title first. main.go feeds it to the access rules as lxmf_0, so a rule
-// can carry it on over a satellite. [MESHSAT-1554]
-func (st *Stack) SetInboundHook(fn func(source, text string)) {
+// filed, to fn with the sender's lxmf.delivery hash (hex), the text, title
+// first, and the voice note and photo it carried (lxmf.AttachmentsOf, after
+// the size cap: what was filed). main.go feeds it to the access rules as
+// lxmf_0, so a rule can carry it on over a satellite; the rules carry the
+// text only, and say so on the delivery. [MESHSAT-1554, MESHSAT-1735]
+func (st *Stack) SetInboundHook(fn func(source, text string, attachments []lxmf.Attachment)) {
 	st.inboundMu.Lock()
 	st.onInbound = fn
 	st.inboundMu.Unlock()
@@ -328,22 +339,65 @@ func (st *Stack) storeInbound(m *lxmf.Message) {
 	if len(m.Title) > 0 {
 		text = string(m.Title) + "\n" + text
 	}
-	if !st.fileInbound(m, text) {
+	atts := st.takeAttachments(m)
+	id, ok := st.fileInbound(m, text)
+	if !ok {
 		return
 	}
+	st.fileAttachments(id, m.Hash, atts)
 	st.inboundMu.RLock()
 	fn := st.onInbound
 	st.inboundMu.RUnlock()
 	if fn != nil && text != "" {
-		fn(hex.EncodeToString(m.Source[:]), text)
+		fn(hex.EncodeToString(m.Source[:]), text, atts)
 	}
 }
 
-// fileInbound writes the message and reports whether it is filed (true
-// without a database, as in tests). false is a repeat or a failed write.
-func (st *Stack) fileInbound(m *lxmf.Message, text string) bool {
+// takeAttachments reads a message's voice note and photo; a message whose
+// attachments outweigh the cap keeps its text and loses them, logged.
+func (st *Stack) takeAttachments(m *lxmf.Message) []lxmf.Attachment {
+	atts := lxmf.AttachmentsOf(m.Fields)
+	if n := lxmf.AttachmentBytes(atts); n > lxmf.MaxAttachmentBytes {
+		log.Warn().Str("msg", m.String()).Int("bytes", n).Int("cap", lxmf.MaxAttachmentBytes).
+			Msg("lxmf: attachments over the cap, the text is kept without them")
+		return nil
+	}
+	return atts
+}
+
+// fileAttachments writes a message's attachments under its row and keeps
+// the store under its cap. No database (tests): nothing to do.
+func (st *Stack) fileAttachments(messageID int64, hash [32]byte, atts []lxmf.Attachment) {
+	if st.cfg.DB == nil || len(atts) == 0 || messageID == 0 {
+		return
+	}
+	rows := make([]database.LXMFAttachment, len(atts))
+	data := make([][]byte, len(atts))
+	for i, a := range atts {
+		rows[i] = database.LXMFAttachment{Kind: a.Kind, Mode: a.Mode, Format: a.Format}
+		data[i] = a.Data
+	}
+	if err := st.cfg.DB.InsertLXMFAttachments(messageID, hex.EncodeToString(hash[:]), rows, data); err != nil {
+		log.Warn().Err(err).Int64("message", messageID).Msg("lxmf: attachments not stored")
+		return
+	}
+	cap := st.cfg.LXMF.AttachmentStoreBytes
+	if cap <= 0 {
+		cap = DefaultAttachmentStoreBytes
+	}
+	if n, err := st.cfg.DB.EvictLXMFAttachments(cap); err != nil {
+		log.Warn().Err(err).Msg("lxmf: attachment store not trimmed")
+	} else if n > 0 {
+		log.Info().Int("removed", n).Int64("cap_bytes", cap).Msg("lxmf: oldest attachments evicted")
+	}
+}
+
+// fileInbound writes the message and reports its row id and whether it is
+// filed (0, true without a database, as in tests). false is a repeat or a
+// failed write.
+func (st *Stack) fileInbound(m *lxmf.Message, text string) (int64, bool) {
 	if st.cfg.DB == nil {
-		return true
+		return 0, true
 	}
 	row := &database.Message{
 		PacketID:    uint32(m.Hash[0])<<24 | uint32(m.Hash[1])<<16 | uint32(m.Hash[2])<<8 | uint32(m.Hash[3]),
@@ -358,23 +412,24 @@ func (st *Stack) fileInbound(m *lxmf.Message, text string) bool {
 	}
 	source := hex.EncodeToString(m.Source[:])
 	if mid, ok := lxmf.MidOf(m.Fields); ok {
-		inserted, _, err := st.cfg.DB.InsertLXMFMessageOnce(source, lxmf.FormatMid(mid), time.Now(), row, "received")
+		inserted, id, err := st.cfg.DB.InsertLXMFMessageOnce(source, lxmf.FormatMid(mid), time.Now(), row, "received")
 		switch {
 		case err != nil:
 			log.Warn().Err(err).Str("source", source).Msg("lxmf: store inbound message failed, nothing recorded")
-			return false
+			return 0, false
 		case !inserted:
 			log.Info().Str("source", source).Str("mid", lxmf.FormatMid(mid)).
 				Msg("lxmf: repeat of a message already taken in, dropped")
-			return false
+			return 0, false
 		}
-		return true
+		return id, true
 	}
-	if _, err := st.cfg.DB.InsertMessageWithStatus(row, "received"); err != nil {
+	id, err := st.cfg.DB.InsertMessageWithStatus(row, "received")
+	if err != nil {
 		log.Warn().Err(err).Str("source", source).Msg("lxmf: store inbound message failed")
-		return false
+		return 0, false
 	}
-	return true
+	return id, true
 }
 
 // Deliver implements engine.LXMFSender for the delivery ledger: the row's
@@ -410,7 +465,18 @@ func (st *Stack) Deliver(ctx context.Context, del database.MessageDelivery) (str
 	if err != nil {
 		return "", fmt.Errorf("lxmf: message id: %w", err)
 	}
-	m, _, err := st.LXMF.SendWith(ctx, dest, []byte(body.Content), []byte(body.Title), lxmf.MidFields(mid), 0, opts)
+	// A voice note or a photo rides in the message's fields, beside the
+	// mid, as Sideband sends them; a body that breaks the cap is refused
+	// here as the API refuses it before queuing. [MESHSAT-1735]
+	atts, err := body.Attachments()
+	if err != nil {
+		return "", err
+	}
+	fields, err := lxmf.WithAttachments(lxmf.MidFields(mid), atts...)
+	if err != nil {
+		return "", err
+	}
+	m, _, err := st.LXMF.SendWith(ctx, dest, []byte(body.Content), []byte(body.Title), fields, 0, opts)
 	if err != nil {
 		if m != nil {
 			return hex.EncodeToString(m.Hash[:]), err
@@ -433,8 +499,11 @@ func (st *Stack) Deliver(ctx context.Context, del database.MessageDelivery) (str
 			Direction:   "tx",
 			Transport:   "reticulum",
 		}
-		if _, err := st.cfg.DB.InsertMessageWithStatus(row, "delivered"); err != nil {
+		id, err := st.cfg.DB.InsertMessageWithStatus(row, "delivered")
+		if err != nil {
 			log.Warn().Err(err).Msg("lxmf: store outbound message failed")
+		} else {
+			st.fileAttachments(id, m.Hash, atts)
 		}
 	}
 	return hex.EncodeToString(m.Hash[:]), nil
@@ -465,12 +534,51 @@ func (st *Stack) deliveryMid(del database.MessageDelivery) ([16]byte, error) {
 
 // LXMFBody is the JSON payload of a class-lxmf ledger row. Timestamp, in
 // seconds since the epoch, is set on a delivery intent's attempts; empty
-// means now.
+// means now. Audio and Image are the voice note and the photo the message
+// carries in its LXMF fields, the same shape POST /api/lxmf/send takes.
+// [MESHSAT-1735]
 type LXMFBody struct {
-	Content   string  `json:"content"`
-	Title     string  `json:"title,omitempty"`
-	Timestamp float64 `json:"ts,omitempty"`
-	FreeOnly  bool    `json:"free_only,omitempty"`
+	Content   string     `json:"content"`
+	Title     string     `json:"title,omitempty"`
+	Timestamp float64    `json:"ts,omitempty"`
+	FreeOnly  bool       `json:"free_only,omitempty"`
+	Audio     *LXMFAudio `json:"audio,omitempty"`
+	Image     *LXMFImage `json:"image,omitempty"`
+}
+
+// LXMFAudio is a voice note: the LXMF audio mode (Codec2 0x01-0x09, 700C =
+// 3; Opus 0x10-0x19) and the frames, base64.
+type LXMFAudio struct {
+	Mode    int    `json:"mode"`
+	DataB64 string `json:"data_b64"`
+}
+
+// LXMFImage is a photo: the format name ("webp") and the bytes, base64.
+type LXMFImage struct {
+	Format  string `json:"format"`
+	DataB64 string `json:"data_b64"`
+}
+
+// Attachments decodes the body's voice note and photo, the image first, as
+// lxmf.AttachmentsOf orders them; an undecodable base64 is an error. The
+// shapes and the cap are checked by lxmf.WithAttachments.
+func (b LXMFBody) Attachments() ([]lxmf.Attachment, error) {
+	var out []lxmf.Attachment
+	if b.Image != nil {
+		data, err := base64.StdEncoding.DecodeString(b.Image.DataB64)
+		if err != nil {
+			return nil, fmt.Errorf("lxmf: image data_b64: %w", err)
+		}
+		out = append(out, lxmf.Attachment{Kind: lxmf.AttachmentImage, Format: strings.ToLower(strings.TrimSpace(b.Image.Format)), Data: data})
+	}
+	if b.Audio != nil {
+		data, err := base64.StdEncoding.DecodeString(b.Audio.DataB64)
+		if err != nil {
+			return nil, fmt.Errorf("lxmf: audio data_b64: %w", err)
+		}
+		out = append(out, lxmf.Attachment{Kind: lxmf.AttachmentAudio, Mode: b.Audio.Mode, Data: data})
+	}
+	return out, nil
 }
 
 // CrossesPaidLink reports whether the known path to an LXMF destination

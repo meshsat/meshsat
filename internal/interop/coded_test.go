@@ -79,7 +79,7 @@ func TestInteropCodedRowIsALeafOfThePrivateNetwork(t *testing.T) {
 	sink.node.Store(st.Node)
 	var gotMu sync.Mutex
 	var got []string
-	st.SetInboundHook(func(source, text string) {
+	st.SetInboundHook(func(source, text string, _ []lxmf.Attachment) {
 		gotMu.Lock()
 		got = append(got, source+"|"+text)
 		gotMu.Unlock()

@@ -202,6 +202,7 @@ type Config struct {
 	LXMFMaxOutboundStampCost int    // MESHSAT_LXMF_MAX_OUTBOUND_STAMP_COST (default 16)
 	LXMFAnnounceIntervalSec  int    // MESHSAT_LXMF_ANNOUNCE_INTERVAL (default 1800)
 	LXMFInboundPerMinute     int    // MESHSAT_LXMF_INBOUND_PER_MINUTE: inbound messages taken a minute, more are dropped (default 60)
+	LXMFAttachmentStoreBytes int64  // MESHSAT_LXMF_ATTACHMENT_STORE_BYTES: voice notes and photos kept, oldest out first (default 16 MiB) [MESHSAT-1735]
 	HubRNSJoin               bool   // MESHSAT_HUB_RNS_JOIN: keep the row the Hub manages for the workspace's Private Reticulum network (default true)
 	HubRNSEndpoint           string // MESHSAT_HUB_RNS_ENDPOINT: where that row connects (default rns.meshsat.net:4242)
 
@@ -339,6 +340,7 @@ func Load() *Config {
 		LXMFMaxOutboundStampCost:     envInt("MESHSAT_LXMF_MAX_OUTBOUND_STAMP_COST", 16),
 		LXMFAnnounceIntervalSec:      envInt("MESHSAT_LXMF_ANNOUNCE_INTERVAL", 1800),
 		LXMFInboundPerMinute:         envInt("MESHSAT_LXMF_INBOUND_PER_MINUTE", 60),
+		LXMFAttachmentStoreBytes:     int64(envInt("MESHSAT_LXMF_ATTACHMENT_STORE_BYTES", 16<<20)),
 		HubRNSJoin:                   envBool("MESHSAT_HUB_RNS_JOIN", true),
 		HubRNSEndpoint:               envStr("MESHSAT_HUB_RNS_ENDPOINT", "rns.meshsat.net:4242"),
 

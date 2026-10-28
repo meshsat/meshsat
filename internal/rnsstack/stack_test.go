@@ -13,7 +13,7 @@ func TestInboundHookGetsSenderAndText(t *testing.T) {
 	st := &Stack{}
 	var gotSource, gotText string
 	calls := 0
-	st.SetInboundHook(func(source, text string) {
+	st.SetInboundHook(func(source, text string, _ []lxmf.Attachment) {
 		calls++
 		gotSource, gotText = source, text
 	})
