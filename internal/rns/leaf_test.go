@@ -260,6 +260,19 @@ func TestLeaf_ChangingTheMarkForgetsTheInterface(t *testing.T) {
 	if !ln.k.Paths().Has(ln.sDest.Hash) {
 		t.Fatal("setup: K has no path to S")
 	}
+	// In the control topology K is a transport: it carries S's announce
+	// onto the mesh and M offers S back at four hops. While K's path through
+	// H stands that offer loses; landing after SetLeaf has dropped it, it
+	// wins, and a leaf path never displaces a live path on another interface
+	// (announce.go), so K would never relearn S on the leaf. A transport
+	// drops an announce it holds for rebroadcast when a neighbour's copy
+	// comes back, so an empty table at K means every echo of the first
+	// flood has landed [MESHSAT-1747].
+	waitFor(t, "the first flood's echoes reach K", func() bool {
+		ln.k.mu.Lock()
+		defer ln.k.mu.Unlock()
+		return len(ln.k.announceTable) == 0
+	})
 	ln.k.SetLeaf("kh", true)
 	if onKH(ln.k, ln.sDest) || onKH(ln.k, ln.hDest) {
 		t.Fatal("marking a leaf kept the paths learned on it")
