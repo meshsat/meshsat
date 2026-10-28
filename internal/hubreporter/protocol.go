@@ -62,6 +62,12 @@ const (
 	// (meshsat-hub MESHSAT-1734), on the bridge's own subtree; only the Hub
 	// may publish it. [MESHSAT-1734]
 	topicWarnInFor = "%s/bridge/%s/warn/in"
+
+	// What became of a chat the Hub handed this bridge on tak/cot/in: one
+	// TAKChatStatus per addressee, on the bridge's own subtree, QoS 1, never
+	// retained. The Hub records it on the message and tells the dispatcher.
+	// [MESHSAT-1746]
+	topicTAKChatStatus = "%s/bridge/%s/tak/chat/status"
 )
 
 // DefaultTopicRoot is the platform tenant's topic root.
@@ -198,6 +204,12 @@ func (t Topics) takCoTIn() string { return fmt.Sprintf(topicTAKCoTIn, t.Root()) 
 // on: {root}/bridge/<bridge id>/warn/in. [MESHSAT-1734]
 func (t Topics) WarnInFor(bridgeID string) string {
 	return fmt.Sprintf(topicWarnInFor, t.Root(), topicSegment(bridgeID))
+}
+
+// TAKChatStatus is the topic this bridge reports a chat's outcome on:
+// {root}/bridge/<bridge id>/tak/chat/status. [MESHSAT-1746]
+func (t Topics) TAKChatStatus(bridgeID string) string {
+	return fmt.Sprintf(topicTAKChatStatus, t.Root(), topicSegment(bridgeID))
 }
 
 // TAKCoTInFilters are the two subscriptions that receive what the Hub
@@ -530,6 +542,25 @@ type SpectrumAlert struct {
 	Lat            float64   `json:"lat,omitempty"`
 	Lon            float64   `json:"lon,omitempty"`
 	Timestamp      time.Time `json:"timestamp"`
+}
+
+// TAKChatStatus is published to meshsat/bridge/{bridge_id}/tak/chat/status
+// (QoS 1, not retained): what became of a chat the Hub handed this bridge on
+// its tak/cot/in, one per addressee, as the Hub records it on the message
+// and shows the dispatcher (meshsat-hub MESHSAT-1746). Status is one of
+// "queued" (in this bridge's delivery ledger), "delivered" (the far end
+// confirmed it; this bridge never says so, its mesh sends read no routing
+// ack), "failed" (the ledger gave up) or "undelivered" (refused before the
+// ledger: not_heard, ambiguous_callsign, no_radio, no_text, no_sender,
+// own_chat, send_failed). Reason is one short machine word, Detail one line
+// for a person. [MESHSAT-1746]
+type TAKChatStatus struct {
+	MessageID string    `json:"message_id"` // the GeoChat's own id (__chat messageId)
+	CrewUID   string    `json:"crew_uid"`   // the addressee as the chat named it
+	Status    string    `json:"status"`
+	Reason    string    `json:"reason,omitempty"`
+	Detail    string    `json:"detail,omitempty"`
+	At        time.Time `json:"at"`
 }
 
 // --- Command channel ---

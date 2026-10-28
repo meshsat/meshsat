@@ -3,6 +3,7 @@ package gateway
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -11,6 +12,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/rs/zerolog/log"
+
+	"meshsat/internal/transport"
 )
 
 // TAK direct messages (MESHSAT-1705): a dispatcher in a TAK client, or an
@@ -225,6 +228,39 @@ type TAKChatThreads interface {
 	TAKChatThread(node uint32, since time.Time) (peerUID, peerCallsign string, ok bool, err error)
 }
 
+// What this Bridge tells the Hub became of a chat it was handed, one report
+// per addressee (MESHSAT-1746). The words are the Hub's contract
+// (meshsat-hub docs/bridge-hub-protocol.md, "TAK Direct Messages").
+const (
+	// TAKChatQueued: the words are in the delivery ledger, a row for the
+	// radio. The ledger's "delivered" is never reported from here: a mesh
+	// send through the ledger reads no routing ack, so "delivered" would
+	// only mean the radio took the frame.
+	TAKChatQueued = "queued"
+	// TAKChatFailed: the ledger gave up on the row.
+	TAKChatFailed = "failed"
+	// TAKChatUndelivered: refused before the ledger, with a reason.
+	TAKChatUndelivered = "undelivered"
+
+	takChatReasonNoText     = "no_text"
+	takChatReasonNoSender   = "no_sender"
+	takChatReasonOwnChat    = "own_chat"
+	takChatReasonNotHeard   = "not_heard"
+	takChatReasonAmbiguous  = "ambiguous_callsign"
+	takChatReasonNoRadio    = "no_radio"
+	takChatReasonSendFailed = "send_failed"
+)
+
+// TAKChatStatus is one report: what became of chat MessageID for CrewUID.
+type TAKChatStatus struct {
+	MessageID string
+	CrewUID   string
+	Status    string // TAKChatQueued, TAKChatFailed or TAKChatUndelivered
+	Reason    string // one machine word, empty for queued
+	Detail    string // one line for a person
+	At        time.Time
+}
+
 // TAKChatDeps connect the chat to the rest of the Bridge. Each may be nil,
 // which turns off what it is for.
 type TAKChatDeps struct {
@@ -234,10 +270,11 @@ type TAKChatDeps struct {
 	Heard func() []uint32
 	// LocalNode is this Bridge's own radio.
 	LocalNode func() (uint32, bool)
-	// SendDM queues text to one node through the delivery ledger.
-	SendDM func(node uint32, text string) error
+	// SendDM queues text to one node through the delivery ledger and
+	// answers the row's id, which the ledger's delivery_* events carry.
+	SendDM func(node uint32, text string) (int64, error)
 	// Broadcast queues text to the whole mesh through the delivery ledger.
-	Broadcast func(text string) error
+	Broadcast func(text string) (int64, error)
 	// Threads remember who wrote to which node.
 	Threads TAKChatThreads
 	// Gateway is the running TAK gateway, which sends an answer and names
@@ -251,36 +288,72 @@ type TAKChat struct {
 	deps TAKChatDeps
 	now  func() time.Time
 
-	mu   sync.Mutex
-	seen map[string]time.Time
+	mu      sync.Mutex
+	seen    map[string]time.Time
+	report  func(TAKChatStatus)
+	pending map[int64]takChatPending // ledger row -> the chat it carries
+}
+
+// takChatPending is a queued chat whose ledger outcome is still owed.
+type takChatPending struct {
+	messageID string
+	crewUID   string
+	at        time.Time
 }
 
 // takChatSeenFor is how long a chat's id is remembered against a second
 // delivery of the same chat (a QoS 1 redelivery, a client sending again).
 const takChatSeenFor = 10 * time.Minute
 
+// takChatPendingFor is how long a queued chat's ledger row is watched for
+// its outcome: three retries with the ledger's backoff are over well within.
+const takChatPendingFor = 6 * time.Hour
+
 // NewTAKChat returns a TAKChat with deps.
 func NewTAKChat(deps TAKChatDeps) *TAKChat {
-	return &TAKChat{deps: deps, now: time.Now, seen: map[string]time.Time{}}
+	return &TAKChat{deps: deps, now: time.Now, seen: map[string]time.Time{}, pending: map[int64]takChatPending{}}
+}
+
+// SetReport makes fn hear what became of each chat (the Hub reporter
+// publishes it on this bridge's tak/chat/status). Nil reports nothing, as a
+// kit with no Hub. fn may block; it runs on the goroutine that delivered
+// or observed. [MESHSAT-1746]
+func (c *TAKChat) SetReport(fn func(TAKChatStatus)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.report = fn
 }
 
 // Deliver takes one GeoChat addressed to crews of this Bridge and queues it to
 // each of them: a direct message to a node it hears, a broadcast when the chat
 // is to this Bridge itself. A chat to the room, to nobody this Bridge reaches,
 // with no words, with no sender to answer, or one seen already, goes nowhere.
-// It answers how many sends it queued.
+// Every addressee the chat names gets a report (SetReport): queued, or
+// undelivered with the reason; a chat seen already gets none, the first
+// delivery's report stands. It answers how many sends it queued.
 func (c *TAKChat) Deliver(ev *CotEvent) int {
 	text := ChatText(ev)
 	from := ChatSender(ev)
 	to, _ := ChatAddressees(ev)
-	if text == "" || len(to) == 0 || (from.UID == "" && from.Callsign == "") {
+	id := chatMessageID(ev)
+	if len(to) == 0 {
+		return 0 // the room, or nobody: nobody to tell either
+	}
+	switch {
+	case text == "":
+		c.refuseAll(id, to, takChatReasonNoText, "the chat carries no words")
+		return 0
+	case from.UID == "" && from.Callsign == "":
+		c.refuseAll(id, to, takChatReasonNoSender, "the chat names no sender for the answer to go to")
 		return 0
 	}
 	if _, crew := NodeFromTAKUID(from.UID); crew || from.UID == c.ownUID() {
-		return 0 // a crew's own chat, or this Bridge's: never back to the air
+		// A crew's own chat, or this Bridge's: never back to the air.
+		c.refuseAll(id, to, takChatReasonOwnChat, "a crew's own chat, or the kit's, never goes back to the air")
+		return 0
 	}
-	if c.seenBefore(chatMessageID(ev)) {
-		log.Debug().Str("chat", chatMessageID(ev)).Msg("tak chat: seen already, not sent again")
+	if c.seenBefore(id) {
+		log.Debug().Str("chat", id).Msg("tak chat: seen already, not sent again")
 		return 0
 	}
 	line, cut := takChatLine(from, text)
@@ -295,23 +368,35 @@ func (c *TAKChat) Deliver(ev *CotEvent) int {
 	for _, p := range to {
 		if c.isOwn(p) {
 			if c.deps.Broadcast == nil {
+				c.refuse(id, p, takChatReasonNoRadio, "the kit has no mesh radio to send on")
 				continue
 			}
-			if err := c.deps.Broadcast(line); err != nil {
+			delID, err := c.deps.Broadcast(line)
+			if err != nil {
 				log.Warn().Err(err).Str("from", from.Callsign).Msg("tak chat: broadcast not queued")
+				c.refuse(id, p, takChatReasonSendFailed, "not queued to the mesh: "+clipDetail(err.Error()))
 				continue
 			}
 			log.Info().Str("from", from.Callsign).Msg("tak chat: to this Bridge, queued to the whole mesh")
+			c.queued(id, p, delID, "queued to the whole mesh on "+c.ownCallsign(p))
 			n++
 			continue
 		}
-		node, ok := c.resolve(p, heard)
-		if !ok {
+		node, reason := c.resolve(p, heard)
+		switch reason {
+		case "":
+		case takChatReasonAmbiguous:
+			log.Info().Str("from", from.Callsign).Str("callsign", p.Callsign).
+				Msg("tak chat: two heard nodes answer to the callsign, not sent")
+			c.refuse(id, p, reason, "two nodes the kit heard answer to "+p.Callsign+"; name the uid")
+			continue
+		default:
 			// The Hub lists a crew for a day after its last export; this
 			// Bridge sends only to a node its radio heard in that time. Say
 			// so, or a dispatcher's message vanishes without a trace.
 			log.Info().Str("from", from.Callsign).Str("to", p.UID).Str("callsign", p.Callsign).
 				Msg("tak chat: to a crew this Bridge has not heard for a day, not sent")
+			c.refuse(id, p, reason, "the kit has not heard "+peerName(p)+" in the last day")
 			continue
 		}
 		if done[node] {
@@ -319,10 +404,13 @@ func (c *TAKChat) Deliver(ev *CotEvent) int {
 		}
 		done[node] = true
 		if c.deps.SendDM == nil {
+			c.refuse(id, p, takChatReasonNoRadio, "the kit has no mesh radio to send on")
 			continue
 		}
-		if err := c.deps.SendDM(node, line); err != nil {
+		delID, err := c.deps.SendDM(node, line)
+		if err != nil {
 			log.Warn().Err(err).Str("to", fmt.Sprintf("!%08x", node)).Msg("tak chat: direct message not queued")
+			c.refuse(id, p, takChatReasonSendFailed, "not queued to the radio: "+clipDetail(err.Error()))
 			continue
 		}
 		if c.deps.Threads != nil {
@@ -332,9 +420,123 @@ func (c *TAKChat) Deliver(ev *CotEvent) int {
 		}
 		log.Info().Str("from", from.Callsign).Str("to", fmt.Sprintf("!%08x", node)).
 			Msg("tak chat: queued as a direct message")
+		c.queued(id, p, delID, fmt.Sprintf("queued as a direct message to !%08x", node))
 		n++
 	}
 	return n
+}
+
+// ObserveDelivery hears the ledger's delivery_* events (engine.Processor
+// Subscribe) and reports a queued chat whose row the ledger gave up on as
+// failed. A row that went out is forgotten without a word: the mesh send
+// reads no routing ack, so the ledger's "delivered" is not the node's
+// receipt. [MESHSAT-1746]
+func (c *TAKChat) ObserveDelivery(ev transport.MeshEvent) {
+	switch ev.Type {
+	case "delivery_dead", "delivery_acked", "delivery_sent":
+	default:
+		return
+	}
+	var data struct {
+		ID    int64  `json:"id"`
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(ev.Data, &data) != nil || data.ID == 0 {
+		return
+	}
+	c.mu.Lock()
+	p, ok := c.pending[data.ID]
+	delete(c.pending, data.ID)
+	c.mu.Unlock()
+	if !ok || ev.Type != "delivery_dead" {
+		return
+	}
+	detail := "the kit's delivery ledger gave up on it"
+	if data.Error != "" {
+		detail += ": " + clipDetail(data.Error)
+	}
+	c.send(TAKChatStatus{MessageID: p.messageID, CrewUID: p.crewUID, Status: TAKChatFailed,
+		Reason: takChatReasonSendFailed, Detail: detail})
+}
+
+// queued reports a chat in the ledger and watches its row for the outcome.
+func (c *TAKChat) queued(id string, p ChatPeer, delID int64, detail string) {
+	now := c.now()
+	c.mu.Lock()
+	for k, v := range c.pending {
+		if now.Sub(v.at) > takChatPendingFor {
+			delete(c.pending, k)
+		}
+	}
+	if delID > 0 {
+		c.pending[delID] = takChatPending{messageID: id, crewUID: crewUIDOf(p), at: now}
+	}
+	c.mu.Unlock()
+	c.send(TAKChatStatus{MessageID: id, CrewUID: crewUIDOf(p), Status: TAKChatQueued, Detail: detail})
+}
+
+// refuse reports a chat that goes nowhere for one addressee.
+func (c *TAKChat) refuse(id string, p ChatPeer, reason, detail string) {
+	c.send(TAKChatStatus{MessageID: id, CrewUID: crewUIDOf(p), Status: TAKChatUndelivered, Reason: reason, Detail: detail})
+}
+
+func (c *TAKChat) refuseAll(id string, to []ChatPeer, reason, detail string) {
+	for _, p := range to {
+		c.refuse(id, p, reason, detail)
+	}
+}
+
+func (c *TAKChat) send(st TAKChatStatus) {
+	c.mu.Lock()
+	fn := c.report
+	c.mu.Unlock()
+	if fn == nil {
+		return
+	}
+	if st.At.IsZero() {
+		st.At = c.now().UTC()
+	}
+	fn(st)
+}
+
+// crewUIDOf is the addressee as the Hub keys it: the uid, else the callsign.
+func crewUIDOf(p ChatPeer) string {
+	if p.UID != "" {
+		return p.UID
+	}
+	return p.Callsign
+}
+
+// peerName is the addressee as a person reads it.
+func peerName(p ChatPeer) string {
+	if p.Callsign != "" {
+		return p.Callsign
+	}
+	return p.UID
+}
+
+func (c *TAKChat) ownCallsign(p ChatPeer) string {
+	if gw := c.gateway(); gw != nil {
+		if _, callsign := gw.own(); callsign != "" {
+			return callsign
+		}
+	}
+	return peerName(p)
+}
+
+// takChatDetailMax bounds a report's detail line.
+const takChatDetailMax = 160
+
+func clipDetail(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) <= takChatDetailMax {
+		return s
+	}
+	cut := takChatDetailMax
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut]
 }
 
 // Reply sends a text node wrote to this Bridge's own node back to the one who
@@ -373,13 +575,17 @@ func (c *TAKChat) Reply(node uint32, text string) bool {
 
 // resolve finds the node a peer names among the nodes heard: by uid, or by a
 // callsign exactly one heard node matches. A callsign carries only 16 bits of
-// the node id, so two matches resolve to neither.
-func (c *TAKChat) resolve(p ChatPeer, heard map[uint32]bool) (uint32, bool) {
+// the node id, so two matches resolve to neither. The reason is empty when
+// the node was found, else why not (not_heard, ambiguous_callsign).
+func (c *TAKChat) resolve(p ChatPeer, heard map[uint32]bool) (uint32, string) {
 	if node, ok := NodeFromTAKUID(p.UID); ok {
-		return node, heard[node]
+		if !heard[node] {
+			return 0, takChatReasonNotHeard
+		}
+		return node, ""
 	}
 	if p.Callsign == "" {
-		return 0, false
+		return 0, takChatReasonNotHeard
 	}
 	prefix := ""
 	if gw := c.gateway(); gw != nil {
@@ -393,7 +599,14 @@ func (c *TAKChat) resolve(p ChatPeer, heard map[uint32]bool) (uint32, bool) {
 			matches++
 		}
 	}
-	return found, matches == 1
+	switch matches {
+	case 1:
+		return found, ""
+	case 0:
+		return 0, takChatReasonNotHeard
+	default:
+		return 0, takChatReasonAmbiguous
+	}
 }
 
 func (c *TAKChat) isOwn(p ChatPeer) bool {

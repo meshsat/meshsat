@@ -2443,14 +2443,14 @@ func main() {
 			}
 			return localNodeNum(ctx, mesh)
 		},
-		SendDM: func(node uint32, text string) error {
-			_, _, err := dispatcher.QueueDirectSendTo("mesh_0", text,
+		SendDM: func(node uint32, text string) (int64, error) {
+			id, _, err := dispatcher.QueueDirectSendTo("mesh_0", text,
 				engine.DirectSendOptions{Destination: fmt.Sprintf("!%08x", node)})
-			return err
+			return id, err
 		},
-		Broadcast: func(text string) error {
-			_, _, err := dispatcher.QueueDirectSend("mesh_0", text, "")
-			return err
+		Broadcast: func(text string) (int64, error) {
+			id, _, err := dispatcher.QueueDirectSend("mesh_0", text, "")
+			return id, err
 		},
 		Threads: db,
 		Gateway: gwMgr.GetTAKGateway,
@@ -2977,6 +2977,22 @@ func main() {
 				Float64("lat", ev.Point.Lat).Float64("lon", ev.Point.Lon).
 				Msg("tak: CoT position stored from Hub relay")
 		})
+		// What became of each chat goes back to the Hub on this bridge's own
+		// tak/chat/status, so a dispatcher sees "not delivered" and why
+		// instead of silence. Off the handler's goroutine: a publish may
+		// wait on the broker. [MESHSAT-1746]
+		takChat.SetReport(func(st gateway.TAKChatStatus) {
+			go func() {
+				err := hubReporter.PublishTAKChatStatus(hubreporter.TAKChatStatus{
+					MessageID: st.MessageID, CrewUID: st.CrewUID, Status: st.Status,
+					Reason: st.Reason, Detail: st.Detail, At: st.At,
+				})
+				if err != nil {
+					log.Warn().Err(err).Str("chat", st.MessageID).Str("status", st.Status).
+						Msg("tak chat: the Hub was not told what became of a chat")
+				}
+			}()
+		})
 		// A chat the Hub routed here because this Bridge owns the crew it is
 		// addressed to. [MESHSAT-1705]
 		hubReporter.SetTAKChatHandler(func(cotXML []byte) {
@@ -3051,6 +3067,9 @@ func main() {
 						return
 					}
 					hubEventTap.HandleMeshEvent(event)
+					// A chat's ledger row the worker gave up on becomes a
+					// "failed" report to the Hub. [MESHSAT-1746]
+					takChat.ObserveDelivery(event)
 				}
 			}
 		}()

@@ -650,6 +650,18 @@ func (r *HubReporter) PublishTAKCoT(xml []byte) error {
 	return nil
 }
 
+// PublishTAKChatStatus tells the Hub what became of a chat it handed this
+// bridge, on meshsat/bridge/<bridge id>/tak/chat/status, QoS 1 and not
+// retained. Outbox-queued: a ledger that gives up minutes later, with the
+// Hub link down by then, still gets its word through on the reconnect.
+// [MESHSAT-1746]
+func (r *HubReporter) PublishTAKChatStatus(st TAKChatStatus) error {
+	if st.At.IsZero() {
+		st.At = time.Now().UTC()
+	}
+	return r.publishOrQueue(r.topics.TAKChatStatus(r.cfg.BridgeID), 1, false, st)
+}
+
 // publishBirth collects and publishes the bridge birth certificate.
 // If signing credentials are available, the birth is signed with
 // ECDSA-P256-SHA256 using the bridge's TLS private key.

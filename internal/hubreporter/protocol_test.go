@@ -2,6 +2,7 @@ package hubreporter
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -52,6 +53,41 @@ func TestTopicTAKCoTOut(t *testing.T) {
 		if got := TopicTAKCoTOut(id); got != want {
 			t.Errorf("TopicTAKCoTOut(%q) = %q, want %q", id, got, want)
 		}
+	}
+}
+
+// A chat's outcome rides the bridge's own subtree too, in both tenant shapes,
+// and its JSON carries exactly what the Hub records. [MESHSAT-1746]
+func TestTopicTAKChatStatus(t *testing.T) {
+	for prefix, want := range map[string]string{
+		"":              "meshsat/bridge/kit%2B1/tak/chat/status",
+		"meshsat":       "meshsat/bridge/kit%2B1/tak/chat/status",
+		"meshsat/t_x":   "meshsat/t_x/bridge/kit%2B1/tak/chat/status",
+		"meshsat/acme1": "meshsat/acme1/bridge/kit%2B1/tak/chat/status",
+	} {
+		tp, err := NewTopics(prefix)
+		if err != nil {
+			t.Fatalf("NewTopics(%q): %v", prefix, err)
+		}
+		if got := tp.TAKChatStatus("kit+1"); got != want {
+			t.Errorf("Topics(%q).TAKChatStatus = %q, want %q", prefix, got, want)
+		}
+	}
+	at := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	data, err := json.Marshal(TAKChatStatus{MessageID: "m1", CrewUID: "meshsat-a1b3c3a4", Status: "undelivered",
+		Reason: "not_heard", Detail: "this kit has not heard MSPB in the last day", At: at})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"message_id":"m1","crew_uid":"meshsat-a1b3c3a4","status":"undelivered","reason":"not_heard",` +
+		`"detail":"this kit has not heard MSPB in the last day","at":"2026-10-28T12:00:00Z"}`
+	if string(data) != want {
+		t.Errorf("wire JSON\n got %s\nwant %s", data, want)
+	}
+	// A queued status carries no reason and no detail keys when both are empty.
+	data, _ = json.Marshal(TAKChatStatus{MessageID: "m1", CrewUID: "x", Status: "queued", At: at})
+	if strings.Contains(string(data), `"reason"`) || strings.Contains(string(data), `"detail"`) {
+		t.Errorf("empty reason or detail written: %s", data)
 	}
 }
 

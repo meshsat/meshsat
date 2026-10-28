@@ -2,12 +2,15 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 	"unicode/utf8"
+
+	"meshsat/internal/transport"
 )
 
 // GeoChats as TAK clients write them (MESHSAT-1705): ATAK and WinTAK name the
@@ -219,27 +222,46 @@ type chatRig struct {
 	broadcasts []string
 	threads    *fakeThreads
 	gw         *TAKGateway
+	// Every ledger row the rig queued gets an id from 100 up; sendErr makes
+	// the ledger refuse. reports is what the Hub would be told.
+	nextID  int64
+	sendErr error
+	reports []TAKChatStatus
 }
 
 func newChatRig(heard ...uint32) *chatRig {
-	r := &chatRig{threads: newFakeThreads()}
+	r := &chatRig{threads: newFakeThreads(), nextID: 100}
 	r.gw = NewTAKGateway(TAKConfig{CallsignPrefix: "MESHSAT", CotStaleSec: 300}, nil)
 	r.gw.SetHooks(TAKHooks{NodeID: func() string { return "de11f199" }})
 	r.chat = NewTAKChat(TAKChatDeps{
 		Heard:     func() []uint32 { return heard },
 		LocalNode: func() (uint32, bool) { return 0xde11f199, true },
-		SendDM: func(node uint32, text string) error {
+		SendDM: func(node uint32, text string) (int64, error) {
+			if r.sendErr != nil {
+				return 0, r.sendErr
+			}
 			r.dms = append(r.dms, sent{node, text})
-			return nil
+			r.nextID++
+			return r.nextID, nil
 		},
-		Broadcast: func(text string) error {
+		Broadcast: func(text string) (int64, error) {
+			if r.sendErr != nil {
+				return 0, r.sendErr
+			}
 			r.broadcasts = append(r.broadcasts, text)
-			return nil
+			r.nextID++
+			return r.nextID, nil
 		},
 		Threads: r.threads,
 		Gateway: func() *TAKGateway { return r.gw },
 	})
+	r.chat.SetReport(func(st TAKChatStatus) { r.reports = append(r.reports, st) })
 	return r
+}
+
+// brief is a report as a test reads it: status, reason and crew.
+func brief(st TAKChatStatus) string {
+	return st.MessageID + " " + st.CrewUID + " " + st.Status + " " + st.Reason
 }
 
 func TestTAKChatDeliversToTheCrewItNames(t *testing.T) {
@@ -356,5 +378,140 @@ func TestTAKChatAnswerGoesBackToTheWriter(t *testing.T) {
 	r.chat.now = func() time.Time { return time.Now().Add(TAKChatThreadLife + time.Minute) }
 	if r.chat.Reply(0xa1b3c3a4, "late") {
 		t.Error("an answer went back to a thread older than a day")
+	}
+}
+
+// MESHSAT-1746: every addressee gets one word on what became of the chat, so
+// a dispatcher's message never vanishes without a trace.
+func TestTAKChatReportsWhatBecameOfEachChat(t *testing.T) {
+	t.Run("queued", func(t *testing.T) {
+		r := newChatRig(0xa1b3c3a4)
+		r.chat.Deliver(mustParse(t, atakDirect))
+		if len(r.reports) != 1 || brief(r.reports[0]) != "m1 meshsat-a1b3c3a4 queued " {
+			t.Fatalf("reports %+v", r.reports)
+		}
+		if st := r.reports[0]; st.Detail != "queued as a direct message to !a1b3c3a4" || st.At.IsZero() {
+			t.Errorf("report %+v", st)
+		}
+		// A redelivery of the same chat: the first report stands.
+		r.chat.Deliver(mustParse(t, atakDirect))
+		if len(r.reports) != 1 {
+			t.Errorf("a repeated chat was reported again: %+v", r.reports)
+		}
+	})
+	t.Run("to this kit, the whole mesh", func(t *testing.T) {
+		r := newChatRig(0xa1b3c3a4)
+		doc := strings.NewReplacer("meshsat-a1b3c3a4", "MESHSAT-de11f199", "MESHSAT-c3a4", "MESHSAT-F199").Replace(atakDirect)
+		r.chat.Deliver(mustParse(t, doc))
+		if len(r.reports) != 1 || brief(r.reports[0]) != "m1 MESHSAT-de11f199 queued " || !strings.HasPrefix(r.reports[0].Detail, "queued to the whole mesh") {
+			t.Fatalf("reports %+v", r.reports)
+		}
+	})
+	cases := []struct {
+		name   string
+		heard  []uint32
+		doc    string
+		want   string
+		detail string
+	}{
+		{"a crew this kit has not heard", []uint32{0x0000beef}, atakDirect,
+			"m1 meshsat-a1b3c3a4 undelivered not_heard", "the kit has not heard MESHSAT-c3a4 in the last day"},
+		{"no words", []uint32{0xa1b3c3a4}, strings.Replace(atakDirect, "check in please", "  ", 1),
+			"m1 meshsat-a1b3c3a4 undelivered no_text", "the chat carries no words"},
+		{"a crew's own chat", []uint32{0xa1b3c3a4},
+			strings.NewReplacer(`<link uid="ANDROID-abc"`, `<link uid="meshsat-0000beef"`, `messageId="m1"`, `messageId="m9"`).Replace(atakDirect),
+			"m9 meshsat-a1b3c3a4 undelivered own_chat", ""},
+		{"a callsign two heard nodes share", []uint32{0x1111c3a4, 0x2222c3a4},
+			strings.NewReplacer(` id="meshsat-a1b3c3a4"`, ` id=""`, `uid1="meshsat-a1b3c3a4"`, `uid1=""`, `to="meshsat-a1b3c3a4"`, `to=""`).Replace(atakDirect),
+			"m1 MESHSAT-c3a4 undelivered ambiguous_callsign", "two nodes the kit heard answer to MESHSAT-c3a4; name the uid"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := newChatRig(c.heard...)
+			if n := r.chat.Deliver(mustParse(t, c.doc)); n != 0 {
+				t.Errorf("sent %d", n)
+			}
+			if len(r.reports) != 1 || brief(r.reports[0]) != c.want {
+				t.Fatalf("reports %+v, want %q", r.reports, c.want)
+			}
+			if c.detail != "" && r.reports[0].Detail != c.detail {
+				t.Errorf("detail %q, want %q", r.reports[0].Detail, c.detail)
+			}
+		})
+	}
+	t.Run("the room and nobody get no report", func(t *testing.T) {
+		r := newChatRig(0xa1b3c3a4)
+		r.chat.Deliver(mustParse(t, atakRoom))
+		if len(r.reports) != 0 {
+			t.Errorf("reports %+v", r.reports)
+		}
+	})
+	t.Run("the ledger refused the row", func(t *testing.T) {
+		r := newChatRig(0xa1b3c3a4)
+		r.sendErr = fmt.Errorf("queue delivery: database is locked")
+		r.chat.Deliver(mustParse(t, atakDirect))
+		if len(r.reports) != 1 || brief(r.reports[0]) != "m1 meshsat-a1b3c3a4 undelivered send_failed" ||
+			r.reports[0].Detail != "not queued to the radio: queue delivery: database is locked" {
+			t.Fatalf("reports %+v", r.reports)
+		}
+	})
+	t.Run("no radio", func(t *testing.T) {
+		r := newChatRig(0xa1b3c3a4)
+		r.chat.deps.SendDM = nil
+		r.chat.Deliver(mustParse(t, atakDirect))
+		if len(r.reports) != 1 || brief(r.reports[0]) != "m1 meshsat-a1b3c3a4 undelivered no_radio" {
+			t.Fatalf("reports %+v", r.reports)
+		}
+	})
+	t.Run("without a Hub nothing is reported and nothing breaks", func(t *testing.T) {
+		r := newChatRig(0xa1b3c3a4)
+		r.chat.SetReport(nil)
+		if n := r.chat.Deliver(mustParse(t, atakDirect)); n != 1 || len(r.reports) != 0 {
+			t.Errorf("sent %d, reports %+v", n, r.reports)
+		}
+	})
+}
+
+func deliveryEvent(t *testing.T, typ string, id int64, errText string) transport.MeshEvent {
+	t.Helper()
+	data, err := json.Marshal(map[string]any{"id": id, "channel": "mesh_0", "status": "dead", "error": errText})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return transport.MeshEvent{Type: typ, Data: data, Time: time.Now().UTC().Format(time.RFC3339)}
+}
+
+// The ledger's own verdict on a queued chat: given up is reported as failed;
+// a row that went to the radio is forgotten without a word, because the mesh
+// send reads no routing ack and "delivered" would be the radio's receipt, not
+// the node's.
+func TestTAKChatReportsALedgerThatGaveUp(t *testing.T) {
+	r := newChatRig(0xa1b3c3a4)
+	r.chat.Deliver(mustParse(t, atakDirect)) // row 101
+	r.chat.Deliver(mustParse(t, itakDirect)) // row 102
+	if len(r.reports) != 2 {
+		t.Fatalf("reports %+v", r.reports)
+	}
+	r.chat.ObserveDelivery(deliveryEvent(t, "delivery_retry", 101, "not connected"))
+	r.chat.ObserveDelivery(deliveryEvent(t, "delivery_dead", 999, "somebody else's row"))
+	r.chat.ObserveDelivery(transport.MeshEvent{Type: "delivery_dead", Data: json.RawMessage(`not json`)})
+	if len(r.reports) != 2 {
+		t.Fatalf("a retry, a stranger's row or garbage was reported: %+v", r.reports[2:])
+	}
+	r.chat.ObserveDelivery(deliveryEvent(t, "delivery_dead", 101, "mesh_0: not connected"))
+	if len(r.reports) != 3 || brief(r.reports[2]) != "m1 meshsat-a1b3c3a4 failed send_failed" ||
+		r.reports[2].Detail != "the kit's delivery ledger gave up on it: mesh_0: not connected" {
+		t.Fatalf("reports %+v", r.reports)
+	}
+	// Once given up, the row is forgotten: a second dead event says nothing.
+	r.chat.ObserveDelivery(deliveryEvent(t, "delivery_dead", 101, "again"))
+	// The other row went out: forgotten too, and a later dead for it is not ours.
+	r.chat.ObserveDelivery(deliveryEvent(t, "delivery_acked", 102, ""))
+	r.chat.ObserveDelivery(deliveryEvent(t, "delivery_dead", 102, "late"))
+	if len(r.reports) != 3 {
+		t.Fatalf("reports %+v", r.reports[3:])
+	}
+	if n := len(r.chat.pending); n != 0 {
+		t.Errorf("%d rows still watched", n)
 	}
 }
