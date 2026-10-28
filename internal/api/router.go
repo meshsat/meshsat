@@ -992,6 +992,9 @@ func (s *Server) Router() http.Handler {
 		// Bridge-to-bridge time sync [MESHSAT-778]
 		r.Get("/timesync/peers", s.handleGetTimeSyncPeers)
 
+		// Public warnings the Hub relayed here [MESHSAT-1734]
+		r.Get("/warnings", s.handleListWarnings)
+
 		// Device registry (IMEI-keyed)
 		r.Get("/device-registry", s.handleGetRegisteredDevices)
 		r.Post("/device-registry", s.handleCreateRegisteredDevice)

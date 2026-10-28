@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -100,6 +101,9 @@ type Processor struct {
 	// frame and must not enter messages, rules or forwarding.
 	oobMu      sync.RWMutex
 	oobInbound func(ctx context.Context, ifaceID, fromAddr, text string) bool
+	// A public warning digest the Hub sent over satellite (warnings.Relay,
+	// MESHSAT-1734): read before the OOB classifier, consumed on match.
+	warnInbound atomic.Pointer[func(ctx context.Context, ifaceID string, wire []byte) bool]
 
 	// Live packet feed (TTC mode): every LoRa, APRS and SMS frame, both
 	// directions, in a 500-record ring that also emits "packet" events.
@@ -215,6 +219,17 @@ func (p *Processor) SetGatewayTextHook(fn func(ifaceID, from, text string)) {
 		return
 	}
 	p.gatewayText.Store(&fn)
+}
+
+// SetWarningInbound installs the warning digest reader (warnings.Relay). It
+// runs before the OOB classifier on what a satellite link delivers; a true
+// return means the bytes were a digest and are consumed. [MESHSAT-1734]
+func (p *Processor) SetWarningInbound(fn func(ctx context.Context, ifaceID string, wire []byte) bool) {
+	if fn == nil {
+		p.warnInbound.Store(nil)
+		return
+	}
+	p.warnInbound.Store(&fn)
 }
 
 func (p *Processor) oobHandler() func(ctx context.Context, ifaceID, fromAddr, text string) bool {
@@ -1324,6 +1339,14 @@ func (p *Processor) StartGatewayReceiver(ctx context.Context, gw gateway.Gateway
 				// classifier can consume the frame (R48-S2). [MESHSAT-1650]
 				if h := hopSigns(&p.hop); h != nil {
 					h.Positive(sourceIface, "rx")
+				}
+				// A public warning digest the Hub sent as a satellite MT is
+				// the Hub's bytes exactly, signed; it is read before any
+				// transform could refuse it as unauthenticated. [MESHSAT-1734]
+				if fn := p.warnInbound.Load(); fn != nil && strings.HasPrefix(sourceIface, "iridium") {
+					if (*fn)(ctx, sourceIface, []byte(msg.Text)) {
+						continue
+					}
 				}
 				// OOB management frames are classified before anything else
 				// sees the text: decode a copy through the interface's

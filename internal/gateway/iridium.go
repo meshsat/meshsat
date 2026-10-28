@@ -928,7 +928,12 @@ func (g *IridiumGateway) deliverMT(data []byte) {
 
 	// Try compact binary decode first (MeshSat-to-MeshSat messages).
 	// If that fails, treat the raw data as plain text (RockBLOCK web, email-to-SBD, etc.).
+	// A warning digest is neither: its bytes go on whole, and the processor
+	// hands them to the relay before anything reads them. [MESHSAT-1734]
 	inbound, err := DecodeCompact(data)
+	if data[0] == MsgTypeWarning {
+		inbound, err = &InboundMessage{Text: string(data), Source: "iridium"}, nil
+	}
 	if err != nil {
 		log.Info().Int("bytes", len(data)).Msg("iridium: not compact binary, treating as plain text")
 		inbound = &InboundMessage{
@@ -1095,6 +1100,10 @@ const (
 	// Extended message types (byte 0 values > 0x0F)
 	MsgTypeACK = 0x05 // App-level end-to-end ACK (3 bytes total)
 	MsgTypeSOS = 0x06 // SOS emergency alert (16 bytes)
+	// MsgTypeWarning is a public warning digest the Hub sent as an MT
+	// (warnings.Relay, MESHSAT-1734): the digest's own first byte. It is
+	// handed on whole, never read as a compact frame. [MESHSAT-1734]
+	MsgTypeWarning = 0x57
 )
 
 // EncodeCompact encodes a mesh message into compact binary for SBD transmission.

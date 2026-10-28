@@ -1954,6 +1954,31 @@ var migrations = []string{
 		day_count    INTEGER NOT NULL DEFAULT 0,
 		signed_in    INTEGER NOT NULL DEFAULT 0
 	);`,
+	// v85: the public warnings the Hub relayed here (warnings.Relay): one
+	// row per digest id, the latest message type for it, what it went out
+	// on, and whether a Cancel or an Update took it back. [MESHSAT-1734]
+	`CREATE TABLE IF NOT EXISTS warnings (
+		id TEXT PRIMARY KEY,
+		ref TEXT NOT NULL DEFAULT '',
+		msg_type TEXT NOT NULL,
+		test INTEGER NOT NULL DEFAULT 0,
+		source TEXT NOT NULL DEFAULT '',
+		sent TEXT NOT NULL,
+		expires TEXT NOT NULL DEFAULT '',
+		severity TEXT NOT NULL DEFAULT '',
+		urgency TEXT NOT NULL DEFAULT '',
+		certainty TEXT NOT NULL DEFAULT '',
+		category TEXT NOT NULL DEFAULT '',
+		event TEXT NOT NULL DEFAULT '',
+		language TEXT NOT NULL DEFAULT '',
+		text TEXT NOT NULL DEFAULT '',
+		raw BLOB,
+		via TEXT NOT NULL DEFAULT '',
+		received_at TEXT NOT NULL,
+		cancelled INTEGER NOT NULL DEFAULT 0,
+		bearers TEXT NOT NULL DEFAULT '[]'
+	);
+	CREATE INDEX IF NOT EXISTS idx_warnings_received ON warnings (received_at);`,
 }
 
 // postMigration is what a migration needs to know that its SQL cannot see:

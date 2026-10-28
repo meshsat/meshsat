@@ -2066,7 +2066,22 @@ func (w *DeliveryWorker) deliver(ctx context.Context, del database.MessageDelive
 
 	var deliveryErr error
 
-	if w.channelID == "mesh" || w.channelID == "mesh_0" {
+	if (w.channelID == "mesh" || w.channelID == "mesh_0") && del.Class == database.DeliveryClassAlert {
+		// A public warning (warnings.Relay): ALERT_APP, port 11, the text
+		// with BEL, so a node with its alert setting on buzzes; a plain
+		// text of the same words goes out as its own row. [MESHSAT-1734]
+		deliveryErr = w.mesh.SendRaw(ctx, transport.RawRequest{
+			PortNum: 11,
+			Payload: encoding_base64.StdEncoding.EncodeToString(append([]byte(del.TextPreview), 0x07)),
+			To:      del.Destination,
+		})
+		if deliveryErr == nil {
+			w.packets.Add(MeshTXRecord(w.mesh, w.channelID, transport.SendRequest{
+				Text: del.TextPreview,
+				To:   del.Destination,
+			}, del.MsgRef))
+		}
+	} else if w.channelID == "mesh" || w.channelID == "mesh_0" {
 		// Mesh delivery: inject into mesh transport
 		// An empty To keeps today's broadcast; a per-row destination
 		// (!nodeid) addresses one node. [MESHSAT-756]

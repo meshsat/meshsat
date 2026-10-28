@@ -57,6 +57,11 @@ const (
 	// is addressed to (meshsat-hub MESHSAT-1706), on the bridge's own subtree;
 	// only the Hub may publish it. [MESHSAT-1705]
 	topicTAKCoTInFor = "%s/bridge/%s/tak/cot/in"
+
+	// A public warning digest the Hub relays to THIS bridge for its area
+	// (meshsat-hub MESHSAT-1734), on the bridge's own subtree; only the Hub
+	// may publish it. [MESHSAT-1734]
+	topicWarnInFor = "%s/bridge/%s/warn/in"
 )
 
 // DefaultTopicRoot is the platform tenant's topic root.
@@ -188,6 +193,12 @@ func (t Topics) TAKCoTInFor(bridgeID string) string {
 }
 
 func (t Topics) takCoTIn() string { return fmt.Sprintf(topicTAKCoTIn, t.Root()) }
+
+// WarnInFor is the topic the Hub hands this bridge a public warning digest
+// on: {root}/bridge/<bridge id>/warn/in. [MESHSAT-1734]
+func (t Topics) WarnInFor(bridgeID string) string {
+	return fmt.Sprintf(topicWarnInFor, t.Root(), topicSegment(bridgeID))
+}
 
 // TAKCoTInFilters are the two subscriptions that receive what the Hub
 // delivers: the topic itself and one level below it.

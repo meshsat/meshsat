@@ -35,6 +35,11 @@ const (
 	// as the SOS burst's direct sends it replaces went. A routing rule
 	// never holds an SOS back. [MESHSAT-1446]
 	DeliveryClassSOS = "sos"
+	// DeliveryClassAlert is a public warning on the mesh (warnings.Relay,
+	// MESHSAT-1734): the text exactly as given, past the egress rules like
+	// an SOS, and on the mesh sent on ALERT_APP (port 11) with BEL, which
+	// makes a node with its alert setting on buzz, instead of as a text.
+	DeliveryClassAlert = "alert"
 )
 
 // ErrOOBPeerNotFound is returned when no peer matches.
@@ -322,7 +327,7 @@ func (db *DB) PruneOOBLog(keep int) error {
 // egress rules and the interface transforms of its channel (management
 // and Hub-uplink frames carry their own framing). [MESHSAT-963]
 func DeliveryClassBypassesPolicy(class string) bool {
-	return class == DeliveryClassOOB || class == DeliveryClassHubUplink || class == DeliveryClassLXMF || class == DeliveryClassSOS
+	return class == DeliveryClassOOB || class == DeliveryClassHubUplink || class == DeliveryClassLXMF || class == DeliveryClassSOS || class == DeliveryClassAlert
 }
 
 // DeliveryClassVerbatim reports whether a delivery class goes as its text

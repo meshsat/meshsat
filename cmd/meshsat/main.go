@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ecdh"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"database/sql"
 	"encoding/base64"
@@ -55,6 +56,7 @@ import (
 	"meshsat/internal/timesync"
 	"meshsat/internal/transport"
 	"meshsat/internal/types"
+	"meshsat/internal/warnings"
 )
 
 func main() {
@@ -2495,6 +2497,31 @@ func main() {
 		log.Info().Str("listen", cfg.PostListen).Str("url", cfg.PostURL).Bool("auto_approve", postSvc.Settings().AutoApprove).
 			Msg("community post armed")
 	}
+	// Public warnings the Hub relays for this kit's area (MESHSAT-1734): a
+	// digest signed by the pinned Hub directory key, on the kit's own
+	// warn/in or as a satellite MT, verified and put on the mesh (ALERT_APP
+	// with BEL, and a text) and on APRS as a bulletin, each once through the
+	// delivery ledger under the digest's id.
+	warnRelay := warnings.New(db, warnings.Deps{
+		Key: warnings.KeyFromConfig(db, directory.RotationKeyConfig),
+		SendAlert: func(key, text string) error {
+			_, _, _, err := dispatcher.QueueDirectSendKeyed("warnings", key, warningFingerprint(text), "mesh_0", text,
+				engine.DirectSendOptions{Class: database.DeliveryClassAlert, Precedence: "Immediate"})
+			return err
+		},
+		SendText: func(key, text string) error {
+			_, _, _, err := dispatcher.QueueDirectSendKeyed("warnings", key, warningFingerprint(text), "mesh_0", text,
+				engine.DirectSendOptions{Class: database.DeliveryClassPlain, Precedence: "Immediate"})
+			return err
+		},
+		SendBulletin: func(key, addressee, text string) error {
+			_, _, _, err := dispatcher.QueueDirectSendKeyed("warnings", key, warningFingerprint(addressee+" "+text), "aprs_0", text,
+				engine.DirectSendOptions{Class: database.DeliveryClassPlain, Destination: addressee})
+			return err
+		},
+		APRSUp: func() bool { return gwMgr.GatewayByInterfaceID("aprs_0") != nil },
+	})
+	proc.SetWarningInbound(warnRelay.HandleSatellite)
 
 	var hubReporter *hubreporter.HubReporter
 	var satFallback *hubreporter.SatFallback // [MESHSAT-963]
@@ -2956,6 +2983,8 @@ func main() {
 			gateway.GlobalTakEventBus.Publish(gateway.CotEventToRecord(ev, "inbound"))
 			takChat.Deliver(ev)
 		})
+		// A public warning the Hub relays for this kit's area. [MESHSAT-1734]
+		hubReporter.SetWarningHandler(func(wire []byte) { _ = warnRelay.Handle(ctx, wire, "hub") })
 
 		// A bridge that has pinned no Hub directory key fetches it once over
 		// HTTPS and pins it; after that only a signed rotation moves it. The
@@ -3946,4 +3975,11 @@ func cellSMPPPassword(db *database.DB) (string, error) {
 		return "", err
 	}
 	return pw, nil
+}
+
+// warningFingerprint is what a warning send's idempotency key must name
+// again: the text that went out. [MESHSAT-1734]
+func warningFingerprint(text string) string {
+	sum := sha256.Sum256([]byte(text))
+	return hex.EncodeToString(sum[:])
 }
