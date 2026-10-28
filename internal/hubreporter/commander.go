@@ -38,6 +38,11 @@ type CommandDeps struct {
 
 	// SendMT sends a message via satellite (Iridium MO). Returns error.
 	SendMT func(ctx context.Context, payload []byte) error
+	// SatInterface names the kit's satellite link as it is today, whichever
+	// modem it carries (iridium_0 for a 9602/9603, iridium_imt_0 for a 9704),
+	// for a send_mt that names none; nil keeps the old iridium_imt_0.
+	// [MESHSAT-1745]
+	SatInterface func() (string, bool)
 
 	// FlushBurst flushes the burst queue and returns the payload.
 	FlushBurst func(ctx context.Context) ([]byte, int, error)
@@ -382,6 +387,9 @@ func (ch *CommandHandler) handleSendText(cmd Command) (json.RawMessage, error) {
 type sendMTPayload struct {
 	Data string `json:"data"` // base64-encoded payload
 	Text string `json:"text"` // plain text (alternative to data)
+	// Interface names the satellite interface to queue on; empty = the
+	// kit's satellite link of the day (deps.SatInterface). [MESHSAT-1745]
+	Interface string `json:"interface,omitempty"`
 }
 
 // handleSendMT sends a message via satellite (queued through delivery pipeline).
@@ -408,8 +416,17 @@ func (ch *CommandHandler) handleSendMT(cmd Command) (json.RawMessage, error) {
 		return nil, fmt.Errorf("text or data is required")
 	}
 
-	// Route to first available satellite interface
-	ifaceID := "iridium_imt_0"
+	// The satellite link as it is today: the payload's choice, else the
+	// kit's active modem, else the 9704 name every kit once had.
+	ifaceID := strings.TrimSpace(p.Interface)
+	if ifaceID == "" && ch.deps.SatInterface != nil {
+		if id, ok := ch.deps.SatInterface(); ok && id != "" {
+			ifaceID = id
+		}
+	}
+	if ifaceID == "" {
+		ifaceID = "iridium_imt_0"
+	}
 	deliveryID, msgRef, err := ch.sendText(cmd, ifaceID, text)
 	if err != nil {
 		return nil, fmt.Errorf("queue MT: %w", err)

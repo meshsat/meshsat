@@ -2854,6 +2854,11 @@ func main() {
 		// Command handler — processes commands from the Hub (ping, send_mt, etc.)
 		cmdHandler := hubreporter.NewCommandHandler(hubReporter, hubBridgeID, healthFn)
 		cmdHandler.SetDeps(hubreporter.CommandDeps{
+			// send_mt goes on the modem the kit carries today, not on a
+			// name fixed when every kit had a 9704. [MESHSAT-1745]
+			SatInterface: func() (string, bool) {
+				return hubUplinkSatInterface(hubUplinkGatewayStatus(gwMgr), time.Now())
+			},
 			SendText: func(ifaceID, text string) (int64, string, error) {
 				// Hub commands carry no precedence yet; Phase 2
 				// (MESHSAT-546) extends the command envelope.

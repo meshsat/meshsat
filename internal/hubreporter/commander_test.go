@@ -141,3 +141,33 @@ func TestHandleCommandSendMT(t *testing.T) {
 
 	ch.HandleCommand(payload)
 }
+
+// MESHSAT-1745: a send_mt goes on the satellite interface the kit has today,
+// the payload's choice first, iridium_imt_0 only when nothing says better.
+func TestSendMTGoesOnTheKitsSatelliteLink(t *testing.T) {
+	for name, tc := range map[string]struct {
+		payload string
+		sat     func() (string, bool)
+		want    string
+	}{
+		"the kit's modem":        {`{"text":"x"}`, func() (string, bool) { return "iridium_0", true }, "iridium_0"},
+		"the payload's choice":   {`{"text":"x","interface":"iridium_imt_0"}`, func() (string, bool) { return "iridium_0", true }, "iridium_imt_0"},
+		"no link known":          {`{"text":"x"}`, func() (string, bool) { return "", false }, "iridium_imt_0"},
+		"no helper, the old way": {`{"text":"x"}`, nil, "iridium_imt_0"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var got string
+			ch := NewCommandHandler(nil, "test-bridge", func() BridgeHealth { return BridgeHealth{} })
+			ch.SetDeps(CommandDeps{
+				SendText:     func(ifaceID, text string) (int64, string, error) { got = ifaceID; return 1, "ref", nil },
+				SatInterface: tc.sat,
+			})
+			if _, err := ch.handleSendMT(Command{Cmd: "send_mt", RequestID: "r", Payload: json.RawMessage(tc.payload)}); err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want {
+				t.Fatalf("queued on %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
