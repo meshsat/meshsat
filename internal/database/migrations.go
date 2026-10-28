@@ -1979,6 +1979,14 @@ var migrations = []string{
 		bearers TEXT NOT NULL DEFAULT '[]'
 	);
 	CREATE INDEX IF NOT EXISTS idx_warnings_received ON warnings (received_at);`,
+
+	// v86: how the last writer to a mesh node wrote, so the node's answer
+	// goes back the same way: the bearer ("sms", "sbd", "imt"; "" for MQTT
+	// or a TAK server) and message id of the frame the chat came as, and
+	// whether the Hub asked for the answer on that bearer. [MESHSAT-1744]
+	`ALTER TABLE tak_chat_threads ADD COLUMN bearer TEXT NOT NULL DEFAULT '';
+	ALTER TABLE tak_chat_threads ADD COLUMN message_id TEXT NOT NULL DEFAULT '';
+	ALTER TABLE tak_chat_threads ADD COLUMN reply_here INTEGER NOT NULL DEFAULT 0;`,
 }
 
 // postMigration is what a migration needs to know that its SQL cannot see:

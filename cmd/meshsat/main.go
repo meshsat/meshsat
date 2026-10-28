@@ -2796,11 +2796,18 @@ func main() {
 		// at once) go to the Hub through the delivery ledger, raw over the
 		// satellite transport or base64 over SMS to the Hub's number. Was
 		// written for MESHSAT-447 and never wired. [MESHSAT-963]
+		hubSMS := cfg.HubSMSNumber
+		if v, err := db.GetSystemConfig("ttc_hub_number"); err == nil && strings.TrimSpace(v) != "" {
+			hubSMS = strings.TrimSpace(v)
+		}
+		// A dispatcher's chat the Hub could not hand this kit over MQTT
+		// comes as a frame, a satellite MT or base64 in an SMS from the
+		// Hub's number, and is delivered as the same GeoChat; the crew's
+		// answer and the kit's word go back as frames on that bearer when
+		// the Hub asked or its link is down. [MESHSAT-1744]
+		takChat.SetFrames(crewChatFrames(crewChatFrameSender(dispatcher, hubUplinkGatewayStatus(gwMgr), hubSMS), hubReporter.IsConnected))
+		proc.SetCrewChatInbound(crewChatInbound(takChat, hubSMS))
 		if cfg.HubSatFallback {
-			hubSMS := cfg.HubSMSNumber
-			if v, err := db.GetSystemConfig("ttc_hub_number"); err == nil && strings.TrimSpace(v) != "" {
-				hubSMS = strings.TrimSpace(v)
-			}
 			bearerPolicy := strings.ToLower(cfg.HubFallbackBearer)
 			satFallback = hubreporter.NewSatFallback(hubreporter.SatFallbackConfig{
 				BridgeID:         hubBridgeID,

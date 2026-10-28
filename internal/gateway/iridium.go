@@ -12,6 +12,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"meshsat/internal/crewchat"
 	"meshsat/internal/database"
 	"meshsat/internal/transport"
 )
@@ -931,7 +932,7 @@ func (g *IridiumGateway) deliverMT(data []byte) {
 	// A warning digest is neither: its bytes go on whole, and the processor
 	// hands them to the relay before anything reads them. [MESHSAT-1734]
 	inbound, err := DecodeCompact(data)
-	if data[0] == MsgTypeWarning {
+	if data[0] == MsgTypeWarning || data[0] == MsgTypeCrewChat {
 		inbound, err = &InboundMessage{Text: string(data), Source: "iridium"}, nil
 	}
 	if err != nil {
@@ -1104,6 +1105,10 @@ const (
 	// (warnings.Relay, MESHSAT-1734): the digest's own first byte. It is
 	// handed on whole, never read as a compact frame. [MESHSAT-1734]
 	MsgTypeWarning = 0x57
+	// MsgTypeCrewChat is a dispatcher's chat the Hub sent as an MT to a kit
+	// off MQTT (crewchat C1, MESHSAT-1744): 'C', handed on whole to the
+	// processor's crew chat reader. [MESHSAT-1744]
+	MsgTypeCrewChat = crewchat.MTTypeChat
 )
 
 // EncodeCompact encodes a mesh message into compact binary for SBD transmission.

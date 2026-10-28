@@ -13,6 +13,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"meshsat/internal/crewchat"
 	"meshsat/internal/transport"
 )
 
@@ -137,9 +138,14 @@ func chatMessageID(ev *CotEvent) string {
 // link the sender, remarks the words and the recipient, and a dest asks the
 // server to deliver it to the recipient only.
 func BuildGeoChat(from, to ChatPeer, text string) CotEvent {
+	return buildGeoChatWithID(from, to, text, newChatMessageID())
+}
+
+// buildGeoChatWithID is BuildGeoChat under a given message id: a chat that
+// came as a frame keeps the id the Hub gave it. [MESHSAT-1744]
+func buildGeoChatWithID(from, to ChatPeer, text, id string) CotEvent {
 	now := time.Now().UTC()
 	ts := now.Format(cotTimeFormat)
-	id := newChatMessageID()
 	ev := CotEvent{
 		Version: "2.0",
 		UID:     "GeoChat." + from.UID + "." + to.UID + "." + id,
@@ -252,6 +258,11 @@ const (
 )
 
 // TAKChatStatus is one report: what became of chat MessageID for CrewUID.
+// Bearer is the bearer the chat came on as a frame ("sms", "sbd", "imt";
+// empty for a chat from the Hub's MQTT or a TAK server), and ReplyHere says
+// the Hub asked for the word on that bearer even with its link up. The
+// frame goes out from send; the Hub reporter's MQTT report is separate.
+// [MESHSAT-1744]
 type TAKChatStatus struct {
 	MessageID string
 	CrewUID   string
@@ -259,6 +270,28 @@ type TAKChatStatus struct {
 	Reason    string // one machine word, empty for queued
 	Detail    string // one line for a person
 	At        time.Time
+	Bearer    string
+	ReplyHere bool
+}
+
+// TAKChatThreadsVia is the part of TAKChatThreads that remembers how a
+// chat came, so the answer goes back the same way: the bearer and the
+// message id of the frame, and whether the Hub asked for the answer on that
+// bearer. *database.DB is one; a Threads without it answers over MQTT only.
+// [MESHSAT-1744]
+type TAKChatThreadsVia interface {
+	OpenTAKChatThreadVia(node uint32, peerUID, peerCallsign, bearer, messageID string, replyHere bool, at time.Time) error
+	TAKChatThreadVia(node uint32, since time.Time) (peerUID, peerCallsign, bearer, messageID string, replyHere bool, ok bool, err error)
+}
+
+// TAKChatFrames are the ways back to a Hub that wrote over satellite or
+// SMS (MESHSAT-1744): a crew's answer (C2) and the kit's word (C3) as
+// uplink frames on the bearer the chat came on, and whether the Hub's MQTT
+// link is up, which decides whether a frame is owed at all.
+type TAKChatFrames struct {
+	SendAnswer func(bearer string, frame []byte) error
+	SendStatus func(bearer string, frame []byte) error
+	HubUp      func() bool
 }
 
 // TAKChatDeps connect the chat to the rest of the Bridge. Each may be nil,
@@ -291,6 +324,7 @@ type TAKChat struct {
 	mu      sync.Mutex
 	seen    map[string]time.Time
 	report  func(TAKChatStatus)
+	frames  *TAKChatFrames
 	pending map[int64]takChatPending // ledger row -> the chat it carries
 }
 
@@ -299,6 +333,14 @@ type takChatPending struct {
 	messageID string
 	crewUID   string
 	at        time.Time
+	via       via
+}
+
+// via is how a chat came: nothing for the Hub's MQTT or a TAK server, else
+// the frame's bearer and whether the Hub asked for the answer on it.
+type via struct {
+	bearer    string
+	replyHere bool
 }
 
 // takChatSeenFor is how long a chat's id is remembered against a second
@@ -324,6 +366,64 @@ func (c *TAKChat) SetReport(fn func(TAKChatStatus)) {
 	c.report = fn
 }
 
+// SetFrames gives the chat its ways back over satellite and SMS. Nil turns
+// them off: a chat that came as a frame is then answered over MQTT only.
+// [MESHSAT-1744]
+func (c *TAKChat) SetFrames(f *TAKChatFrames) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.frames = f
+}
+
+func (c *TAKChat) framesSet() *TAKChatFrames {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.frames
+}
+
+// hubUp reports whether the Hub's MQTT link is up; with no way to tell it
+// counts as up, so nothing is spent on a frame.
+func (c *TAKChat) hubUp() bool {
+	f := c.framesSet()
+	if f == nil || f.HubUp == nil {
+		return true
+	}
+	return f.HubUp()
+}
+
+// owesFrame says whether a chat that came on bearer gets its answer and
+// word back as a frame: when the Hub asked (ReplyHere), or its link is down.
+func (c *TAKChat) owesFrame(v via) bool {
+	return v.bearer != "" && c.framesSet() != nil && (v.replyHere || !c.hubUp())
+}
+
+// DeliverFrame takes a chat the Hub sent as a frame over satellite or SMS
+// (crewchat C1) and delivers it exactly as the same GeoChat on tak/cot/in:
+// from the operator the kit knows by hash, to the crew, under the Hub's
+// message id. The report and the answer go back on bearer when the Hub
+// asked or its link is down. [MESHSAT-1744]
+func (c *TAKChat) DeliverFrame(f crewchat.Chat, bearer string) int {
+	from := ChatPeer{UID: f.OperatorUID(), Callsign: f.Callsign}
+	// The frame names the crew by node alone; the callsign it is exported
+	// under is this kit's to give, so a report reads as the Hub shows it.
+	to := ChatPeer{UID: TAKNodeUID(f.Node)}
+	gw := c.gateway()
+	if gw != nil {
+		to.Callsign = TAKNodeCallsign(gw.config.CallsignPrefix, f.Node)
+	}
+	if f.ToKit {
+		to.UID = OwnTAKUID(fmt.Sprintf("%08x", f.Node))
+		to.Callsign = ""
+		if gw != nil {
+			_, to.Callsign = gw.own()
+		}
+	}
+	ev := buildGeoChatWithID(from, to, f.Text, f.MessageID)
+	log.Info().Str("bearer", bearer).Str("from", f.Callsign).Str("to", to.UID).Bool("reply_here", f.ReplyHere).
+		Msg("tak chat: a chat came as a frame")
+	return c.deliver(&ev, via{bearer: bearer, replyHere: f.ReplyHere})
+}
+
 // Deliver takes one GeoChat addressed to crews of this Bridge and queues it to
 // each of them: a direct message to a node it hears, a broadcast when the chat
 // is to this Bridge itself. A chat to the room, to nobody this Bridge reaches,
@@ -332,6 +432,10 @@ func (c *TAKChat) SetReport(fn func(TAKChatStatus)) {
 // undelivered with the reason; a chat seen already gets none, the first
 // delivery's report stands. It answers how many sends it queued.
 func (c *TAKChat) Deliver(ev *CotEvent) int {
+	return c.deliver(ev, via{})
+}
+
+func (c *TAKChat) deliver(ev *CotEvent, v via) int {
 	text := ChatText(ev)
 	from := ChatSender(ev)
 	to, _ := ChatAddressees(ev)
@@ -341,15 +445,15 @@ func (c *TAKChat) Deliver(ev *CotEvent) int {
 	}
 	switch {
 	case text == "":
-		c.refuseAll(id, to, takChatReasonNoText, "the chat carries no words")
+		c.refuseAll(id, to, takChatReasonNoText, "the chat carries no words", v)
 		return 0
 	case from.UID == "" && from.Callsign == "":
-		c.refuseAll(id, to, takChatReasonNoSender, "the chat names no sender for the answer to go to")
+		c.refuseAll(id, to, takChatReasonNoSender, "the chat names no sender for the answer to go to", v)
 		return 0
 	}
 	if _, crew := NodeFromTAKUID(from.UID); crew || from.UID == c.ownUID() {
 		// A crew's own chat, or this Bridge's: never back to the air.
-		c.refuseAll(id, to, takChatReasonOwnChat, "a crew's own chat, or the kit's, never goes back to the air")
+		c.refuseAll(id, to, takChatReasonOwnChat, "a crew's own chat, or the kit's, never goes back to the air", v)
 		return 0
 	}
 	if c.seenBefore(id) {
@@ -368,17 +472,17 @@ func (c *TAKChat) Deliver(ev *CotEvent) int {
 	for _, p := range to {
 		if c.isOwn(p) {
 			if c.deps.Broadcast == nil {
-				c.refuse(id, p, takChatReasonNoRadio, "the kit has no mesh radio to send on")
+				c.refuse(id, p, takChatReasonNoRadio, "the kit has no mesh radio to send on", v)
 				continue
 			}
 			delID, err := c.deps.Broadcast(line)
 			if err != nil {
 				log.Warn().Err(err).Str("from", from.Callsign).Msg("tak chat: broadcast not queued")
-				c.refuse(id, p, takChatReasonSendFailed, "not queued to the mesh: "+clipDetail(err.Error()))
+				c.refuse(id, p, takChatReasonSendFailed, "not queued to the mesh: "+clipDetail(err.Error()), v)
 				continue
 			}
 			log.Info().Str("from", from.Callsign).Msg("tak chat: to this Bridge, queued to the whole mesh")
-			c.queued(id, p, delID, "queued to the whole mesh on "+c.ownCallsign(p))
+			c.queued(id, p, delID, "queued to the whole mesh on "+c.ownCallsign(p), v)
 			n++
 			continue
 		}
@@ -388,7 +492,7 @@ func (c *TAKChat) Deliver(ev *CotEvent) int {
 		case takChatReasonAmbiguous:
 			log.Info().Str("from", from.Callsign).Str("callsign", p.Callsign).
 				Msg("tak chat: two heard nodes answer to the callsign, not sent")
-			c.refuse(id, p, reason, "two nodes the kit heard answer to "+p.Callsign+"; name the uid")
+			c.refuse(id, p, reason, "two nodes the kit heard answer to "+p.Callsign+"; name the uid", v)
 			continue
 		default:
 			// The Hub lists a crew for a day after its last export; this
@@ -396,7 +500,7 @@ func (c *TAKChat) Deliver(ev *CotEvent) int {
 			// so, or a dispatcher's message vanishes without a trace.
 			log.Info().Str("from", from.Callsign).Str("to", p.UID).Str("callsign", p.Callsign).
 				Msg("tak chat: to a crew this Bridge has not heard for a day, not sent")
-			c.refuse(id, p, reason, "the kit has not heard "+peerName(p)+" in the last day")
+			c.refuse(id, p, reason, "the kit has not heard "+peerName(p)+" in the last day", v)
 			continue
 		}
 		if done[node] {
@@ -404,26 +508,38 @@ func (c *TAKChat) Deliver(ev *CotEvent) int {
 		}
 		done[node] = true
 		if c.deps.SendDM == nil {
-			c.refuse(id, p, takChatReasonNoRadio, "the kit has no mesh radio to send on")
+			c.refuse(id, p, takChatReasonNoRadio, "the kit has no mesh radio to send on", v)
 			continue
 		}
 		delID, err := c.deps.SendDM(node, line)
 		if err != nil {
 			log.Warn().Err(err).Str("to", fmt.Sprintf("!%08x", node)).Msg("tak chat: direct message not queued")
-			c.refuse(id, p, takChatReasonSendFailed, "not queued to the radio: "+clipDetail(err.Error()))
+			c.refuse(id, p, takChatReasonSendFailed, "not queued to the radio: "+clipDetail(err.Error()), v)
 			continue
 		}
-		if c.deps.Threads != nil {
-			if err := c.deps.Threads.OpenTAKChatThread(node, from.UID, from.Callsign, c.now()); err != nil {
-				log.Warn().Err(err).Msg("tak chat: the answer's way back was not recorded")
-			}
-		}
+		c.openThread(node, from, id, v)
 		log.Info().Str("from", from.Callsign).Str("to", fmt.Sprintf("!%08x", node)).
 			Msg("tak chat: queued as a direct message")
-		c.queued(id, p, delID, fmt.Sprintf("queued as a direct message to !%08x", node))
+		c.queued(id, p, delID, fmt.Sprintf("queued as a direct message to !%08x", node), v)
 		n++
 	}
 	return n
+}
+
+// openThread remembers who wrote to node, and how, for the answer.
+func (c *TAKChat) openThread(node uint32, from ChatPeer, id string, v via) {
+	if c.deps.Threads == nil {
+		return
+	}
+	var err error
+	if tv, ok := c.deps.Threads.(TAKChatThreadsVia); ok {
+		err = tv.OpenTAKChatThreadVia(node, from.UID, from.Callsign, v.bearer, id, v.replyHere, c.now())
+	} else {
+		err = c.deps.Threads.OpenTAKChatThread(node, from.UID, from.Callsign, c.now())
+	}
+	if err != nil {
+		log.Warn().Err(err).Msg("tak chat: the answer's way back was not recorded")
+	}
 }
 
 // ObserveDelivery hears the ledger's delivery_* events (engine.Processor
@@ -456,47 +572,94 @@ func (c *TAKChat) ObserveDelivery(ev transport.MeshEvent) {
 		detail += ": " + clipDetail(data.Error)
 	}
 	c.send(TAKChatStatus{MessageID: p.messageID, CrewUID: p.crewUID, Status: TAKChatFailed,
-		Reason: takChatReasonSendFailed, Detail: detail})
+		Reason: takChatReasonSendFailed, Detail: detail, Bearer: p.via.bearer, ReplyHere: p.via.replyHere})
 }
 
 // queued reports a chat in the ledger and watches its row for the outcome.
-func (c *TAKChat) queued(id string, p ChatPeer, delID int64, detail string) {
+func (c *TAKChat) queued(id string, p ChatPeer, delID int64, detail string, v via) {
 	now := c.now()
 	c.mu.Lock()
-	for k, v := range c.pending {
-		if now.Sub(v.at) > takChatPendingFor {
+	for k, row := range c.pending {
+		if now.Sub(row.at) > takChatPendingFor {
 			delete(c.pending, k)
 		}
 	}
 	if delID > 0 {
-		c.pending[delID] = takChatPending{messageID: id, crewUID: crewUIDOf(p), at: now}
+		c.pending[delID] = takChatPending{messageID: id, crewUID: crewUIDOf(p), at: now, via: v}
 	}
 	c.mu.Unlock()
-	c.send(TAKChatStatus{MessageID: id, CrewUID: crewUIDOf(p), Status: TAKChatQueued, Detail: detail})
+	c.send(TAKChatStatus{MessageID: id, CrewUID: crewUIDOf(p), Status: TAKChatQueued, Detail: detail,
+		Bearer: v.bearer, ReplyHere: v.replyHere})
 }
 
 // refuse reports a chat that goes nowhere for one addressee.
-func (c *TAKChat) refuse(id string, p ChatPeer, reason, detail string) {
-	c.send(TAKChatStatus{MessageID: id, CrewUID: crewUIDOf(p), Status: TAKChatUndelivered, Reason: reason, Detail: detail})
+func (c *TAKChat) refuse(id string, p ChatPeer, reason, detail string, v via) {
+	c.send(TAKChatStatus{MessageID: id, CrewUID: crewUIDOf(p), Status: TAKChatUndelivered, Reason: reason, Detail: detail,
+		Bearer: v.bearer, ReplyHere: v.replyHere})
 }
 
-func (c *TAKChat) refuseAll(id string, to []ChatPeer, reason, detail string) {
+func (c *TAKChat) refuseAll(id string, to []ChatPeer, reason, detail string, v via) {
 	for _, p := range to {
-		c.refuse(id, p, reason, detail)
+		c.refuse(id, p, reason, detail, v)
 	}
 }
 
+// send hands a report to the Hub reporter, and, for a chat that came as a
+// frame whose word is owed on that bearer, sends it as a C3 frame too: the
+// Hub takes the same word twice as one. [MESHSAT-1744]
 func (c *TAKChat) send(st TAKChatStatus) {
+	if st.At.IsZero() {
+		st.At = c.now().UTC()
+	}
+	if c.owesFrame(via{bearer: st.Bearer, replyHere: st.ReplyHere}) {
+		c.sendStatusFrame(st)
+	}
 	c.mu.Lock()
 	fn := c.report
 	c.mu.Unlock()
 	if fn == nil {
 		return
 	}
-	if st.At.IsZero() {
-		st.At = c.now().UTC()
-	}
 	fn(st)
+}
+
+// sendStatusFrame sends one report as a C3 frame on the chat's bearer.
+func (c *TAKChat) sendStatusFrame(st TAKChatStatus) {
+	f := c.framesSet()
+	if f == nil || f.SendStatus == nil {
+		return
+	}
+	node, _, ok := crewNodeOf(st.CrewUID)
+	if !ok {
+		return
+	}
+	frame, err := crewchat.EncodeStatus(crewchat.Status{MessageID: st.MessageID, Node: node, At: st.At,
+		Status: st.Status, Reason: st.Reason, Detail: st.Detail})
+	if err != nil {
+		log.Warn().Err(err).Str("chat", st.MessageID).Msg("tak chat: the word on a chat could not be framed")
+		return
+	}
+	if err := f.SendStatus(st.Bearer, frame); err != nil {
+		log.Warn().Err(err).Str("chat", st.MessageID).Str("bearer", st.Bearer).
+			Msg("tak chat: the word on a chat was not queued on its bearer")
+		return
+	}
+	log.Info().Str("chat", st.MessageID).Str("bearer", st.Bearer).Str("status", st.Status).Int("bytes", len(frame)).
+		Msg("tak chat: the word on a chat queued as a frame")
+}
+
+// crewNodeOf is the node a crew uid names: a mesh node (meshsat-<hex>) or
+// this kit (MESHSAT-<hex>, toKit true).
+func crewNodeOf(uid string) (node uint32, toKit bool, ok bool) {
+	if node, ok := NodeFromTAKUID(uid); ok {
+		return node, false, true
+	}
+	if hexID, found := strings.CutPrefix(uid, "MESHSAT-"); found && len(hexID) == 8 {
+		if v, err := strconv.ParseUint(hexID, 16, 32); err == nil {
+			return uint32(v), true, true
+		}
+	}
+	return 0, false, false
 }
 
 // crewUIDOf is the addressee as the Hub keys it: the uid, else the callsign.
@@ -547,13 +710,28 @@ func (c *TAKChat) Reply(node uint32, text string) bool {
 	if text == "" || c.deps.Threads == nil || c.deps.Gateway == nil {
 		return false
 	}
-	peerUID, peerCallsign, ok, err := c.deps.Threads.TAKChatThread(node, c.now().Add(-TAKChatThreadLife))
+	var peerUID, peerCallsign string
+	var ok bool
+	var err error
+	var v via
+	var messageID string
+	if tv, isVia := c.deps.Threads.(TAKChatThreadsVia); isVia {
+		peerUID, peerCallsign, v.bearer, messageID, v.replyHere, ok, err = tv.TAKChatThreadVia(node, c.now().Add(-TAKChatThreadLife))
+	} else {
+		peerUID, peerCallsign, ok, err = c.deps.Threads.TAKChatThread(node, c.now().Add(-TAKChatThreadLife))
+	}
 	if err != nil {
 		log.Warn().Err(err).Msg("tak chat: the way back could not be read")
 		return false
 	}
 	if !ok {
 		return false
+	}
+	// The question came as a frame and the answer is owed the same way:
+	// a C2 frame on that bearer, and no GeoChat, which the Hub would take
+	// as a second answer. [MESHSAT-1744]
+	if messageID != "" && c.owesFrame(v) {
+		return c.replyFrame(node, text, peerUID, peerCallsign, messageID, v)
 	}
 	gw := c.deps.Gateway()
 	if gw == nil {
@@ -565,11 +743,32 @@ func (c *TAKChat) Reply(node uint32, text string) bool {
 	if err := gw.SendChat(gw.NodePeer(node), peer, text); err != nil {
 		log.Warn().Err(err).Str("to", peerCallsign).Msg("tak chat: the answer did not reach every TAK output")
 	}
-	if err := c.deps.Threads.OpenTAKChatThread(node, peerUID, peerCallsign, c.now()); err != nil {
-		log.Warn().Err(err).Msg("tak chat: the thread was not kept open")
-	}
+	c.openThread(node, ChatPeer{UID: peerUID, Callsign: peerCallsign}, messageID, v)
 	log.Info().Str("from", fmt.Sprintf("!%08x", node)).Str("to", peerCallsign).
 		Msg("tak chat: a crew's answer sent back")
+	return true
+}
+
+// replyFrame sends a crew's answer as a C2 frame on the bearer the question
+// came on, and keeps the thread open the same way.
+func (c *TAKChat) replyFrame(node uint32, text, peerUID, peerCallsign, messageID string, v via) bool {
+	f := c.framesSet()
+	if f == nil || f.SendAnswer == nil {
+		return false
+	}
+	frame, err := crewchat.EncodeAnswer(crewchat.Answer{MessageID: messageID, Node: node, At: c.now(), Text: text})
+	if err != nil {
+		log.Warn().Err(err).Str("chat", messageID).Msg("tak chat: a crew's answer could not be framed")
+		return false
+	}
+	if err := f.SendAnswer(v.bearer, frame); err != nil {
+		log.Warn().Err(err).Str("chat", messageID).Str("bearer", v.bearer).
+			Msg("tak chat: a crew's answer was not queued on its bearer")
+		return false
+	}
+	c.openThread(node, ChatPeer{UID: peerUID, Callsign: peerCallsign}, messageID, v)
+	log.Info().Str("from", fmt.Sprintf("!%08x", node)).Str("to", peerCallsign).Str("bearer", v.bearer).Int("bytes", len(frame)).
+		Msg("tak chat: a crew's answer queued as a frame")
 	return true
 }
 

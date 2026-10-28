@@ -104,6 +104,10 @@ type Processor struct {
 	// A public warning digest the Hub sent over satellite (warnings.Relay,
 	// MESHSAT-1734): read before the OOB classifier, consumed on match.
 	warnInbound atomic.Pointer[func(ctx context.Context, ifaceID string, wire []byte) bool]
+	// A dispatcher's chat the Hub sent as a frame over satellite or SMS
+	// (gateway.TAKChat.DeliverFrame, MESHSAT-1744): read after the warning
+	// digest and before the OOB classifier, consumed on match.
+	crewInbound atomic.Pointer[func(ctx context.Context, ifaceID, fromAddr, text string) bool]
 
 	// Live packet feed (TTC mode): every LoRa, APRS and SMS frame, both
 	// directions, in a 500-record ring that also emits "packet" events.
@@ -230,6 +234,19 @@ func (p *Processor) SetWarningInbound(fn func(ctx context.Context, ifaceID strin
 		return
 	}
 	p.warnInbound.Store(&fn)
+}
+
+// SetCrewChatInbound installs the crew chat frame reader (MESHSAT-1744).
+// It runs on what a satellite link or the cellular link delivers, after the
+// warning digest reader and before the OOB classifier, with the text as it
+// came off the link (an MT's bytes, an SMS's base64); a true return means
+// the text was a frame and is consumed.
+func (p *Processor) SetCrewChatInbound(fn func(ctx context.Context, ifaceID, fromAddr, text string) bool) {
+	if fn == nil {
+		p.crewInbound.Store(nil)
+		return
+	}
+	p.crewInbound.Store(&fn)
 }
 
 func (p *Processor) oobHandler() func(ctx context.Context, ifaceID, fromAddr, text string) bool {
@@ -1345,6 +1362,15 @@ func (p *Processor) StartGatewayReceiver(ctx context.Context, gw gateway.Gateway
 				// transform could refuse it as unauthenticated. [MESHSAT-1734]
 				if fn := p.warnInbound.Load(); fn != nil && strings.HasPrefix(sourceIface, "iridium") {
 					if (*fn)(ctx, sourceIface, []byte(msg.Text)) {
+						continue
+					}
+				}
+				// A dispatcher's chat the Hub sent as a frame to a kit off
+				// MQTT: a satellite MT, or base64 in an SMS from the Hub's
+				// number. Read before any transform or the mesh could see
+				// it. [MESHSAT-1744]
+				if fn := p.crewInbound.Load(); fn != nil && (strings.HasPrefix(sourceIface, "iridium") || strings.HasPrefix(sourceIface, "cellular")) {
+					if (*fn)(ctx, sourceIface, fromAddr, msg.Text) {
 						continue
 					}
 				}

@@ -50,3 +50,37 @@ func TestTAKChatThreadsArePrunedAfterAWeek(t *testing.T) {
 		t.Fatalf("rows = %d, want the week-old thread pruned", n)
 	}
 }
+
+// MESHSAT-1744: how the last writer wrote is kept with the thread, and a
+// writer over MQTT resets it.
+func TestTAKChatThreadRemembersHowTheWriterWrote(t *testing.T) {
+	db := testDB(t)
+	now := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	const node = 0xa1b3c2ec
+	if err := db.OpenTAKChatThreadVia(node, "meshsat-hub-op-~3f24d8f92959c061", "Anna", "sms", "01020304-0506-0708-090a-0b0c0d0e0f10", true, now); err != nil {
+		t.Fatal(err)
+	}
+	uid, callsign, bearer, id, replyHere, ok, err := db.TAKChatThreadVia(node, now.Add(-time.Hour))
+	if err != nil || !ok || uid != "meshsat-hub-op-~3f24d8f92959c061" || callsign != "Anna" || bearer != "sms" ||
+		id != "01020304-0506-0708-090a-0b0c0d0e0f10" || !replyHere {
+		t.Fatalf("thread = %q %q %q %q %v %v %v", uid, callsign, bearer, id, replyHere, ok, err)
+	}
+	// The plain read still works, and an older since hides it.
+	if uid, _, ok, _ := db.TAKChatThread(node, now.Add(-time.Hour)); !ok || uid != "meshsat-hub-op-~3f24d8f92959c061" {
+		t.Errorf("plain read %q %v", uid, ok)
+	}
+	if _, _, _, _, _, ok, _ := db.TAKChatThreadVia(node, now.Add(time.Minute)); ok {
+		t.Error("a thread older than since was returned")
+	}
+	// A later writer over MQTT: the answer goes back over MQTT again.
+	if err := db.OpenTAKChatThread(node, "ANDROID-1", "DISPATCH-1", now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	uid, _, bearer, id, replyHere, ok, _ = db.TAKChatThreadVia(node, now.Add(-time.Hour))
+	if !ok || uid != "ANDROID-1" || bearer != "" || id != "" || replyHere {
+		t.Errorf("after an MQTT writer: %q %q %q %v", uid, bearer, id, replyHere)
+	}
+	if _, _, _, _, _, ok, _ := db.TAKChatThreadVia(node+1, now.Add(-time.Hour)); ok {
+		t.Error("a thread leaked to another node")
+	}
+}
