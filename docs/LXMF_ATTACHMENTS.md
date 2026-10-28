@@ -57,10 +57,33 @@ ledger row's `reason`: `text only; not carried: audio Codec2 700C 1024 B, image 
 The bytes stay reachable on the kit through the routes above. A rule from `lxmf_0` to `lxmf_0`
 (an LXMF relay to other destinations) carries the text only too, for now.
 
+## Playback in the kit's web UI
+
+Messages (Comms) and the Inbox show an LXMF message's attachments under its text: the SPA reads
+the list above once per message and renders each by kind (`web/src/components/LxmfAttachments.vue`).
+
+- **Codec2 (0x03-0x09)** is decoded in the browser by libcodec2 built to WebAssembly, vendored at
+  `web/public/vendor/codec2/` (codec2 commit `310777b` via belteshazzar/codec2-web; LGPL-2.1 module,
+  MIT glue; sha256 and build script in `LICENSES.md` beside it). `VoiceNote.vue` fetches the bytes
+  on the first play, cuts them into whole frames (`bytes_per_frame = (bits + 7) / 8`, the last
+  partial frame dropped), runs `codec2_decode` per frame and plays the 8 kHz PCM through WebAudio
+  (play, pause, position, duration). The duration shows before anything is decoded, from the byte
+  count and the mode's frame geometry (`web/src/utils/codec2.js`). The 193 KB module loads on
+  demand, never in the main bundle, and the service worker keeps it after the first play.
+- **Opus (0x10-0x19)** plays in the browser's own `<audio>` straight from the attachments route
+  (`audio/ogg`).
+- **450 and 450PWB (0x01, 0x02)** are shown as not supported, as in Sideband and MeshChat.
+- A **photo** is an `<img>` on the attachments route (`PhotoNote.vue`), thumbnail or full width.
+
+The kit still serves bytes only: no transcoding, no WAV. `web/tests/codec2/roundtrip.test.js`
+(`npm test`, CI `test:web`) encodes a generated tone at 700C with the vendored module, decodes it
+and checks the frame counts, the mode table and that the output is not silence.
+
 ## Not done here
 
-- No codec on the kit: the SPA does not record or play a note yet (Codec2 WASM is the SPA's
-  task); the kit stores and serves the bytes.
+- No recording on the kit: the SPA plays a note but does not record one. The decoder module also
+  encodes (`encodeCodec2`), but a microphone needs a secure context, which a kit opened as
+  `http://<kit>:6050` on the LAN is not.
 - A voice note without text is filed and served but not forwarded by the rules (there is no text
   to forward).
 - Attachments on a delivery intent's attempts (`intent_worker.go`) take the same body, untested

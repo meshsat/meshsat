@@ -2,6 +2,7 @@
 import { ref, reactive, onMounted, onUnmounted, computed, watch } from 'vue'
 import { useMeshsatStore } from '@/stores/meshsat'
 import DeliveryStatus from '@/components/DeliveryStatus.vue'
+import LxmfAttachments from '@/components/LxmfAttachments.vue'
 import { transportBadge, portnumLabel, shortId, formatRelativeTime, formatTimestamp } from '@/utils/format'
 
 const store = useMeshsatStore()
@@ -1002,6 +1003,8 @@ onUnmounted(() => {
                   ? 'bg-teal-900/30 border border-teal-800/40 rounded-tr-sm'
                   : 'bg-gray-800 border border-gray-700/50 rounded-tl-sm'">
                 <p class="text-sm text-gray-200 break-words whitespace-pre-wrap leading-relaxed">{{ msg.decoded_text || '(empty)' }}</p>
+                <!-- An LXMF message's voice note and photo, played and shown here (MESHSAT-1735) -->
+                <LxmfAttachments v-if="msg.transport === 'reticulum'" :message-id="msg.id" />
               </div>
               <div class="flex items-center gap-2 mt-0.5 px-1" :class="msg.direction === 'tx' ? 'flex-row-reverse' : ''">
                 <span class="text-[10px] text-gray-600">{{ timeLabel(msg) }}</span>

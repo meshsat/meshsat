@@ -12,6 +12,12 @@
  *                                       after a deploy)
  *   every other GET      → stale-while-revalidate (hashed assets —
  *                          safe because filenames change per build)
+ *
+ * /vendor/codec2/* (the Codec2 decoder, 193 KB, MESHSAT-1735) rides the
+ * stale-while-revalidate path on purpose: it is fetched the first time a
+ * voice note is played and kept from then on, never precached, so a panel
+ * that never plays one never downloads it. The file is pinned by sha256
+ * in its LICENSES.md; a replaced copy is picked up by the revalidation.
  */
 
 const CACHE = 'meshsat-shell-v4'

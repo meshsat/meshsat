@@ -45,6 +45,7 @@ async function refresh() {
 function fromMesh(m) {
   return {
     id: 'mesh-' + m.id,
+    row_id: m.id, // the messages row, for an LXMF message's attachments (MESHSAT-1735)
     text: m.decoded_text || m.text,
     transport: m.transport || 'mesh',
     direction: m.direction,

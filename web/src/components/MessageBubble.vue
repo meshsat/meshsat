@@ -1,6 +1,7 @@
 <script setup>
 import { computed } from 'vue'
 import DeliveryTicks from '@/components/DeliveryTicks.vue'
+import LxmfAttachments from '@/components/LxmfAttachments.vue'
 import { formatRelativeTime } from '@/utils/format'
 
 // iMessage-style message bubble with per-bearer colouring.
@@ -48,6 +49,8 @@ const time = computed(() => formatRelativeTime(props.message.created_at || props
         <span class="ml-auto">{{ time }}</span>
       </div>
       <div class="whitespace-pre-wrap break-words">{{ message.decoded_text || message.text || '(empty)' }}</div>
+      <!-- An LXMF message's voice note and photo (MESHSAT-1735) -->
+      <LxmfAttachments v-if="message.row_id && (message.transport || '').toLowerCase() === 'reticulum'" :message-id="message.row_id" />
       <div v-if="outgoing" class="flex justify-end mt-1">
         <DeliveryTicks :status="message.delivery_status" :read="!!message.read" :per-bearer="message.per_bearer || []" />
       </div>
