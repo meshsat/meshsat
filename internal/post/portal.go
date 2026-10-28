@@ -186,6 +186,9 @@ type page struct {
 	BoardDays int
 	Status    string
 	Emergency bool
+	Closed    bool   // the operator closed the post
+	PurgeDate string // the day everything is deleted, while closed
+	PurgeDays int
 }
 
 type langLink struct{ Code, Name, Href string }
@@ -194,9 +197,13 @@ func (s *Service) newPage(w http.ResponseWriter, r *http.Request, path string) *
 	lang := s.lang(w, r, true)
 	st := s.Settings()
 	p := &page{Lang: lang, Q: "?lang=" + lang, S: merged(lang), Path: path, Form: map[string]string{},
-		Operator: st.Operator, MaxChars: s.cfg.MaxTextChars, BoardDays: int(s.cfg.BoardRetention.Hours() / 24)}
+		Operator: st.Operator, MaxChars: s.cfg.MaxTextChars, BoardDays: int(s.cfg.BoardRetention.Hours() / 24),
+		PurgeDays: int(s.cfg.PurgeAfter.Hours() / 24)}
 	if p.Operator == "" {
 		p.Operator = "(not set)"
+	}
+	if state := s.State(); state.Closed {
+		p.Closed, p.PurgeDate = true, state.PurgeAt.UTC().Format("2006-01-02")
 	}
 	for _, l := range Languages {
 		p.Langs = append(p.Langs, langLink{Code: l, Name: T(l, "lang_name"), Href: path + "?lang=" + l})
@@ -227,6 +234,10 @@ func (s *Service) write(w http.ResponseWriter, r *http.Request) {
 	s.SignIn(ipKey(r))
 	s.clientKey(w, r)
 	p := s.newPage(w, r, "/")
+	if p.Closed {
+		s.render(w, "closed", p)
+		return
+	}
 	s.render(w, "write", p)
 }
 
@@ -238,6 +249,10 @@ func (s *Service) send(w http.ResponseWriter, r *http.Request) {
 	s.SignIn(ipKey(r))
 	key := s.clientKey(w, r)
 	p := s.newPage(w, r, "/")
+	if p.Closed {
+		s.render(w, "closed", p)
+		return
+	}
 	if err := r.ParseForm(); err != nil {
 		p.Err = p.S["err_other"]
 		s.render(w, "write", p)
@@ -249,6 +264,10 @@ func (s *Service) send(w http.ResponseWriter, r *http.Request) {
 	p.Emergency = in.Emergency
 	m, err := s.Create(key, p.Lang, in)
 	if err != nil {
+		if errors.Is(err, ErrClosed) {
+			s.render(w, "closed", s.newPage(w, r, "/"))
+			return
+		}
 		p.Err = errorText(p.S, err)
 		if p.Err == p.S["err_other"] {
 			log.Error().Err(err).Msg("post: create failed")
@@ -305,7 +324,9 @@ func (s *Service) board(w http.ResponseWriter, r *http.Request) {
 			p.Err = p.S["err_other"]
 		} else {
 			p.Form = map[string]string{"name": r.PostForm.Get("name"), "status": r.PostForm.Get("status"), "place": r.PostForm.Get("place")}
-			if _, err := s.AddBoard(p.Form["name"], p.Form["status"], p.Form["place"]); err != nil {
+			if _, err := s.AddBoard(p.Form["name"], p.Form["status"], p.Form["place"]); errors.Is(err, ErrClosed) {
+				p.Err = fmt.Sprintf(p.S["closed_text"], p.PurgeDate)
+			} else if err != nil {
 				p.Err = errorText(p.S, err)
 				if p.Err == p.S["err_other"] {
 					log.Error().Err(err).Msg("post: board add failed")
@@ -371,6 +392,8 @@ func errorText(s map[string]string, err error) string {
 		return s["err_name"]
 	case errors.Is(err, ErrQuota):
 		return s["err_quota"]
+	case errors.Is(err, ErrClosed):
+		return s["closed_title"]
 	}
 	return s["err_other"]
 }
@@ -479,6 +502,7 @@ a{color:#8fd3c9}
 <button type="submit">{{.S.board_find}}</button>
 </form>
 {{if .Query}}{{if .Board}}{{range .Board}}<div class="card"><strong>{{.Name}}</strong> &middot; {{.Status}}{{if .Place}} &middot; {{.Place}}{{end}}<div class="meta">{{when .CreatedAt}}</div></div>{{end}}{{else}}<p>{{.S.board_empty}}</p>{{end}}{{end}}
+{{if .Closed}}<h2>{{.S.closed_title}}</h2><p>{{printf .S.closed_text .PurgeDate}}</p>{{else}}
 <h2>{{.S.board_add}}</h2>
 <form method="post" action="/board{{.Q}}">
 <label for="bname">{{.S.board_name}}</label>
@@ -489,6 +513,7 @@ a{color:#8fd3c9}
 <input id="bplace" name="place" value="{{index .Form "place"}}" maxlength="60">
 <button type="submit">{{.S.board_add}}</button>
 </form>
+{{end}}
 {{template "foot" .}}{{end}}
 
 {{define "about"}}{{template "head" .}}
@@ -496,7 +521,14 @@ a{color:#8fd3c9}
 <p>{{.S.about_how}}</p>
 <p>{{.S.about_cost}}</p>
 <h2>{{.S.data_title}}</h2>
-<p>{{.S.data_notice}}</p>
+<p>{{printf .S.data_notice .PurgeDays .BoardDays}}</p>
+{{if .Closed}}<h2>{{.S.closed_title}}</h2><p>{{printf .S.closed_text .PurgeDate}}</p>{{end}}
+{{template "foot" .}}{{end}}
+
+{{define "closed"}}{{template "head" .}}
+<h2>{{.S.closed_title}}</h2>
+<p>{{printf .S.closed_text .PurgeDate}}</p>
+<p><a href="/pickup{{.Q}}">{{.S.nav_pickup}}</a></p>
 {{template "foot" .}}{{end}}
 
 {{define "done"}}{{template "head" .}}

@@ -69,6 +69,30 @@ expires after 30 days (`MESHSAT_POST_BOARD_DAYS`). Nothing on it is sent anywher
 
 **About.** The operator's name and the data notice (below).
 
+**Close.** When the post is over, the operator closes it (`POST /api/post/close`, the button on
+`/post`): the portal takes no new message and no board line and says so, with the day everything is
+deleted; replies can still be picked up with a code until then. `MESHSAT_POST_PURGE_DAYS` (30) after
+closing, the service's own sweep (every 15 s, in its `Run` loop) purges every post, reply, board line
+and per-phone counter in one transaction, once per closing. `POST /api/post/purge` with
+`{"confirm": true}` purges now, open or closed; `POST /api/post/open` reopens a closed post and cancels
+the purge it scheduled. The board's own 30-day expiry per line is unchanged by any of this. What the
+purge does NOT touch: the delivery ledger's rows for the sent texts (`message_deliveries`,
+`delivery_submissions`), which are the Bridge's own record and follow its retention
+(`MESHSAT_RETENTION_DAYS`, 30); the notice says so.
+
+**Slips.** With `MESHSAT_POST_PRINT=true` and the booth's receipt printer service on the kit
+(`scripts/install-receipt-printer.sh`, `deploy/printer/meshsat-receipt-printer`, the only ESC/POS
+code there is), an approved post prints a slip: the pickup code double height, the recipient masked
+(`+3161****78`, `m***@example.org`), the time (UTC), the operator's name, the portal URL as text and
+the pickup page with the code as a QR. A reply prints a second slip with the code and the reply's
+first 100 characters; the Hub's "not sent" notice prints as a reply too. The Bridge only says what
+goes on the paper, as a `post_slip` event on `/api/events`; the service lays it out (English only, the
+paper speaks CP437) and takes no number from the booth sequence for it, so no hat. The service reports
+itself on `PUT /api/post/printer` (which printer, where the sequence is, how the last slip went, every
+60 s and after each slip); `/post` shows it, and a report older than three minutes shows as no printer.
+Approving twice prints once. **The service file is hand-installed on the kits and does not ship with
+the image: a kit prints post slips only after `install-receipt-printer.sh` has placed this version.**
+
 ## Switching it on
 
 Three deliberate steps, each reversible.
@@ -112,6 +136,8 @@ from a phone should show 53 and 80 only.
 | `MESHSAT_POST_MAX_BYTES` | `240` | Bytes a post may carry (what an SBD MO leaves after the head) |
 | `MESHSAT_POST_BOARD_DAYS` | `30` | Days a safe-and-well line stays |
 | `MESHSAT_POST_AUTO_APPROVE` | `false` | The approval queue off (also through the API) |
+| `MESHSAT_POST_PURGE_DAYS` | `30` | Days after the operator closes the post before everything it stored is purged |
+| `MESHSAT_POST_PRINT` | `false` | An approved post and a reply go to the kit's receipt printer as `post_slip` events |
 
 Host side, `/etc/default/meshsat-post`: `MESHSAT_POST_IFACE` (empty = first `wlx*`; never
 `wlan0`), `MESHSAT_POST_ADDR` (`10.44.0.1/24`), `MESHSAT_POST_SSID`, `MESHSAT_POST_CHANNEL`,
@@ -120,10 +146,13 @@ Host side, `/etc/default/meshsat-post`: `MESHSAT_POST_IFACE` (empty = first `wlx
 
 ### The operator API (the Bridge's own API, Swagger-annotated)
 
-`GET /api/post/config`, `PUT /api/post/config` (`auto_approve`, `posts_per_hour`, `posts_per_day`,
+`GET /api/post/config` (the configuration, the settings, the state: `closed`, `closed_at`,
+`purge_at`, `purged_at`, `purge_days`; `print` and `printer`, the receipt printer's last report with
+`heard` and its age), `PUT /api/post/config` (`auto_approve`, `posts_per_hour`, `posts_per_day`,
 `operator`), `GET /api/post/queue` (pending, recent, counts), `GET /api/post/{code}`,
-`POST /api/post/{code}/approve`, `POST /api/post/{code}/refuse`. All answer 503 while the post is
-not configured.
+`POST /api/post/{code}/approve`, `POST /api/post/{code}/refuse`, `POST /api/post/close`,
+`POST /api/post/open`, `POST /api/post/purge` (`{"confirm": true}`, 400 without), `PUT /api/post/printer`
+(the receipt printer service's report). All answer 503 while the post is not configured.
 
 ### The Hub side
 
@@ -144,34 +173,45 @@ reply budget per conversation.
 
 ## Data notice (as shown on the portal)
 
+The two numbers are `MESHSAT_POST_PURGE_DAYS` and `MESHSAT_POST_BOARD_DAYS` (both 30); a closed post
+adds the day everything is deleted.
+
 **English.** Kept on this post: your message, the address you wrote to, the name you gave, the
-reply, and a counter per phone so one phone cannot use everything. Kept until the operator closes
-the post, at most 30 days. Sent onward: only the message, your name and the pickup code. The
-safe-and-well board is separate and only holds what you put on it yourself. No account, no app, no
+reply, and a counter per phone so one phone cannot use everything. Deleted 30 days after the operator
+closes the post, or sooner by the operator; the kit's send log keeps the sent text under its own
+retention. Sent onward: only the message, your name and the pickup code. The safe-and-well board is
+separate, holds only what you put on it yourself, and a line stays 30 days. No account, no app, no
 tracking. The legal ground is the protection of your or another person's vital interests; the
 operator named above is responsible for the data.
 
 **Nederlands.** Bewaard op deze post: je bericht, het adres waar je naartoe schreef, de naam die
-je opgaf, het antwoord, en een teller per telefoon zodat een telefoon niet alles kan opmaken.
-Bewaard tot de beheerder de post sluit, hoogstens 30 dagen. Doorgestuurd: alleen het bericht, je
-naam en de ophaalcode. Het bord Veilig en wel staat los hiervan en bevat alleen wat je er zelf op
-zet. Geen account, geen app, geen tracking. De grondslag is de bescherming van jouw vitale belangen
-of die van een ander; de hierboven genoemde beheerder is verantwoordelijk voor de gegevens.
+je opgaf, het antwoord, en een teller per telefoon zodat een telefoon niet alles kan opmaken. Gewist
+30 dagen nadat de beheerder de post sluit, of eerder door de beheerder; het verzendlogboek van de kit
+bewaart de verzonden tekst volgens zijn eigen termijn. Doorgestuurd: alleen het bericht, je naam en
+de ophaalcode. Het bord Veilig en wel staat los hiervan, bevat alleen wat je er zelf op zet, en een
+regel blijft 30 dagen staan. Geen account, geen app, geen tracking. De grondslag is de bescherming
+van jouw vitale belangen of die van een ander; de hierboven genoemde beheerder is verantwoordelijk
+voor de gegevens.
 
 **Ελληνικά.** Φυλάσσονται σε αυτό το σημείο: το μήνυμά σου, η διεύθυνση στην οποία έγραψες, το
 όνομα που έδωσες, η απάντηση, και ένας μετρητής ανά τηλέφωνο ώστε να μην εξαντλεί ένα τηλέφωνο τα
-πάντα. Μένουν μέχρι ο διαχειριστής να κλείσει το σημείο, το πολύ 30 ημέρες. Προωθούνται: μόνο το
-μήνυμα, το όνομά σου και ο κωδικός παραλαβής. Ο πίνακας Είμαι καλά είναι ξεχωριστός και περιέχει
-μόνο ό,τι βάζεις εσύ. Χωρίς λογαριασμό, χωρίς εφαρμογή, χωρίς παρακολούθηση. Η νομική βάση είναι η
-προστασία ζωτικών συμφερόντων, δικών σου ή άλλου· υπεύθυνος για τα δεδομένα είναι ο διαχειριστής
-που αναφέρεται παραπάνω.
+πάντα. Διαγράφονται 30 ημέρες αφού ο διαχειριστής κλείσει το σημείο, ή νωρίτερα από τον διαχειριστή·
+το αρχείο αποστολών της συσκευής κρατά το σταλμένο κείμενο για τον δικό του χρόνο. Προωθούνται: μόνο
+το μήνυμα, το όνομά σου και ο κωδικός παραλαβής. Ο πίνακας Είμαι καλά είναι ξεχωριστός, περιέχει μόνο
+ό,τι βάζεις εσύ, και κάθε γραμμή μένει 30 ημέρες. Χωρίς λογαριασμό, χωρίς εφαρμογή, χωρίς
+παρακολούθηση. Η νομική βάση είναι η προστασία ζωτικών συμφερόντων, δικών σου ή άλλου· υπεύθυνος για
+τα δεδομένα είναι ο διαχειριστής που αναφέρεται παραπάνω.
+
+**Closed (shown on the write page, the board and the About page).** This post is closed. No new
+message can be written here. A reply can still be picked up with your code until `<day>`; after
+that everything is deleted.
 
 ## Open items (from the plan; not claims)
 
 - **GDPR.** The ground is Art. 6(1)(d), vital interests; the organisation running the post is the
   controller and MeshSat the processor; a DPIA is likely needed (a lawyer's call, not ours). The
-  30-day retention follows Person Finder's delete-after-crisis rule; the "kept until the operator
-  closes the post" line needs an operator action that does not exist yet (a purge endpoint).
+  30-day retention follows Person Finder's delete-after-crisis rule; the operator action it needs
+  exists since the close and purge endpoints (above), and the notice says what they do.
 - **McFadden (C-484/14).** An open WiFi's operator is not liable for what passes, but may be
   ordered to secure it; the post forwards nothing and runs no internet, which is the position to
   argue from. Not reviewed by a lawyer.
@@ -180,10 +220,12 @@ of die van een ander; de hierboven genoemde beheerder is verantwoordelijk voor d
 - **Not proven on hardware.** Nothing in this page has run on a kit: the portal has been exercised
   with `httptest` only, the host files have been syntax-checked only, and no phone has joined the
   SSID. The MT7612U's AP mode and the DNAT-to-loopback path are the two things to prove first.
-- **Receipt slips.** The booth printer (`deploy/printer`) is the natural place for a printed pickup
-  code; not wired in phase 0.
-- **Message retention on the kit** is the Bridge's general retention, not the 30 days the notice
-  promises; a purge of `post_*` rows on close is owed.
+- **Receipt slips** are wired (`MESHSAT_POST_PRINT`, above) but have not printed on paper: the
+  Python side is checked against a fake printer, the Bridge side against a recording printer, and the
+  two meet only through the `post_slip` event's fields. The first real slip is a kit test.
+- **The delivery ledger** keeps the sent text of a post (the composed "@" line) under the Bridge's
+  retention, not the post's: the purge removes the `post_*` rows only. Honest in the notice; a ledger
+  purge by source would be a change to the ledger's own history rules.
 - **One satellite link per post.** A post leaves on the kit's satellite link only; there is no SMS
   leg, because the Hub's lane takes satellite MOs alone (its provenance rule).
 

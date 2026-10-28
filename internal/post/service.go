@@ -32,6 +32,8 @@ type Config struct {
 	MaxBytes       int           // bytes a post may carry
 	BoardRetention time.Duration // how long a board line stays
 	AutoApprove    bool          // the approval queue off: a post leaves at once
+	PurgeAfter     time.Duration // how long after the post is closed everything it stored is purged
+	Print          bool          // slips go to the kit's receipt printer (Deps.Printer)
 }
 
 // Defaults are the plan's: a busy post stays affordable, and a stranger
@@ -58,6 +60,9 @@ func (c *Config) defaults() {
 	if c.BoardRetention <= 0 {
 		c.BoardRetention = 30 * 24 * time.Hour
 	}
+	if c.PurgeAfter <= 0 {
+		c.PurgeAfter = 30 * 24 * time.Hour
+	}
 }
 
 // Settings are the operator's run-time choices, kept in system_config.
@@ -73,6 +78,8 @@ const (
 	settingPerHour     = "post_per_hour"
 	settingPerDay      = "post_per_day"
 	settingOperator    = "post_operator"
+	settingClosedAt    = "post_closed_at" // RFC 3339; "" = open
+	settingPurgedAt    = "post_purged_at" // RFC 3339; the last purge
 )
 
 // Queuer queues one text on an interface under an idempotency key
@@ -89,6 +96,9 @@ type Deps struct {
 	// it at all; nil = the configured one, taken as present.
 	Bearer func() (ifaceID string, ok bool)
 	Now    func() time.Time
+	// Printer takes a slip for an approved post and for a reply; nil = no
+	// slips (MESHSAT_POST_PRINT off, or no printer on this kit).
+	Printer Printer
 }
 
 // SendSource is the submission source of a post's delivery rows.
@@ -104,6 +114,7 @@ type Service struct {
 	// that opened the portal is not sent to it again by its own probes. The
 	// database keeps the same mark; this is the fast path.
 	signedIn map[string]time.Time
+	printer  printerMemory
 }
 
 // New builds the service. It does nothing until Start.
@@ -185,6 +196,9 @@ type Submission struct {
 // approval queue is off. The error is one of the Err* values for the form,
 // or another error for the log.
 func (s *Service) Create(clientKey, lang string, in Submission) (*database.PostMessage, error) {
+	if s.State().Closed {
+		return nil, ErrClosed
+	}
 	rcpt, err := ParseRecipient(in.Recipient)
 	if err != nil {
 		return nil, err
@@ -284,11 +298,103 @@ func (s *Service) Approve(code string) error {
 		return err
 	}
 	log.Info().Str("code", code).Str("iface", iface).Int64("delivery_id", id).Bool("replayed", replayed).Msg("post: approved and queued")
+	if !replayed {
+		s.printSlip(m, nil)
+	}
 	return nil
 }
 
 // ErrUnknownCode is a code the kit never gave out.
 var ErrUnknownCode = errors.New("unknown code")
+
+// ErrClosed is the post refusing a new post or board line after the
+// operator closed it.
+var ErrClosed = errors.New("closed")
+
+// State is whether the post is open, and when what it stored goes.
+type State struct {
+	Closed   bool
+	ClosedAt time.Time // zero while open
+	PurgeAt  time.Time // ClosedAt + PurgeAfter; zero while open
+	PurgedAt time.Time // the last purge; zero when none
+}
+
+// State reads the post's state from system_config.
+func (s *Service) State() State {
+	var st State
+	if s.deps.DB == nil {
+		return st
+	}
+	if v, err := s.deps.DB.GetSystemConfig(settingClosedAt); err == nil && v != "" {
+		if t, err := time.Parse(time.RFC3339Nano, v); err == nil {
+			st.Closed, st.ClosedAt, st.PurgeAt = true, t, t.Add(s.cfg.PurgeAfter)
+		}
+	}
+	if v, err := s.deps.DB.GetSystemConfig(settingPurgedAt); err == nil && v != "" {
+		if t, err := time.Parse(time.RFC3339Nano, v); err == nil {
+			st.PurgedAt = t
+		}
+	}
+	return st
+}
+
+// Close closes the post: the portal takes no new post and no board line,
+// replies can still be picked up, and everything the portal stored is
+// purged PurgeAfter later by the sweep in Run, or sooner by Purge. Closing
+// a closed post changes nothing.
+func (s *Service) Close() (State, error) {
+	st := s.State()
+	if st.Closed {
+		return st, nil
+	}
+	if err := s.deps.DB.SetSystemConfig(settingClosedAt, s.now().Format(time.RFC3339Nano)); err != nil {
+		return st, err
+	}
+	st = s.State()
+	log.Info().Time("purge_at", st.PurgeAt).Msg("post: closed by the operator")
+	return st, nil
+}
+
+// Open reopens a closed post; the purge it scheduled is off.
+func (s *Service) Open() (State, error) {
+	if err := s.deps.DB.SetSystemConfigs([2]string{settingClosedAt, ""}, [2]string{settingPurgedAt, ""}); err != nil {
+		return s.State(), err
+	}
+	log.Info().Msg("post: reopened by the operator")
+	return s.State(), nil
+}
+
+// Purge removes everything the portal stored, now: the posts, the replies,
+// the board, the phones' counters and sign-in marks. The post's state
+// (open or closed) stays as it is.
+func (s *Service) Purge() (database.PostPurgeCounts, error) {
+	c, err := s.deps.DB.PurgePost()
+	if err != nil {
+		return c, err
+	}
+	s.mu.Lock()
+	s.signedIn = map[string]time.Time{}
+	s.mu.Unlock()
+	if err := s.deps.DB.SetSystemConfig(settingPurgedAt, s.now().Format(time.RFC3339Nano)); err != nil {
+		log.Warn().Err(err).Msg("post: purge time not saved")
+	}
+	log.Info().Int64("messages", c.Messages).Int64("replies", c.Replies).Int64("board", c.Board).Int64("sessions", c.Sessions).Msg("post: purged")
+	return c, nil
+}
+
+// sweep purges a closed post once its time has come, once per closing.
+func (s *Service) sweep() {
+	st := s.State()
+	if !st.Closed || s.now().Before(st.PurgeAt) {
+		return
+	}
+	if !st.PurgedAt.IsZero() && !st.PurgedAt.Before(st.ClosedAt) {
+		return
+	}
+	if _, err := s.Purge(); err != nil {
+		log.Warn().Err(err).Msg("post: the scheduled purge failed; tried again next tick")
+	}
+}
 
 // Refuse keeps a post from leaving.
 func (s *Service) Refuse(code string) error {
@@ -340,6 +446,9 @@ func (s *Service) Recent(limit int) ([]database.PostMessage, error) {
 // AddBoard puts a line on the safe-and-well board; it expires after the
 // retention.
 func (s *Service) AddBoard(name, status, place string) (*database.PostBoardEntry, error) {
+	if s.State().Closed {
+		return nil, ErrClosed
+	}
 	name, err := CleanBoardField(name)
 	if err != nil {
 		return nil, err
@@ -446,11 +555,13 @@ func (s *Service) HandleInbound(ifaceID, from, text string) {
 	if r.Text == "" {
 		return
 	}
-	if err := s.deps.DB.InsertPostReply(&database.PostReply{Code: m.Code, From: r.From, Text: r.Text, ReceivedAt: s.now()}); err != nil {
+	reply := &database.PostReply{Code: m.Code, From: r.From, Text: r.Text, ReceivedAt: s.now()}
+	if err := s.deps.DB.InsertPostReply(reply); err != nil {
 		log.Error().Err(err).Str("code", m.Code).Msg("post: reply not stored")
 		return
 	}
 	log.Info().Str("code", m.Code).Str("iface", ifaceID).Int("bytes", len(r.Text)).Msg("post: reply stored")
+	s.printSlip(m, reply)
 }
 
 func (s *Service) failLatest(address, reason string) {
@@ -461,12 +572,16 @@ func (s *Service) failLatest(address, reason string) {
 	if err := s.deps.DB.SetPostStatus(m.Code, database.PostStatusFailed, "", 0); err != nil {
 		return
 	}
-	_ = s.deps.DB.InsertPostReply(&database.PostReply{Code: m.Code, From: "MeshSat Hub", Text: "not sent: " + reason, ReceivedAt: s.now()})
+	reply := &database.PostReply{Code: m.Code, From: "MeshSat Hub", Text: "not sent: " + reason, ReceivedAt: s.now()}
+	if err := s.deps.DB.InsertPostReply(reply); err == nil {
+		s.printSlip(m, reply)
+	}
 	log.Warn().Str("code", m.Code).Str("reason", reason).Msg("post: the Hub did not send it")
 }
 
 // Run follows the queued posts' delivery rows until they are sent or dead,
-// and forgets old phones. It returns when ctx ends.
+// forgets old phones, and purges a closed post when its time has come. It
+// returns when ctx ends.
 func (s *Service) Run(ctx context.Context, every time.Duration) {
 	if every <= 0 {
 		every = 15 * time.Second
@@ -508,4 +623,5 @@ func (s *Service) Tick() {
 		}
 	}
 	_ = s.deps.DB.PrunePostSessions(s.now().Add(-7 * 24 * time.Hour))
+	s.sweep()
 }

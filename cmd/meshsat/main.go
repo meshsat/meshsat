@@ -2465,13 +2465,24 @@ func main() {
 	var postSvc *post.Service
 	var postServer *http.Server
 	if cfg.PostListen != "" {
+		// With MESHSAT_POST_PRINT on, an approved post and a reply go out
+		// as "post_slip" events, which the kit's receipt printer service
+		// (deploy/printer) prints; the service reports itself back on
+		// PUT /api/post/printer. Closed, the post purges what it stored
+		// MESHSAT_POST_PURGE_DAYS later.
+		var postPrinter post.Printer
+		if cfg.PostPrint {
+			postPrinter = post.EventPrinter{Emit: proc.Emit}
+		}
 		postSvc = post.New(post.Config{
 			Listen: cfg.PostListen, PortalURL: cfg.PostURL, Operator: cfg.PostOperator, Bearer: cfg.PostBearer,
 			PostsPerHour: cfg.PostPerHour, PostsPerDay: cfg.PostPerDay, MaxTextChars: cfg.PostMaxChars, MaxBytes: cfg.PostMaxBytes,
 			BoardRetention: time.Duration(cfg.PostBoardDays) * 24 * time.Hour, AutoApprove: cfg.PostAutoApprove,
+			PurgeAfter: time.Duration(cfg.PostPurgeDays) * 24 * time.Hour, Print: cfg.PostPrint,
 		}, post.Deps{
-			DB:    db,
-			Queue: dispatcher,
+			DB:      db,
+			Queue:   dispatcher,
+			Printer: postPrinter,
 			Bearer: func() (string, bool) {
 				if cfg.PostBearer != "" && cfg.PostBearer != "auto" {
 					return cfg.PostBearer, gwMgr.GatewayByInterfaceID(cfg.PostBearer) != nil
@@ -2495,6 +2506,7 @@ func main() {
 		}
 		go postSvc.Run(ctx, 15*time.Second)
 		log.Info().Str("listen", cfg.PostListen).Str("url", cfg.PostURL).Bool("auto_approve", postSvc.Settings().AutoApprove).
+			Bool("print", cfg.PostPrint).Int("purge_days", cfg.PostPurgeDays).Bool("closed", postSvc.State().Closed).
 			Msg("community post armed")
 	}
 	// Public warnings the Hub relays for this kit's area (MESHSAT-1734): a

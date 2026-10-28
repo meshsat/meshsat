@@ -14,6 +14,13 @@ delivered/sent on a bearer that leaves this kit (APRS, SMS, satellite, Hub), nev
 local mesh hop. A message nothing relays prints nothing.
 MESHSAT_PRINTER_TRIGGER=arrival restores the old print-on-arrival behaviour.
 
+Since MESHSAT-1733 it also prints the Community Post's slips: the bridge sends a
+`post_slip` event when an operator approves a post (the pickup code large, the
+recipient masked, the time, the portal's address as a QR) and when a reply comes
+back for a code (the code and the reply's first 100 characters). Those take no
+number from the booth sequence. The service reports itself to the bridge on
+PUT /api/post/printer, so the operator screen can show whether a printer is there.
+
 Stdlib only: RFCOMM through socket.AF_BLUETOOTH, ESC/POS written by hand (python-escpos
 and PyBluez are not installed on the kits and will not be added days before an event).
 
@@ -318,6 +325,60 @@ def build_slip(msg: dict, cfg: dict, serial: int = 0) -> bytes:
     return b"".join(parts)
 
 
+def build_post_slip(msg: dict, cfg: dict) -> bytes:
+    """A Community Post slip [MESHSAT-1733]. `msg` is the bridge's post_slip event
+    data: kind (post or reply), code, to (already masked), at (RFC 3339 UTC), url
+    (the portal), pickup (the pickup page with the code), text (a reply's first 100
+    characters), emergency, operator. English only: the paper speaks CP437, and the
+    code is the part that matters. No serial, no strapline, no hat: this is not a
+    booth souvenir, it is somebody's copy of their code."""
+    width = cfg["width"]
+    kind = msg.get("kind") or "post"
+    code = ascii_only(msg.get("code", ""))
+    when = ascii_only(msg.get("at", "")).replace("T", " ")[:16]
+    if when:
+        when += " UTC"
+    logo = cfg.get("logo")
+    if logo:
+        parts = [INIT, feed(cfg["feed_before"]), raster(*logo), b"\n"]
+    else:
+        parts = [INIT, feed(cfg["feed_before"]), ALIGN_C, BOLD_ON, BIG_ON, b"MeshSat\n", BIG_OFF, BOLD_OFF]
+    parts += [ALIGN_C, BOLD_ON, b"Community Post\n"]
+    operator = ascii_only(msg.get("operator", ""))
+    if operator:
+        for line in wrap(operator, width):
+            parts.append(line.encode() + b"\n")
+    parts += [BOLD_OFF, b"-" * width + b"\n"]
+    if kind == "reply":
+        parts.append(b"A REPLY CAME BACK\n")
+    elif msg.get("emergency"):
+        parts.append(b"SOS - YOUR PICKUP CODE\n")
+    else:
+        parts.append(b"YOUR PICKUP CODE\n")
+    parts += [BOLD_ON, BIG_ON, code.encode() + b"\n", BIG_OFF, BOLD_OFF, b"-" * width + b"\n", ALIGN_L]
+    parts.append(f"{'to':<8}{ascii_only(msg.get('to', ''))}\n".encode())
+    if when:
+        parts.append(f"{'time':<8}{when}\n".encode())
+    if kind == "reply":
+        parts.append(b"-" * width + b"\n")
+        for line in wrap(ascii_only(msg.get("text", "")), width):
+            parts.append(line.encode() + b"\n")
+    parts.append(b"-" * width + b"\n")
+    hint = ("Read the reply with this code on this WiFi." if kind == "reply"
+            else "Keep this. The reply waits here under this code.")
+    for line in wrap(hint, width):
+        parts.append(line.encode() + b"\n")
+    url = ascii_only(msg.get("url", ""))
+    pickup = ascii_only(msg.get("pickup", "")) or url
+    parts += [feed(1), ALIGN_C]
+    if pickup:
+        parts += [qr(pickup), b"\n"]
+    if url:
+        parts.append(url.encode() + b"\n")
+    parts.append(feed(cfg["feed_after"]))
+    return b"".join(parts)
+
+
 # ── Bluetooth: find, connect, print, disconnect ────────────────────────────────
 class Printer:
     """One slip, one connection. Never holds the link between slips — that is what
@@ -434,22 +495,36 @@ class SlipQueue(threading.Thread):
                     break
                 self._print_with_retry(msg)
 
+    def pending(self) -> int:
+        with self.lock:
+            return len(self.q)
+
     def _print_with_retry(self, msg):
         cfg = self.cfg
+        post = msg.get("kind") in ("post", "reply")
         for attempt in range(1, cfg["attempts"] + 1):
             # Worked out again on EVERY attempt, not once up front. The usual
             # reason an attempt fails is the other kit holding the printer's one
             # RFCOMM slot, and by the time we retry it has printed and moved the
             # sequence on - so this is also what keeps two kits that collide from
             # claiming the same number.
-            serial = max(read_count(cfg["count_path"]),
-                         peer_count(cfg["peers"], cfg["peer_timeout"], self.log)) + 1
-            payload = build_slip(msg, cfg, serial)
+            if post:
+                # A post slip is not a booth souvenir: no number, no hat.
+                serial, payload = 0, build_post_slip(msg, cfg)
+            else:
+                serial = max(read_count(cfg["count_path"]),
+                             peer_count(cfg["peers"], cfg["peer_timeout"], self.log)) + 1
+                payload = build_slip(msg, cfg, serial)
             if self.printer.print_slip(payload):
+                if post:
+                    self.log(f"post slip printed for {msg.get('id')}")
+                    REPORT.printed(cfg, self.log)
+                    return
                 # Committed only now: a slip that is never printed burns no number.
                 write_count(cfg["count_path"], serial, self.log)
                 push_count(cfg["peers"], serial, cfg["peer_timeout"], self.log)
                 self.log(f"slip #{serial} printed")
+                REPORT.printed(cfg, self.log)
                 return
             # The far likeliest failure is the other kit holding the one RFCOMM
             # slot this printer has. Back off with jitter so two kits that collide
@@ -461,6 +536,70 @@ class SlipQueue(threading.Thread):
                      f"retrying in {delay:.1f}s")
             time.sleep(delay)
         self.log(f"gave up on slip for message {msg.get('id')}")
+        REPORT.failed(cfg, self.log, f"gave up on slip for {msg.get('id')}")
+
+
+# ── What the bridge knows about this printer ───────────────────────────────────
+class Report:
+    """Tells the bridge this service is here (PUT /api/post/printer): which
+    printer, where the slip sequence is, how the last slip went. Best effort and
+    quiet: the bridge answers 503 while the Community Post is not configured on
+    that kit, which is the normal case, so only a change of answer is logged.
+    [MESHSAT-1733]"""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.last_slip_at = ""
+        self.last_error = ""
+        self.queue = None
+        self.answered = None
+
+    def printed(self, cfg, log):
+        with self.lock:
+            self.last_slip_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            self.last_error = ""
+        self.send(cfg, log)
+
+    def failed(self, cfg, log, why):
+        with self.lock:
+            self.last_error = why
+        self.send(cfg, log)
+
+    def body(self, cfg) -> dict:
+        with self.lock:
+            return {
+                "service": "meshsat-receipt-printer",
+                "printer": cfg["mac"] or f"by name: {cfg['name']}",
+                "count": read_count(cfg["count_path"]),
+                "queued": self.queue.pending() if self.queue else 0,
+                "last_slip_at": self.last_slip_at,
+                "last_error": self.last_error,
+            }
+
+    def send(self, cfg, log):
+        data = json.dumps(self.body(cfg)).encode()
+        req = urllib.request.Request(f"{cfg['bridge']}/api/post/printer", data=data, method="PUT",
+                                     headers={"Content-Type": "application/json"})
+        answered, why = True, ""
+        try:
+            urllib.request.urlopen(req, timeout=3).close()
+        except Exception as exc:                        # noqa: BLE001
+            answered, why = False, getattr(exc, "code", None) or exc
+        if answered != self.answered:
+            self.answered = answered
+            log("reported to the bridge's Community Post" if answered
+                else f"the bridge takes no printer report ({why}); the Community Post is off there")
+
+    def every(self, cfg, log, seconds=60):
+        """A heartbeat, so the operator screen can tell a printer that went away."""
+        def run():
+            while True:
+                self.send(cfg, log)
+                time.sleep(seconds)
+        threading.Thread(target=run, daemon=True).start()
+
+
+REPORT = Report()
 
 
 # ── Bridge event stream ────────────────────────────────────────────────────────
@@ -569,6 +708,112 @@ def lookup_bearer(bridge, packet_id, log):
     return ""
 
 
+def handle_event(ev, queue, cfg, log, seen):
+    """One event from the stream: a slip is queued or nothing happens."""
+    ev_type = ev.get("type") or ""
+    data = ev.get("data") or {}
+    # The Community Post's slips [MESHSAT-1733]: the bridge says what goes on
+    # the paper; one slip per approval and per reply, whatever the trigger.
+    if ev_type == "post_slip":
+        code = data.get("code") or ""
+        if not code:
+            return
+        key = f"post:{data.get('kind', 'post')}:{code}:{data.get('at', '')}:{data.get('text', '')}"
+        if key in seen:
+            return
+        seen.append(key)
+        msg = dict(data)
+        msg["id"] = key
+        msg.setdefault("kind", "post")
+        queue.submit(msg)
+        log(f"queued {msg['kind']} slip for code {code}")
+        return
+    if cfg["trigger"] == "arrival":
+        # The old behaviour, kept as a way back: print the moment a
+        # message lands on this kit, whether or not it goes anywhere.
+        if ev_type != "message":
+            return
+        text = (data.get("decoded_text") or "").strip()
+        if not text:
+            return
+        key = data.get("id") or f"{data.get('rx_time')}:{text}"
+        if key in seen:
+            return
+        seen.append(key)
+        queue.submit({
+            "id": key, "text": text,
+            "from": node_id(data.get("from")),
+            "bearer": lookup_bearer(cfg["bridge"], data.get("id"), log)
+                      or "Meshtastic",
+            "when": (data.get("timestamp") or "").replace("T", " ")[:19]
+                    or time.strftime("%Y-%m-%d %H:%M:%S"),
+        })
+        log(f"queued slip for message {key}")
+        return
+
+    # A Reticulum message that crossed the satellite link (MESHSAT-1550).
+    # Its content is end-to-end encrypted, so the slip says that
+    # instead of a text; the bridge sends at most one such event per
+    # destination, direction and minute.
+    if ev_type == "rns_crossing":
+        sat = data.get("iface") or "iridium_imt"
+        key = f"rns:{data.get('dest', '')}:{data.get('inbound')}:{int(time.time() // 60)}"
+        if key in seen:
+            return
+        seen.append(key)
+        inbound = bool(data.get("inbound"))
+        queue.submit({
+            "id": key,
+            "text": ("A Reticulum message just came down from the satellite."
+                     if inbound else
+                     "A Reticulum message just went up to the satellite.")
+                    + " It is encrypted end to end: this kit carries it"
+                    " but cannot read it.",
+            "from": "",
+            "bearer": channel_label(sat),
+            "source": "reticulum", "crossing": sat, "end": "reticulum",
+            "when": time.strftime("%Y-%m-%d %H:%M:%S"),
+        })
+        log(f"queued slip for a Reticulum crossing on {sat}")
+        return
+
+    # Default: a slip is proof a message CROSSED, not proof one
+    # arrived. Owner, 17 Sep 2026: "the message printed should only be
+    # the one that made it through the flow deck -> fieldkit ->
+    # fieldkit -> deck". So the trigger is this kit's own delivery
+    # completing on a bearer that leaves the kit - for APRS that is an
+    # ack from the far kit, which is the strongest proof the pair can
+    # produce. A message nothing relays now prints nothing.
+    if not ev_type.startswith("delivery_"):
+        return
+    status = (data.get("status") or ev_type[len("delivery_"):]).lower()
+    if status not in ("delivered", "sent"):
+        return
+    if (data.get("class") or "message") != "message":
+        return            # OOB and management frames are not messages
+    channel = data.get("channel") or ""
+    if channel.startswith("mesh"):
+        return            # the local mesh hop, not a crossing
+    ref = data.get("msg_ref") or ""
+    # One slip per journey. An SMS-sized message is fragmented into
+    # several deliveries that all share the msg_ref, so this is also
+    # what stops a long message printing three times.
+    if not ref or ref in seen:
+        return
+    text = FRAG_PREFIX.sub("", (data.get("text_preview") or "").strip())
+    if not text:
+        return
+    seen.append(ref)
+    text, sender, when, source = lookup_sender(cfg["bridge"], text, log)
+    queue.submit({
+        "id": ref, "text": text, "from": sender,
+        "bearer": channel_label(channel),
+        "source": source, "crossing": channel,
+        "when": when or time.strftime("%Y-%m-%d %H:%M:%S"),
+    })
+    log(f"queued slip for {ref}, crossed on {channel}")
+
+
 def follow(url, queue, cfg, log):
     seen = deque(maxlen=512)
     backoff = 1
@@ -577,6 +822,7 @@ def follow(url, queue, cfg, log):
             with urllib.request.urlopen(url + "/api/events", timeout=None) as stream:
                 log(f"following {url}/api/events")
                 backoff = 1
+                REPORT.send(cfg, log)
                 for raw in stream:
                     line = raw.decode("utf-8", "replace").strip()
                     if not line.startswith("data: "):
@@ -585,92 +831,7 @@ def follow(url, queue, cfg, log):
                         ev = json.loads(line[6:])
                     except json.JSONDecodeError:
                         continue
-                    ev_type = ev.get("type") or ""
-                    data = ev.get("data") or {}
-                    if cfg["trigger"] == "arrival":
-                        # The old behaviour, kept as a way back: print the moment a
-                        # message lands on this kit, whether or not it goes anywhere.
-                        if ev_type != "message":
-                            continue
-                        text = (data.get("decoded_text") or "").strip()
-                        if not text:
-                            continue
-                        key = data.get("id") or f"{data.get('rx_time')}:{text}"
-                        if key in seen:
-                            continue
-                        seen.append(key)
-                        queue.submit({
-                            "id": key, "text": text,
-                            "from": node_id(data.get("from")),
-                            "bearer": lookup_bearer(cfg["bridge"], data.get("id"), log)
-                                      or "Meshtastic",
-                            "when": (data.get("timestamp") or "").replace("T", " ")[:19]
-                                    or time.strftime("%Y-%m-%d %H:%M:%S"),
-                        })
-                        log(f"queued slip for message {key}")
-                        continue
-
-                    # A Reticulum message that crossed the satellite link (MESHSAT-1550).
-                    # Its content is end-to-end encrypted, so the slip says that
-                    # instead of a text; the bridge sends at most one such event per
-                    # destination, direction and minute.
-                    if ev_type == "rns_crossing":
-                        sat = data.get("iface") or "iridium_imt"
-                        key = f"rns:{data.get('dest', '')}:{data.get('inbound')}:{int(time.time() // 60)}"
-                        if key in seen:
-                            continue
-                        seen.append(key)
-                        inbound = bool(data.get("inbound"))
-                        queue.submit({
-                            "id": key,
-                            "text": ("A Reticulum message just came down from the satellite."
-                                     if inbound else
-                                     "A Reticulum message just went up to the satellite.")
-                                    + " It is encrypted end to end: this kit carries it"
-                                    " but cannot read it.",
-                            "from": "",
-                            "bearer": channel_label(sat),
-                            "source": "reticulum", "crossing": sat, "end": "reticulum",
-                            "when": time.strftime("%Y-%m-%d %H:%M:%S"),
-                        })
-                        log(f"queued slip for a Reticulum crossing on {sat}")
-                        continue
-
-                    # Default: a slip is proof a message CROSSED, not proof one
-                    # arrived. Owner, 17 Sep 2026: "the message printed should only be
-                    # the one that made it through the flow deck -> fieldkit ->
-                    # fieldkit -> deck". So the trigger is this kit's own delivery
-                    # completing on a bearer that leaves the kit - for APRS that is an
-                    # ack from the far kit, which is the strongest proof the pair can
-                    # produce. A message nothing relays now prints nothing.
-                    if not ev_type.startswith("delivery_"):
-                        continue
-                    status = (data.get("status") or ev_type[len("delivery_"):]).lower()
-                    if status not in ("delivered", "sent"):
-                        continue
-                    if (data.get("class") or "message") != "message":
-                        continue          # OOB and management frames are not messages
-                    channel = data.get("channel") or ""
-                    if channel.startswith("mesh"):
-                        continue          # the local mesh hop, not a crossing
-                    ref = data.get("msg_ref") or ""
-                    # One slip per journey. An SMS-sized message is fragmented into
-                    # several deliveries that all share the msg_ref, so this is also
-                    # what stops a long message printing three times.
-                    if not ref or ref in seen:
-                        continue
-                    text = FRAG_PREFIX.sub("", (data.get("text_preview") or "").strip())
-                    if not text:
-                        continue
-                    seen.append(ref)
-                    text, sender, when, source = lookup_sender(cfg["bridge"], text, log)
-                    queue.submit({
-                        "id": ref, "text": text, "from": sender,
-                        "bearer": channel_label(channel),
-                        "source": source, "crossing": channel,
-                        "when": when or time.strftime("%Y-%m-%d %H:%M:%S"),
-                    })
-                    log(f"queued slip for {ref}, crossed on {channel}")
+                    handle_event(ev, queue, cfg, log, seen)
         except Exception as exc:                       # noqa: BLE001 — never exit
             log(f"event stream: {exc}; reconnecting in {backoff}s")
             time.sleep(backoff)
@@ -754,6 +915,8 @@ def main():
         serve_count(cfg, log)
     queue = SlipQueue(printer, cfg, log)
     queue.start()
+    REPORT.queue = queue
+    REPORT.every(cfg, log)
     log(f"callsign {cfg['callsign']}, printer "
         f"{cfg['mac'] or 'by name: ' + cfg['name']}, bridge {cfg['bridge']}, "
         f"slips at #{read_count(cfg['count_path'])}, "

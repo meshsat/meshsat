@@ -150,6 +150,9 @@ test:agent:
     - apk add --no-cache python3
   script:
     - cd deploy/oob && python3 -m unittest test_agent -v
+    # The receipt printer service is a host file too (deploy/printer); its slips
+    # for the Community Post are checked against a fake printer. [MESHSAT-1733]
+    - cd "$CI_PROJECT_DIR/deploy/printer" && python3 -m unittest test_receipt_printer -v
     - cd "$CI_PROJECT_DIR/cmd/jspr-helper" && python3 -m unittest test_jspr_helper test_imt_helper_ownership -v
   rules:
     - when: always

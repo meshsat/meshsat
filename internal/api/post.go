@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -32,6 +33,35 @@ type postConfigBody struct {
 	PostsPerHour int    `json:"posts_per_hour"`
 	PostsPerDay  int    `json:"posts_per_day"`
 	Operator     string `json:"operator"`
+	// The post's state: closed_at and purge_at while closed, purged_at after
+	// a purge; purge_days is MESHSAT_POST_PURGE_DAYS.
+	PurgeDays int    `json:"purge_days"`
+	Closed    bool   `json:"closed"`
+	ClosedAt  string `json:"closed_at,omitempty"`
+	PurgeAt   string `json:"purge_at,omitempty"`
+	PurgedAt  string `json:"purged_at,omitempty"`
+	// print is MESHSAT_POST_PRINT; printer is the receipt printer service as
+	// it last reported itself.
+	Print   bool               `json:"print"`
+	Printer cpost.PrinterState `json:"printer"`
+}
+
+// postStateBody is the post's state for the API.
+type postStateBody struct {
+	Closed   bool   `json:"closed"`
+	ClosedAt string `json:"closed_at,omitempty"`
+	PurgeAt  string `json:"purge_at,omitempty"`
+	PurgedAt string `json:"purged_at,omitempty"`
+}
+
+func postState(st cpost.State) postStateBody {
+	f := func(t time.Time) string {
+		if t.IsZero() {
+			return ""
+		}
+		return t.UTC().Format(time.RFC3339)
+	}
+	return postStateBody{Closed: st.Closed, ClosedAt: f(st.ClosedAt), PurgeAt: f(st.PurgeAt), PurgedAt: f(st.PurgedAt)}
 }
 
 func (s *Server) postOrError(w http.ResponseWriter) *cpost.Service {
@@ -56,10 +86,121 @@ func (s *Server) handleGetPostConfig(w http.ResponseWriter, r *http.Request) {
 	if p == nil {
 		return
 	}
-	cfg, st := p.Config(), p.Settings()
+	cfg, st, state := p.Config(), p.Settings(), postState(p.State())
 	writeJSON(w, http.StatusOK, postConfigBody{Enabled: p.Enabled(), Listen: cfg.Listen, PortalURL: cfg.PortalURL, Bearer: cfg.Bearer,
 		MaxChars: cfg.MaxTextChars, MaxBytes: cfg.MaxBytes, BoardDays: int(cfg.BoardRetention.Hours() / 24),
-		AutoApprove: st.AutoApprove, PostsPerHour: st.PostsPerHour, PostsPerDay: st.PostsPerDay, Operator: st.Operator})
+		AutoApprove: st.AutoApprove, PostsPerHour: st.PostsPerHour, PostsPerDay: st.PostsPerDay, Operator: st.Operator,
+		PurgeDays: int(cfg.PurgeAfter.Hours() / 24), Closed: state.Closed, ClosedAt: state.ClosedAt, PurgeAt: state.PurgeAt, PurgedAt: state.PurgedAt,
+		Print: cfg.Print, Printer: p.PrinterState()})
+}
+
+// handleClosePost closes the post.
+// @Summary Close the Community Post
+// @Description The portal takes no new post and no board line; replies can still be picked up. Everything the portal stored is purged purge_days after closing (MESHSAT_POST_PURGE_DAYS, 30), or sooner with POST /api/post/purge. Closing a closed post changes nothing.
+// @Tags post
+// @Produce json
+// @Success 200 {object} postStateBody
+// @Failure 500 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Router /api/post/close [post]
+func (s *Server) handleClosePost(w http.ResponseWriter, r *http.Request) {
+	p := s.postOrError(w)
+	if p == nil {
+		return
+	}
+	s.touchOperatorActivity()
+	st, err := p.Close()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, postState(st))
+}
+
+// handleOpenPost reopens a closed post.
+// @Summary Reopen the Community Post
+// @Description The portal takes posts again and the purge that closing scheduled is off
+// @Tags post
+// @Produce json
+// @Success 200 {object} postStateBody
+// @Failure 500 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Router /api/post/open [post]
+func (s *Server) handleOpenPost(w http.ResponseWriter, r *http.Request) {
+	p := s.postOrError(w)
+	if p == nil {
+		return
+	}
+	s.touchOperatorActivity()
+	st, err := p.Open()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, postState(st))
+}
+
+// handlePurgePost purges everything the portal stored, now.
+// @Summary Purge the Community Post now
+// @Description Removes every post, reply, board line and per-phone counter the portal stored, whether the post is open or closed; the post's state does not change. The body must carry {"confirm": true}. The delivery ledger's own rows stay under the Bridge's retention.
+// @Tags post
+// @Accept json
+// @Produce json
+// @Param body body map[string]bool true "confirm"
+// @Success 200 {object} map[string]interface{} "purged (counts), state"
+// @Failure 400 {object} map[string]string "not confirmed"
+// @Failure 500 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Router /api/post/purge [post]
+func (s *Server) handlePurgePost(w http.ResponseWriter, r *http.Request) {
+	p := s.postOrError(w)
+	if p == nil {
+		return
+	}
+	var body struct {
+		Confirm bool `json:"confirm"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || !body.Confirm {
+		writeError(w, http.StatusBadRequest, `a purge needs {"confirm": true}`)
+		return
+	}
+	s.touchOperatorActivity()
+	counts, err := p.Purge()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"purged": counts, "state": postState(p.State())})
+}
+
+// handleReportPostPrinter takes the receipt printer service's report.
+// @Summary Report the receipt printer
+// @Description The kit's receipt printer service (deploy/printer) says it follows the event stream, which printer it uses, where the slip sequence is and how its last slip went; the operator screen shows it. A report older than three minutes counts as no printer.
+// @Tags post
+// @Accept json
+// @Produce json
+// @Param body body cpost.PrinterReport true "Report"
+// @Success 200 {object} cpost.PrinterState
+// @Failure 400 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Router /api/post/printer [put]
+func (s *Server) handleReportPostPrinter(w http.ResponseWriter, r *http.Request) {
+	p := s.postOrError(w)
+	if p == nil {
+		return
+	}
+	var rep cpost.PrinterReport
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&rep); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+	for _, f := range []*string{&rep.Service, &rep.Printer, &rep.LastSlipAt, &rep.LastError} {
+		if len(*f) > 200 {
+			*f = (*f)[:200]
+		}
+	}
+	p.ReportPrinter(rep)
+	writeJSON(w, http.StatusOK, p.PrinterState())
 }
 
 // handleSetPostConfig saves the operator's run-time settings.

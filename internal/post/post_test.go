@@ -1,6 +1,7 @@
 package post
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,7 @@ import (
 
 	"meshsat/internal/database"
 	"meshsat/internal/engine"
+	"meshsat/internal/transport"
 )
 
 // ---- fakes ----
@@ -610,5 +612,249 @@ func TestApproveNeedsABearerAndTheFormRefusesABadMethod(t *testing.T) {
 	}
 	if err := e.svc.Approve("ZZZZZZ"); !errors.Is(err, ErrUnknownCode) {
 		t.Fatalf("unknown code: %v", err)
+	}
+}
+
+// ---- slips, closing and purging ----
+
+// fakePrinter is the receipt printer: it records the slips it was handed.
+type fakePrinter struct {
+	mu    sync.Mutex
+	slips []Slip
+}
+
+func (f *fakePrinter) PrintSlip(s Slip) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.slips = append(f.slips, s)
+}
+
+func (f *fakePrinter) all() []Slip {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]Slip(nil), f.slips...)
+}
+
+func TestMaskRecipientAndExcerpt(t *testing.T) {
+	for in, want := range map[string]string{"+31612345678": "+3161****78", "+306912345678": "+3069****78", "+1234567": "+12****67",
+		"+123": "****", "maria@example.org": "m***@example.org", "ops@example.org": "o***@example.org"} {
+		if got := MaskRecipient(in); got != want {
+			t.Errorf("MaskRecipient(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if got := excerpt("short", 100); got != "short" {
+		t.Errorf("excerpt short = %q", got)
+	}
+	long := strings.Repeat("ω", 120)
+	if got := excerpt(long, 100); got != strings.Repeat("ω", 100)+"..." {
+		t.Errorf("excerpt long = %q", got)
+	}
+}
+
+func TestSlipsPrintOnApproveAndOnReply(t *testing.T) {
+	e := newEnv(t, Config{Print: true, Operator: "Gemeente Leiden"})
+	pr := &fakePrinter{}
+	e.svc.deps.Printer = pr
+	c := e.client()
+	code, _ := e.write(c, "+31 6 12345678", "Maria", "water at the north gate", false)
+	if code == "" {
+		t.Fatal("no code")
+	}
+	if len(pr.all()) != 0 {
+		t.Fatal("a post that is only written prints nothing")
+	}
+	if err := e.svc.Approve(code); err != nil {
+		t.Fatal(err)
+	}
+	slips := pr.all()
+	if len(slips) != 1 {
+		t.Fatalf("after approve: %d slips", len(slips))
+	}
+	s := slips[0]
+	if s.Kind != SlipPost || s.Code != code || s.To != "+3161****78" || s.URL != "http://10.44.0.1/" ||
+		s.Pickup != "http://10.44.0.1/pickup?code="+code || s.At != "2026-10-28T12:00:00Z" || s.Emergency || s.Text != "" || s.Operator != "Gemeente Leiden" {
+		t.Fatalf("post slip = %+v", s)
+	}
+	// A second approve queues nothing twice and prints nothing twice.
+	if err := e.svc.Approve(code); err != nil {
+		t.Fatal(err)
+	}
+	if len(pr.all()) != 1 {
+		t.Fatal("approving twice printed twice")
+	}
+	// The reply prints its first 100 characters.
+	long := strings.Repeat("abcdefghij", 12)
+	e.svc.HandleInbound("iridium_0", "rock7", "[from +31612345678] #"+code+" "+long)
+	slips = pr.all()
+	if len(slips) != 2 || slips[1].Kind != SlipReply || slips[1].Code != code || slips[1].To != "+3161****78" ||
+		slips[1].Text != strings.Repeat("abcdefghij", 10)+"..." {
+		t.Fatalf("reply slip = %+v", slips[len(slips)-1])
+	}
+	// The Hub's "not sent" notice is a reply too, and prints.
+	e.svc.HandleInbound("iridium_0", "rock7", "[MeshSat Hub] not sent to +31612345678: no SMS provider")
+	if slips = pr.all(); len(slips) != 3 || slips[2].Text != "not sent: no SMS provider" {
+		t.Fatalf("notice slip = %+v", slips)
+	}
+	// An emergency is marked on the slip; without a printer nothing is handed out.
+	code2, _ := e.write(c, "ops@example.org", "", "trapped", true)
+	if err := e.svc.Approve(code2); err != nil {
+		t.Fatal(err)
+	}
+	if slips = pr.all(); len(slips) != 4 || !slips[3].Emergency || slips[3].To != "o***@example.org" {
+		t.Fatalf("emergency slip = %+v", slips[len(slips)-1])
+	}
+	e.svc.deps.Printer = nil
+	e.svc.HandleInbound("iridium_0", "rock7", "[from ops@example.org] #"+code2+" coming")
+	if len(pr.all()) != 4 {
+		t.Fatal("printed with no printer")
+	}
+}
+
+func TestEventPrinterEmitsAPostSlipEvent(t *testing.T) {
+	var got []transport.MeshEvent
+	p := EventPrinter{Emit: func(ev transport.MeshEvent) { got = append(got, ev) }}
+	p.PrintSlip(Slip{Kind: SlipReply, Code: "K7QW2X", To: "+3161****78", At: "2026-10-28T12:00:00Z", URL: "http://10.44.0.1/", Text: "ok"})
+	if len(got) != 1 || got[0].Type != SlipEventType || got[0].Time != "2026-10-28T12:00:00Z" || !strings.Contains(got[0].Message, "K7QW2X") {
+		t.Fatalf("event = %+v", got)
+	}
+	var back Slip
+	if err := json.Unmarshal(got[0].Data, &back); err != nil || back.Kind != SlipReply || back.Code != "K7QW2X" || back.Text != "ok" {
+		t.Fatalf("data = %s (%v)", got[0].Data, err)
+	}
+	EventPrinter{}.PrintSlip(Slip{}) // no emitter: nothing happens
+}
+
+func TestCloseThenPurgeAfterTheDays(t *testing.T) {
+	e := newEnv(t, Config{PurgeAfter: 30 * 24 * time.Hour})
+	c := e.client()
+	e.get(c, "/?lang=en")
+	code, _ := e.write(c, "+31612345678", "Maria", "water", false)
+	if err := e.svc.Approve(code); err != nil {
+		t.Fatal(err)
+	}
+	e.svc.HandleInbound("iridium_0", "rock7", "[from +31612345678] #"+code+" on my way")
+	if _, body := e.post(c, "/board?lang=en", url.Values{"name": {"Maria"}, "status": {"safe"}}); !strings.Contains(body, "You are on the board") {
+		t.Fatal("board add")
+	}
+	if st := e.svc.State(); st.Closed || !st.PurgeAt.IsZero() {
+		t.Fatalf("open state = %+v", st)
+	}
+
+	// The operator closes the post.
+	st, err := e.svc.Close()
+	if err != nil || !st.Closed || !st.ClosedAt.Equal(e.clock) || !st.PurgeAt.Equal(e.clock.Add(30*24*time.Hour)) {
+		t.Fatalf("close = %+v %v", st, err)
+	}
+	if st2, _ := e.svc.Close(); !st2.ClosedAt.Equal(st.ClosedAt) {
+		t.Fatal("closing twice moved the purge")
+	}
+	// The portal takes no new post and no board line; a reply is still picked up.
+	if _, body := e.get(c, "/?lang=en"); !strings.Contains(body, "This post is closed") || !strings.Contains(body, "2026-11-27") || strings.Contains(body, "<form") {
+		t.Fatalf("write page while closed: %s", body)
+	}
+	if code2, body := e.write(c, "+31612345678", "", "late", false); code2 != "" || !strings.Contains(body, "This post is closed") {
+		t.Fatal("a post was taken while closed")
+	}
+	if _, body := e.post(c, "/board?lang=en", url.Values{"name": {"Nikos"}, "status": {"safe"}}); strings.Contains(body, "You are on the board") || !strings.Contains(body, "This post is closed") {
+		t.Fatal("a board line was taken while closed")
+	}
+	if _, body := e.get(c, "/board?lang=en&q=maria"); !strings.Contains(body, "Maria") {
+		t.Fatal("the board is not searchable while closed")
+	}
+	if _, body := e.get(c, "/pickup?code="+code+"&lang=en"); !strings.Contains(body, "on my way") {
+		t.Fatal("a reply is not picked up while closed")
+	}
+	if _, body := e.get(c, "/about?lang=en"); !strings.Contains(body, "Deleted 30 days after the operator closes") || !strings.Contains(body, "a line stays 30 days") {
+		t.Fatalf("the notice does not say what happens: %s", body)
+	}
+
+	// The sweep waits for the day, then purges once.
+	e.clock = e.clock.Add(29 * 24 * time.Hour)
+	e.svc.Tick()
+	if m, _, _ := e.svc.Status(code); m == nil {
+		t.Fatal("purged a day early")
+	}
+	e.clock = e.clock.Add(24 * time.Hour)
+	e.svc.Tick()
+	if m, replies, _ := e.svc.Status(code); m != nil || len(replies) != 0 {
+		t.Fatalf("not purged: %+v %+v", m, replies)
+	}
+	if entries, _ := e.svc.SearchBoard(""); len(entries) != 0 {
+		t.Fatalf("the board survived the purge: %+v", entries)
+	}
+	if sess, _ := e.db.GetPostSession("ip:127.0.0.1"); sess != nil {
+		t.Fatal("the phones' counters survived the purge")
+	}
+	if res, _ := e.get(c, "/generate_204"); res.StatusCode != http.StatusFound {
+		t.Fatal("a purged phone is still signed in")
+	}
+	if st := e.svc.State(); !st.Closed || st.PurgedAt.IsZero() || st.PurgedAt.Before(st.ClosedAt) {
+		t.Fatalf("state after the sweep = %+v", st)
+	}
+	purged := e.svc.State().PurgedAt
+	e.clock = e.clock.Add(time.Hour)
+	e.svc.Tick()
+	if !e.svc.State().PurgedAt.Equal(purged) {
+		t.Fatal("the sweep purged twice for one closing")
+	}
+	if _, body := e.get(c, "/pickup?code="+code+"&lang=en"); !strings.Contains(body, "not known at this post") {
+		t.Fatal("a purged code is still known")
+	}
+
+	// Reopened, the post takes posts again; closed again, it waits again.
+	if st, err := e.svc.Open(); err != nil || st.Closed || !st.PurgedAt.IsZero() {
+		t.Fatalf("open = %+v %v", st, err)
+	}
+	code3, _ := e.write(c, "+31612345678", "", "again", false)
+	if code3 == "" {
+		t.Fatal("no post after reopening")
+	}
+	if _, err := e.svc.Close(); err != nil {
+		t.Fatal(err)
+	}
+	e.clock = e.clock.Add(24 * time.Hour)
+	e.svc.Tick()
+	if m, _, _ := e.svc.Status(code3); m == nil {
+		t.Fatal("the second closing purged at once")
+	}
+	// The operator purges now; the post stays closed.
+	n, err := e.svc.Purge()
+	if err != nil || n.Messages != 1 {
+		t.Fatalf("purge = %+v %v", n, err)
+	}
+	if m, _, _ := e.svc.Status(code3); m != nil || !e.svc.State().Closed {
+		t.Fatal("purge now")
+	}
+}
+
+func TestPurgeNowOnAnOpenPostKeepsItOpen(t *testing.T) {
+	e := newEnv(t, Config{})
+	c := e.client()
+	code, _ := e.write(c, "+31612345678", "", "one", false)
+	e.post(c, "/board?lang=en", url.Values{"name": {"Maria"}, "status": {"safe"}})
+	n, err := e.svc.Purge()
+	if err != nil || n.Messages != 1 || n.Board != 1 || n.Sessions == 0 {
+		t.Fatalf("purge = %+v %v", n, err)
+	}
+	if m, _, _ := e.svc.Status(code); m != nil || e.svc.State().Closed {
+		t.Fatal("after the purge")
+	}
+	if code, _ := e.write(c, "+31612345678", "", "two", false); code == "" {
+		t.Fatal("an open post takes posts after a purge")
+	}
+}
+
+func TestPrinterReportAgesOut(t *testing.T) {
+	e := newEnv(t, Config{Print: true})
+	if st := e.svc.PrinterState(); !st.Print || st.Heard || st.Report != nil {
+		t.Fatalf("no report yet: %+v", st)
+	}
+	e.svc.ReportPrinter(PrinterReport{Service: "meshsat-receipt-printer", Printer: "5A:4A:A1:18:4A:B9", Count: 42})
+	if st := e.svc.PrinterState(); !st.Heard || st.Report == nil || st.Report.Count != 42 || st.AgeSeconds != 0 {
+		t.Fatalf("fresh report: %+v", st)
+	}
+	e.clock = e.clock.Add(PrinterStaleAfter + time.Second)
+	if st := e.svc.PrinterState(); st.Heard || st.AgeSeconds < int(PrinterStaleAfter.Seconds()) {
+		t.Fatalf("stale report: %+v", st)
 	}
 }

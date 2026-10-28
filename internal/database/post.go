@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/jmoiron/sqlx"
 )
 
 // The Community Post's rows (internal/post, MESHSAT-1733): what people wrote
@@ -344,6 +346,36 @@ func (db *DB) PrunePostSessions(before time.Time) error {
 		return fmt.Errorf("prune post sessions: %w", err)
 	}
 	return nil
+}
+
+// PostPurgeCounts is what a purge removed.
+type PostPurgeCounts struct {
+	Messages int64 `json:"messages"`
+	Replies  int64 `json:"replies"`
+	Board    int64 `json:"board"`
+	Sessions int64 `json:"sessions"`
+}
+
+// PurgePost removes everything the portal stored, in one transaction: the
+// posts, their replies, the safe-and-well board and the per-phone counters
+// with the sign-in marks. The delivery ledger's rows are the Bridge's own
+// record and are left to its retention.
+func (db *DB) PurgePost() (PostPurgeCounts, error) {
+	var c PostPurgeCounts
+	err := db.withTx(func(tx *sqlx.Tx) error {
+		for _, t := range []struct {
+			table string
+			n     *int64
+		}{{"post_replies", &c.Replies}, {"post_messages", &c.Messages}, {"post_board", &c.Board}, {"post_sessions", &c.Sessions}} {
+			res, err := tx.Exec(`DELETE FROM ` + t.table)
+			if err != nil {
+				return fmt.Errorf("purge %s: %w", t.table, err)
+			}
+			*t.n, _ = res.RowsAffected()
+		}
+		return nil
+	})
+	return c, err
 }
 
 // CountPostMessages counts posts per status.

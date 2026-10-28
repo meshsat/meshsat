@@ -54,6 +54,10 @@ func newPostAPIEnv(t *testing.T, configured bool) (*chi.Mux, *cpost.Service, *po
 	mux.Get("/api/post/{code}", s.handleGetPost)
 	mux.Post("/api/post/{code}/approve", s.handleApprovePost)
 	mux.Post("/api/post/{code}/refuse", s.handleRefusePost)
+	mux.Post("/api/post/close", s.handleClosePost)
+	mux.Post("/api/post/open", s.handleOpenPost)
+	mux.Post("/api/post/purge", s.handlePurgePost)
+	mux.Put("/api/post/printer", s.handleReportPostPrinter)
 	return mux, svc, q
 }
 
@@ -130,5 +134,61 @@ func TestPostAPIQueueApproveRefuseAndSettings(t *testing.T) {
 	}
 	if len(q.rows) != 2 {
 		t.Fatalf("auto-approve did not send: %v", q.rows)
+	}
+}
+
+func TestPostAPICloseOpenPurgeAndPrinter(t *testing.T) {
+	mux, svc, _ := newPostAPIEnv(t, true)
+	a, err := svc.Create("ip:10.44.0.11", "en", cpost.Submission{Recipient: "+31612345678", Text: "water"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, body := postAPI(t, mux, "GET", "/api/post/config", "")
+	if code != 200 || body["closed"] != false || body["purge_days"].(float64) != 30 || body["print"] != false ||
+		body["printer"].(map[string]any)["heard"] != false {
+		t.Fatalf("config open = %d %v", code, body)
+	}
+	code, body = postAPI(t, mux, "POST", "/api/post/close", "")
+	if code != 200 || body["closed"] != true || body["closed_at"] == "" || body["purge_at"] == "" {
+		t.Fatalf("close = %d %v", code, body)
+	}
+	if code, body := postAPI(t, mux, "GET", "/api/post/config", ""); code != 200 || body["closed"] != true || body["purge_at"] == "" {
+		t.Fatalf("config closed = %d %v", code, body)
+	}
+	if _, err := svc.Create("ip:10.44.0.12", "en", cpost.Submission{Recipient: "+31612345678", Text: "late"}); err == nil {
+		t.Fatal("a closed post took a post")
+	}
+	// A purge needs its confirm flag; then everything is gone and the post stays closed.
+	if code, _ := postAPI(t, mux, "POST", "/api/post/purge", `{}`); code != http.StatusBadRequest {
+		t.Fatalf("purge without confirm = %d, want 400", code)
+	}
+	if code, _ := postAPI(t, mux, "POST", "/api/post/purge", ``); code != http.StatusBadRequest {
+		t.Fatalf("purge with no body = %d, want 400", code)
+	}
+	code, body = postAPI(t, mux, "POST", "/api/post/purge", `{"confirm":true}`)
+	if code != 200 || body["purged"].(map[string]any)["messages"].(float64) != 1 || body["state"].(map[string]any)["closed"] != true ||
+		body["state"].(map[string]any)["purged_at"] == "" {
+		t.Fatalf("purge = %d %v", code, body)
+	}
+	if code, _ := postAPI(t, mux, "GET", "/api/post/"+a.Code, ""); code != http.StatusNotFound {
+		t.Fatalf("a purged code = %d, want 404", code)
+	}
+	code, body = postAPI(t, mux, "POST", "/api/post/open", "")
+	if code != 200 || body["closed"] != false || body["purge_at"] != nil {
+		t.Fatalf("open = %d %v", code, body)
+	}
+	if _, err := svc.Create("ip:10.44.0.12", "en", cpost.Submission{Recipient: "+31612345678", Text: "again"}); err != nil {
+		t.Fatalf("a reopened post refused a post: %v", err)
+	}
+	// The printer service reports itself; the config carries it.
+	code, body = postAPI(t, mux, "PUT", "/api/post/printer", `{"service":"meshsat-receipt-printer","printer":"5A:4A:A1:18:4A:B9","count":42,"queued":0}`)
+	if code != 200 || body["heard"] != true || body["report"].(map[string]any)["count"].(float64) != 42 {
+		t.Fatalf("printer report = %d %v", code, body)
+	}
+	if code, body := postAPI(t, mux, "GET", "/api/post/config", ""); code != 200 || body["printer"].(map[string]any)["heard"] != true {
+		t.Fatalf("config with printer = %d %v", code, body)
+	}
+	if code, _ := postAPI(t, mux, "PUT", "/api/post/printer", `not json`); code != http.StatusBadRequest {
+		t.Fatalf("bad report = %d, want 400", code)
 	}
 }

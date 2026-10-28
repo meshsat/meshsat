@@ -240,6 +240,8 @@ type Config struct {
 	PostMaxBytes    int    // bytes a post may carry
 	PostBoardDays   int    // days a safe-and-well line stays
 	PostAutoApprove bool   // the approval queue off: a post leaves at once
+	PostPurgeDays   int    // days after the operator closes the post before everything it stored is purged
+	PostPrint       bool   // an approved post and a reply go to the kit's receipt printer as "post_slip" events
 
 	// Hub WebSocket relay: serve this bridge's API to the tenant's other
 	// bridges (phones) through the Hub when no direct path exists [MESHSAT-613]
@@ -388,6 +390,8 @@ func Load() *Config {
 		PostMaxBytes:    envInt("MESHSAT_POST_MAX_BYTES", 240),
 		PostBoardDays:   envInt("MESHSAT_POST_BOARD_DAYS", 30),
 		PostAutoApprove: envBool("MESHSAT_POST_AUTO_APPROVE", false),
+		PostPurgeDays:   envInt("MESHSAT_POST_PURGE_DAYS", 30),
+		PostPrint:       envBool("MESHSAT_POST_PRINT", false),
 	}
 }
 

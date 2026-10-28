@@ -524,6 +524,10 @@ func (s *Server) Router() http.Handler {
 		r.Get("/post/{code}", s.handleGetPost)
 		r.Post("/post/{code}/approve", s.handleApprovePost)
 		r.Post("/post/{code}/refuse", s.handleRefusePost)
+		r.Post("/post/close", s.handleClosePost)
+		r.Post("/post/open", s.handleOpenPost)
+		r.Post("/post/purge", s.handlePurgePost)
+		r.Put("/post/printer", s.handleReportPostPrinter)
 
 		// Iridium modem info
 		r.Get("/iridium/modem", s.handleGetSatModemInfo)
