@@ -20,10 +20,23 @@ package rns
 //
 // The node's own announces, path requests, packets and links use a leaf like
 // any other interface. A node with no leaf behaves exactly as before.
+//
+// A path heard on a leaf takes the place of a path to the same destination
+// through another interface only when the leaf's announce is strictly newer
+// (the origin's stamp, one-second resolution), and never while that path is
+// a neighbour's that was learned or used within leafDisplaceGrace
+// (announce.go): the mesh's packets in transit to a neighbour keep their
+// way, and a stale path from an old flood's echo or a leak through another
+// node no longer holds the leaf off for the path's whole lifetime
+// [MESHSAT-1748]. Whichever path stands, what the node tells its other
+// interfaces does not change: a path learned on a leaf is never announced
+// to them, never given in answer to their path requests, and nothing from
+// them is forwarded along it.
 
 // SetLeaf marks an interface as a leaf, or clears the mark. Either change
 // forgets what the node holds about the interface (paths, transit links,
-// reverse entries, queued announces), so a connection that reuses an
+// reverse entries, queued announces) under the node's lock, so no frame
+// meets the new mark beside the old paths, and a connection that reuses an
 // interface id never inherits the previous connection's state across the
 // boundary. Set the mark before the interface carries its first frame and
 // clear it after the last: a frame in flight while it changes is handled
@@ -64,8 +77,8 @@ func (n *Node) SetLeaf(ifaceID string, leaf bool) {
 			delete(n.discoveryPRs, k)
 		}
 	}
-	n.mu.Unlock()
 	n.paths.RemoveIface(ifaceID)
+	n.mu.Unlock()
 }
 
 // IsLeaf reports whether an interface is a leaf.

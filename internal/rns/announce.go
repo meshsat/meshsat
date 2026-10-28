@@ -11,6 +11,14 @@ import (
 
 const maxRandomBlobs = 64
 
+// leafDisplaceGrace is how long a neighbour's path through another
+// interface stands against a newer announce of the same destination heard
+// on a leaf, counted from the path's last use (learned, sent or forwarded
+// along): the reverse table's lifetime, the longest the node itself expects
+// a packet it forwarded to be answered along the path it took (leaf.go)
+// [MESHSAT-1748].
+const leafDisplaceGrace = reticulum.ReverseTimeoutSec * time.Second
+
 // announceEntry is one row of Transport.announce_table.
 type announceEntry struct {
 	timestamp         time.Time
@@ -105,10 +113,13 @@ func (n *Node) handleAnnounce(pkt *Packet) bool {
 			}
 		}
 	}
-	// A path through a leaf never displaces a live path through another
-	// interface: packets in transit for that destination would be refused.
+	// A path through a leaf takes the place of a live path through another
+	// interface only when the leaf's announce is strictly newer, and never a
+	// neighbour's path learned or used within leafDisplaceGrace: packets in
+	// transit for that destination would be refused (leaf.go) [MESHSAT-1748].
 	if shouldAdd && fromLeaf && existing != nil && !n.leaf[existing.Iface] && now.Before(existing.Expires) {
-		shouldAdd = false
+		shouldAdd = emitted > existing.EmittedAt() &&
+			(!existing.Direct() || now.Sub(existing.Timestamp) >= leafDisplaceGrace)
 	}
 	if !shouldAdd {
 		n.mu.Unlock()

@@ -263,11 +263,12 @@ func TestLeaf_ChangingTheMarkForgetsTheInterface(t *testing.T) {
 	// In the control topology K is a transport: it carries S's announce
 	// onto the mesh and M offers S back at four hops. While K's path through
 	// H stands that offer loses; landing after SetLeaf has dropped it, it
-	// wins, and a leaf path never displaces a live path on another interface
-	// (announce.go), so K would never relearn S on the leaf. A transport
-	// drops an announce it holds for rebroadcast when a neighbour's copy
-	// comes back, so an empty table at K means every echo of the first
-	// flood has landed [MESHSAT-1747].
+	// wins. S's newer announce on the leaf displaces that echo since
+	// MESHSAT-1748; waiting for it all the same keeps what K holds after
+	// the mark the same on every run. A transport drops an announce it
+	// holds for rebroadcast when a neighbour's copy comes back, so an empty
+	// table at K means every echo of the first flood has landed
+	// [MESHSAT-1747].
 	waitFor(t, "the first flood's echoes reach K", func() bool {
 		ln.k.mu.Lock()
 		defer ln.k.mu.Unlock()
@@ -310,13 +311,17 @@ func onKH(n *Node, d *Destination) bool {
 	return e != nil && e.Iface == "kh"
 }
 
-// A destination heard on the mesh and later on the leaf keeps its mesh path:
-// a leaf path in its place would refuse the mesh's packets in transit to it.
-func TestLeaf_ALeafPathNeverDisplacesALivePathElsewhere(t *testing.T) {
+// A neighbour heard on the mesh and, within the grace, anew on the leaf
+// keeps its mesh path: a leaf path in its place would refuse the mesh's
+// packets in transit to it. X is learned for real at one hop; the second
+// announce is fed to K by hand, a wall-clock second later because the stamp
+// is signed into it and the rule wants a strictly newer one. A path through
+// another node (X behind M) is the displaced case in the table below.
+func TestLeaf_AFreshNeighbourPathIsNotDisplacedByTheLeaf(t *testing.T) {
 	ln := newLeafNet(t, true)
 	ln.announceAll(t)
 	x, _ := newTestNode(t, ln.net, "x")
-	connect(ln.net, x, "x", "xm", ln.m, "m", "mx")
+	connect(ln.net, x, "x", "xk", ln.k, "k", "kx")
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	x.Start(ctx)
@@ -324,20 +329,194 @@ func TestLeaf_ALeafPathNeverDisplacesALivePathElsewhere(t *testing.T) {
 	if err := x.Announce(xDest, "", false); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "K learns X through the mesh", func() bool { return ln.k.NextHopInterface(xDest.Hash) == "km" })
-	// X leaves the mesh and joins the private network, then announces anew.
-	ln.net.mu.Lock()
-	delete(ln.net.wires, "x/xm")
-	delete(ln.net.wires, "m/mx")
-	ln.net.mu.Unlock()
-	connect(ln.net, x, "x", "xh", ln.h, "h", "hx")
+	waitFor(t, "K learns X as a neighbour", func() bool {
+		e := ln.k.Paths().Get(xDest.Hash)
+		return e != nil && e.Iface == "kx" && e.Direct()
+	})
 	time.Sleep(1100 * time.Millisecond) // a newer emission timestamp
-	if err := x.Announce(xDest, "", false); err != nil {
+	heardOnTheLeaf(t, ln, x.Identity())
+	if got := ln.k.NextHopInterface(xDest.Hash); got != "kx" {
+		t.Fatalf("K's path to X moved to %q", got)
+	}
+}
+
+// stampBlob is a random blob whose emission stamp is ts, the trailing
+// timestamp an announce carries (paths.go blobTimestamp).
+func stampBlob(ts int64) []byte {
+	b := make([]byte, 10)
+	for i := 9; i >= 5; i-- {
+		b[i] = byte(ts)
+		ts >>= 8
+	}
+	return b
+}
+
+// heardOnTheLeaf feeds K an announce of id's test.delivery as H relays it:
+// one hop at H, two at K, H the transport id. Inbound is synchronous, so
+// what K holds afterwards is the decision, not a race with the wire.
+func heardOnTheLeaf(t *testing.T, ln *leafNet, id *reticulum.Identity) {
+	t.Helper()
+	ann, err := reticulum.NewAnnounce(id, "test.delivery", nil)
+	if err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "H learns X", func() bool { return ln.h.Paths().Has(xDest.Hash) })
-	settle()
-	if got := ln.k.NextHopInterface(xDest.Hash); got != "km" {
-		t.Fatalf("K's path to X moved to %q", got)
+	ln.k.Inbound(ann.MarshalPacketTransport(ln.h.IdentityHash(), 1, reticulum.ContextNone), "kh")
+}
+
+// askedByTheMesh feeds K a path request for dest from M (sendPathRequest's
+// shape: destination, requestor, tag).
+func askedByTheMesh(ln *leafNet, dest [HashLen]byte) {
+	requestor, tag := ln.m.IdentityHash(), randomHash()
+	data := make([]byte, 0, 3*HashLen)
+	data = append(data, dest[:]...)
+	data = append(data, requestor[:]...)
+	data = append(data, tag[:]...)
+	h := &reticulum.Header{
+		HeaderType:    reticulum.HeaderType1,
+		TransportType: reticulum.TransportBroadcast,
+		DestType:      reticulum.DestPlain,
+		PacketType:    reticulum.PacketData,
+		DestHash:      reticulum.PathRequestDestHash(),
+		Context:       reticulum.ContextNone,
+		Data:          data,
+	}
+	ln.k.Inbound(h.Marshal(), "km")
+}
+
+// A destination announced anew on the leaf while a path to it stands on the
+// mesh [MESHSAT-1748]. The mesh path is written in by hand with its stamp
+// and its last use chosen; the announce is a real one from X with a stamp
+// of now. Before this rule every row kept the mesh path for the path's
+// whole lifetime: an old flood's echo, or a leak through a node that is not
+// a leaf, held the leaf off for a week.
+func TestLeaf_ANewerLeafAnnounceDisplacesAStalePathOnTheMesh(t *testing.T) {
+	cases := []struct {
+		name      string
+		hops      int
+		lastUse   time.Duration // how long ago the path was learned or used
+		stamp     int64         // the stored announce's stamp, seconds from now
+		displaced bool
+	}{
+		{"an old flood's echo at four hops, in use", 4, 0, -10, true},
+		{"a neighbour used within the grace", 1, leafDisplaceGrace - time.Minute, -10, false},
+		{"a neighbour idle past the grace", 1, leafDisplaceGrace + time.Minute, -10, true},
+		{"a path whose own announce is the newer one", 1, leafDisplaceGrace + time.Minute, 60, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ln := newLeafNet(t, true)
+			xID, err := reticulum.GenerateIdentity()
+			if err != nil {
+				t.Fatal(err)
+			}
+			xDest := xID.DestHash("test.delivery")
+			nextHop := ln.m.IdentityHash()
+			if tc.hops == 1 {
+				nextHop = xDest
+			}
+			now := time.Now()
+			ln.k.Paths().Put(&PathEntry{DestHash: xDest, Timestamp: now.Add(-tc.lastUse), NextHop: nextHop, Hops: tc.hops,
+				Expires: now.Add(time.Hour), RandomBlobs: [][]byte{stampBlob(now.Unix() + tc.stamp)}, Iface: "km"})
+			heardOnTheLeaf(t, ln, xID)
+			want := "km"
+			if tc.displaced {
+				want = "kh"
+			}
+			if got := ln.k.NextHopInterface(xDest); got != want {
+				t.Fatalf("K's path to X is on %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+// The displacement changes what K holds, never what it tells the mesh. Every
+// announce the node sends is a local destination's or comes out of its
+// announce table (path responses included), so a table without X proves
+// the announce heard on the leaf is never rebroadcast; and the mesh's path
+// request for X is refused, not answered from the leaf.
+func TestLeaf_ADisplacedPathIsNeverToldToTheMesh(t *testing.T) {
+	ln := newLeafNet(t, true)
+	xID, err := reticulum.GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	xDest := xID.DestHash("test.delivery")
+	now := time.Now()
+	ln.k.Paths().Put(&PathEntry{DestHash: xDest, Timestamp: now, NextHop: ln.m.IdentityHash(), Hops: 4,
+		Expires: now.Add(time.Hour), RandomBlobs: [][]byte{stampBlob(now.Unix() - 10)}, Iface: "km"})
+	heardOnTheLeaf(t, ln, xID)
+	if got := ln.k.NextHopInterface(xDest); got != "kh" {
+		t.Fatalf("setup: K's path to X is on %q, want the leaf", got)
+	}
+	queued := func() bool {
+		ln.k.mu.Lock()
+		defer ln.k.mu.Unlock()
+		_, a := ln.k.announceTable[xDest]
+		_, h := ln.k.heldAnnounces[xDest]
+		return a || h
+	}
+	if queued() {
+		t.Fatal("the announce heard on the leaf was queued for the mesh")
+	}
+	before := ln.k.Stats()
+	askedByTheMesh(ln, xDest)
+	after := ln.k.Stats()
+	if after.PathRequestsRx != before.PathRequestsRx+1 {
+		t.Fatal("setup: the mesh's path request was not taken")
+	}
+	if after.LeafRefused != before.LeafRefused+1 {
+		t.Fatal("the mesh's path request for a destination on the leaf was not refused")
+	}
+	if queued() {
+		t.Fatal("a path response from the leaf was queued for the mesh")
+	}
+}
+
+// The mark and the path table change under one lock [MESHSAT-1748]. Before,
+// SetLeaf let go of the node lock and then swept the table, so an announce
+// handled in between met the new mark beside the old paths, or was learned
+// on the interface and swept with them. With the table held, a SetLeaf that
+// keeps the node lock while it waits leaves the mark unreadable until the
+// paths are gone; one that let go shows the mark beside them.
+func TestLeaf_TheMarkAndTheTableChangeTogether(t *testing.T) {
+	net := &fakeNet{wires: map[string]*wire{}}
+	k, _ := newTestNode(t, net, "k")
+	id, err := reticulum.GenerateIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dest := id.DestHash("test.delivery")
+	now := time.Now()
+	k.Paths().Put(&PathEntry{DestHash: dest, Timestamp: now, NextHop: dest, Hops: 1, Expires: now.Add(time.Hour), Iface: "kh"})
+	k.paths.mu.Lock()
+	done := make(chan struct{})
+	go func() { k.SetLeaf("kh", true); close(done) }()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if time.Now().After(deadline) {
+			t.Fatal("SetLeaf never reached the path table")
+		}
+		if !k.mu.TryLock() {
+			break // SetLeaf waits for the table with the node lock held
+		}
+		marked := k.leaf["kh"]
+		k.mu.Unlock()
+		if marked {
+			t.Fatal("the mark was readable while the paths learned on the interface stood")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	select {
+	case <-done:
+		t.Fatal("SetLeaf returned while the table was held")
+	default:
+	}
+	if _, still := k.paths.m[dest]; !still {
+		t.Fatal("setup: the path left the held table")
+	}
+	k.paths.mu.Unlock()
+	<-done
+	if !k.IsLeaf("kh") || k.Paths().Get(dest) != nil {
+		t.Fatal("SetLeaf did not leave the mark set and the table swept")
 	}
 }
