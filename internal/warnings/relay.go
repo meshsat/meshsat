@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -15,6 +16,7 @@ import (
 
 	"meshsat/internal/cell"
 	"meshsat/internal/database"
+	"meshsat/internal/transport"
 )
 
 // What goes on the air (docs/warning-relay.md "What the kit does"). A mesh
@@ -53,7 +55,48 @@ type Deps struct {
 	CellUp        func() bool
 	CellBroadcast func(ctx context.Context, req cell.BroadcastRequest) error
 	CellCancel    func(ctx context.Context, ref string) (int, error)
+	// The LXMF leg: LXMFPeers lists the lxmf.delivery destinations this
+	// kit knows, when each last announced and whether its path leaves on a
+	// paid link; SendLXMF queues text to one of them under the key given.
+	// nil LXMFPeers or SendLXMF turns the leg off.
+	LXMFPeers func() []LXMFPeer
+	SendLXMF  func(key, dest, text string) error
+	// Emit publishes one event on the Bridge's event stream (/api/events)
+	// for every digest kept, type EventType; nil publishes none.
+	Emit func(transport.MeshEvent)
 }
+
+// LXMFPeer is one LXMF destination the kit knows, as the leg sees it.
+type LXMFPeer struct {
+	Dest     string    // the destination hash, 32 hex
+	LastSeen time.Time // when it last announced; zero for never
+	Paid     bool      // its path leaves this kit on a paid link
+}
+
+// The LXMF leg's bounds: a peer heard within LXMFPeerWindow gets the
+// warning, at most LXMFMaxPeers of them per digest, the most recently
+// heard first, and never one whose path crosses a paid link.
+const (
+	LXMFPeerWindow = 24 * time.Hour
+	LXMFMaxPeers   = 50
+)
+
+// EventType is the type of the event the relay publishes on the Bridge's
+// event stream for every digest kept. Its data is the warning's row as
+// GET /api/warnings lists it, plus the label and whether it arrived expired.
+const EventType = "warning"
+
+// Event is the data of an EventType event.
+type Event struct {
+	database.Warning
+	Label   string `json:"label"`
+	Expired bool   `json:"expired"` // arrived expired: kept, relayed nowhere
+}
+
+// NoExpiryInForce is how long a warning that names no expiry counts as in
+// force (InForce): until an Update or a Cancel names it, at most this long
+// after it was sent.
+const NoExpiryInForce = 24 * time.Hour
 
 // The cell leg's timing: a warning repeats about once a minute (32 x
 // 1.883 s) until it expires, at least CellMinBroadcasts times and at most
@@ -150,6 +193,7 @@ func (r *Relay) Handle(ctx context.Context, wire []byte, via string) error {
 	}
 	if !d.Expires.IsZero() && d.Expires.Before(now) && d.MsgType != TypeCancel {
 		log.Info().Str("id", id).Time("expires", d.Expires).Msg("warnings: expired on arrival, kept and not relayed")
+		r.emit(d, row, true)
 		return ErrExpired
 	}
 
@@ -186,11 +230,119 @@ func (r *Relay) Handle(ctx context.Context, wire []byte, via string) error {
 			bearers = append(bearers, bearer)
 		}
 	}
+	if r.deps.LXMFPeers != nil && r.deps.SendLXMF != nil {
+		if bearer := r.relayLXMF(id, key, mesh, now); bearer != "" {
+			bearers = append(bearers, bearer)
+		}
+	}
+	if bearers == nil {
+		bearers = []string{} // "[]" in the row, never "null"
+	}
 	b, _ := json.Marshal(bearers)
 	if err := r.db.SetWarningBearers(id, string(b)); err != nil {
 		log.Warn().Err(err).Msg("warnings: bearers not recorded")
 	}
+	row.Bearers = string(b)
+	r.emit(d, row, false)
 	return nil
+}
+
+// relayLXMF is the LXMF leg: the mesh text, as one LXMF message to each
+// peer RecentLXMFPeers picks, each under its own key so a redelivered
+// digest queues nothing twice. It answers "lxmf" when at least one was
+// queued, "" otherwise.
+func (r *Relay) relayLXMF(id, key, text string, now time.Time) string {
+	peers := RecentLXMFPeers(r.deps.LXMFPeers(), now)
+	if len(peers) == 0 {
+		log.Debug().Str("id", id).Msg("warnings: no LXMF peer heard recently, nothing queued to LXMF")
+		return ""
+	}
+	queued := 0
+	for _, p := range peers {
+		if err := r.deps.SendLXMF(key+":lxmf:"+p.Dest, p.Dest, text); err != nil {
+			log.Warn().Err(err).Str("id", id).Str("dest", p.Dest).Msg("warnings: LXMF message not queued")
+			continue
+		}
+		queued++
+	}
+	if queued == 0 {
+		return ""
+	}
+	log.Info().Str("id", id).Int("peers", queued).Msg("warnings: queued to the LXMF peers heard recently")
+	return "lxmf"
+}
+
+// RecentLXMFPeers picks the peers the LXMF leg writes to: those heard
+// within LXMFPeerWindow of now whose path does not cross a paid link, the
+// most recently heard first, at most LXMFMaxPeers, each destination once.
+func RecentLXMFPeers(all []LXMFPeer, now time.Time) []LXMFPeer {
+	var out []LXMFPeer
+	seen := map[string]bool{}
+	for _, p := range all {
+		if p.Dest == "" || p.Paid || p.LastSeen.IsZero() || now.Sub(p.LastSeen) > LXMFPeerWindow || seen[p.Dest] {
+			continue
+		}
+		seen[p.Dest] = true
+		out = append(out, p)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].LastSeen.After(out[j].LastSeen) })
+	if len(out) > LXMFMaxPeers {
+		out = out[:LXMFMaxPeers]
+	}
+	return out
+}
+
+// emit publishes the kept digest on the Bridge's event stream: type
+// EventType, the headline as the message, the row with its label as the
+// data, so the web app and a notifier reading /api/events learn of it
+// without a poll.
+func (r *Relay) emit(d *Digest, row *database.Warning, expired bool) {
+	if r.deps.Emit == nil || row == nil {
+		return
+	}
+	if row.Bearers == "" {
+		row.Bearers = "[]" // as the row keeps it (an expired arrival went nowhere)
+	}
+	data, err := json.Marshal(Event{Warning: *row, Label: Label(d), Expired: expired})
+	if err != nil {
+		return
+	}
+	r.deps.Emit(transport.MeshEvent{Type: EventType, Message: headline(d), Data: data, Time: r.now().UTC().Format(time.RFC3339)})
+}
+
+// InForce lists the warnings a person at this kit should still see: kept,
+// not cancelled or replaced, not expired (one that names no expiry counts
+// for NoExpiryInForce after it was sent), newest sent first. The Post
+// portal's banner reads it.
+func InForce(db *database.DB, now time.Time) ([]database.Warning, error) {
+	if db == nil {
+		return nil, nil
+	}
+	list, err := db.ListWarnings(500)
+	if err != nil {
+		return nil, err
+	}
+	var out []database.Warning
+	for _, w := range list {
+		if w.Cancelled || w.MsgType == "Cancel" {
+			continue
+		}
+		if w.Expires.IsZero() {
+			if now.Sub(w.Sent) > NoExpiryInForce {
+				continue
+			}
+		} else if !w.Expires.After(now) {
+			continue
+		}
+		out = append(out, w)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Sent.After(out[j].Sent) })
+	return out, nil
+}
+
+// InForce is InForce over the relay's database, at the relay's clock.
+func (r *Relay) InForce() ([]database.Warning, error) {
+	return InForce(r.db, r.now())
 }
 
 // relayCell is the 2G cell leg. A Cancel takes the referenced warning off
@@ -306,7 +458,25 @@ func (r *Relay) HandleSatellite(ctx context.Context, ifaceID string, wire []byte
 
 // Label is the line that says what a relayed warning is and is not.
 func Label(d *Digest) string {
-	return "Relay of " + SourceLabel(d.Source) + " warning, issued " + d.Sent.UTC().Format("2 Jan 15:04") + " UTC via MeshSat, not an official NL-Alert"
+	return LabelFor(SourceName(d.Source), d.Sent)
+}
+
+// LabelFor is Label for a kept row: the source as the row names it
+// (SourceName) and when the warning was sent. Every surface that shows a
+// relayed warning (the mesh, the Post portal's banner, the event stream)
+// renders the line here, so they say the same thing.
+func LabelFor(source string, sent time.Time) string {
+	return "Relay of " + SourceLabel(sourceIDByName(source)) + " warning, issued " + sent.UTC().Format("2 Jan 15:04") + " UTC via MeshSat, not an official NL-Alert"
+}
+
+// sourceIDByName is SourceName's inverse; an unknown name reads as unknown.
+func sourceIDByName(name string) int {
+	for _, id := range []int{SourceDWD, SourceMeteoAlarmNL, SourceTest} {
+		if SourceName(id) == name {
+			return id
+		}
+	}
+	return 0
 }
 
 // MeshText is what goes to the mesh: the warning's words, then the label,

@@ -25,6 +25,12 @@ name, the message (at most 150 characters, no links), and a checkbox for an emer
 HTML in Greek, Dutch and English (from `Accept-Language`, switchable at the top of every page), no
 script, no outside asset, forms that POST.
 
+**Warnings.** A public warning the Hub relayed to this kit and still in force (`docs/warning-relay.md`,
+MESHSAT-1734) stands at the top of every page, above the page's own content: "Public warning"
+in the page's language, `TEST` for a test, the event and severity, until when, the words, and
+the line that says it is a relay via MeshSat and not an official NL-Alert. A cancelled, replaced
+or expired warning is not shown; a closed post still shows the banner. Nothing to configure.
+
 **Code.** The confirmation page shows the pickup code large, with the instruction to screenshot it.
 With the approval queue on (the default) it also says the operator checks every message first.
 

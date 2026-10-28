@@ -15,6 +15,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"meshsat/internal/database"
+	"meshsat/internal/warnings"
 )
 
 // The portal: plain HTML, no script, no outside asset, forms that POST. It
@@ -189,9 +190,45 @@ type page struct {
 	Closed    bool   // the operator closed the post
 	PurgeDate string // the day everything is deleted, while closed
 	PurgeDays int
+	// Warnings are the public warnings in force at this kit (the Hub's
+	// last-mile relay, MESHSAT-1734), shown at the top of every page.
+	Warnings []warningBanner
 }
 
 type langLink struct{ Code, Name, Href string }
+
+// warningBanner is one relayed warning as the banner shows it: the event
+// and severity as the digest names them (English, as on the mesh), the
+// words, until when, and the label line the mesh carries. A test is marked;
+// a cancelled, replaced or expired warning is not shown at all.
+type warningBanner struct {
+	Test     bool
+	Update   bool
+	Event    string
+	Severity string
+	Until    string // "HH:MM UTC", "" when the warning names no expiry
+	Text     string
+	Label    string
+}
+
+// bannerWarnings reads the warnings in force through the warnings package.
+func (s *Service) bannerWarnings() []warningBanner {
+	list, err := warnings.InForce(s.deps.DB, s.now())
+	if err != nil {
+		log.Warn().Err(err).Msg("post: warnings in force unreadable, no banner")
+		return nil
+	}
+	var out []warningBanner
+	for _, w := range list {
+		b := warningBanner{Test: w.Test, Update: w.MsgType == "Update", Event: w.Event, Severity: w.Severity, Text: w.Text,
+			Label: warnings.LabelFor(w.Source, w.Sent)}
+		if !w.Expires.IsZero() {
+			b.Until = w.Expires.UTC().Format("15:04") + " UTC"
+		}
+		out = append(out, b)
+	}
+	return out
+}
 
 func (s *Service) newPage(w http.ResponseWriter, r *http.Request, path string) *page {
 	lang := s.lang(w, r, true)
@@ -205,6 +242,7 @@ func (s *Service) newPage(w http.ResponseWriter, r *http.Request, path string) *
 	if state := s.State(); state.Closed {
 		p.Closed, p.PurgeDate = true, state.PurgeAt.UTC().Format("2006-01-02")
 	}
+	p.Warnings = s.bannerWarnings()
 	for _, l := range Languages {
 		p.Langs = append(p.Langs, langLink{Code: l, Name: T(l, "lang_name"), Href: path + "?lang=" + l})
 	}
@@ -432,6 +470,9 @@ button{width:100%;padding:1rem;margin-top:1rem;border:0;border-radius:.6rem;back
 .code{font:700 2.6rem/1.2 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;letter-spacing:.18em;text-align:center;background:#fff;color:#000;padding:1rem;border-radius:.6rem;margin:1rem 0}
 .card{background:#1c232b;border-radius:.5rem;padding:.8rem .9rem;margin:.6rem 0}
 .card .meta{font-size:.85rem;color:#9fb3c8}
+.warn{background:#5a3a14;border:1px solid #d08a2a;border-radius:.5rem;padding:.7rem .9rem;margin:.4rem 0 .8rem}
+.warn .meta{font-size:.85rem;color:#f3dcb4}
+.warn .tag{font-weight:700;letter-spacing:.06em}
 .chk{display:flex;gap:.6rem;align-items:flex-start;margin:1rem 0 .2rem}
 .chk input{width:1.4rem;height:1.4rem;margin:.1rem 0 0}
 .chk label{margin:0}
@@ -446,7 +487,8 @@ a{color:#8fd3c9}
 <a href="/board{{.Q}}"{{if eq .Path "/board"}} class="on"{{end}}>{{.S.nav_board}}</a>
 <a href="/about{{.Q}}"{{if eq .Path "/about"}} class="on"{{end}}>{{.S.nav_about}}</a>
 </nav>
-{{if .Err}}<div class="err">{{.Err}}</div>{{end}}
+{{range .Warnings}}<div class="warn" role="alert"><div class="meta"><span class="tag">{{$.S.warn_title}}</span>{{if .Test}} &middot; <span class="tag">{{$.S.warn_test}}</span>{{end}}{{if .Update}} &middot; {{$.S.warn_update}}{{end}}</div><div><strong>{{.Event}} {{.Severity}}</strong>{{if .Until}} &middot; {{$.S.warn_until}} {{.Until}}{{end}}</div>{{if .Text}}<div>{{.Text}}</div>{{end}}<div class="meta">{{.Label}}</div></div>
+{{end}}{{if .Err}}<div class="err">{{.Err}}</div>{{end}}
 {{end}}
 
 {{define "foot"}}<p class="foot">{{.S.powered}} &middot; <a href="/done{{.Q}}">{{.S.done}}</a></p></main></body></html>{{end}}

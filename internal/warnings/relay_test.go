@@ -2,6 +2,7 @@ package warnings
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 
 	"meshsat/internal/cell"
 	"meshsat/internal/database"
+	"meshsat/internal/transport"
 )
 
 // MESHSAT-1734: the fan-out, through fake senders standing in for the
@@ -29,10 +31,26 @@ type fakeDeps struct {
 	cellRefuse  map[int]bool
 	cellCancels []string
 	cellOnAir   map[string]int
+	// The LXMF leg: the peers the node knows, what was queued (addressee
+	// is the destination), and a failure to inject.
+	peers    []LXMFPeer
+	lxmf     []send
+	lxmfFail error
+	// The event stream.
+	events []transport.MeshEvent
 }
 
 func (f *fakeDeps) deps(pub []byte) Deps {
 	return Deps{
+		LXMFPeers: func() []LXMFPeer { return f.peers },
+		SendLXMF: func(key, dest, text string) error {
+			if f.lxmfFail != nil {
+				return f.lxmfFail
+			}
+			f.lxmf = append(f.lxmf, send{key, dest, text})
+			return nil
+		},
+		Emit:   func(ev transport.MeshEvent) { f.events = append(f.events, ev) },
 		CellUp: func() bool { return f.cellUp },
 		CellBroadcast: func(ctx context.Context, req cell.BroadcastRequest) error {
 			f.cellReqs = append(f.cellReqs, req)
@@ -434,5 +452,240 @@ func TestCellChannelTable(t *testing.T) {
 	}
 	if n := CellBroadcasts(&Digest{Expires: now.Add(72 * time.Hour)}, now); n != CellMaxBroadcasts {
 		t.Fatalf("three days: %d", n)
+	}
+}
+
+func destHex(i int) string { return fmt.Sprintf("%032x", i) }
+
+// The LXMF leg (MESHSAT-1734): the mesh text goes as one LXMF message to
+// each peer heard in the last day on a free link, the most recently heard
+// first, under a key of the digest and the peer, so a redelivered digest
+// queues nothing twice; an old peer, one never heard and one behind a paid
+// link get nothing; an Update and a Cancel go too; no peer, no bearer.
+func TestTheLXMFLeg(t *testing.T) {
+	r, f, db := relayRig(t)
+	key := testKey(t)
+	now := r.now()
+	f.peers = []LXMFPeer{
+		{Dest: destHex(1), LastSeen: now.Add(-30 * time.Minute)},
+		{Dest: destHex(2), LastSeen: now.Add(-48 * time.Hour)},        // too old
+		{Dest: destHex(3), LastSeen: now.Add(-time.Hour), Paid: true}, // over the satellite
+		{Dest: destHex(4)}, // never heard
+		{Dest: destHex(5), LastSeen: now.Add(-15 * time.Minute)},             // the most recent
+		{Dest: destHex(1), LastSeen: now.Add(-20 * time.Minute)},             // the first again
+		{Dest: destHex(6), LastSeen: now.Add(-LXMFPeerWindow + time.Minute)}, // just inside the window
+	}
+	first := alertDigest()
+	if err := r.Handle(context.Background(), encode(t, first, key), "hub"); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.lxmf) != 3 || f.lxmf[0].addressee != destHex(5) || f.lxmf[1].addressee != destHex(1) || f.lxmf[2].addressee != destHex(6) {
+		t.Fatalf("lxmf sends: %+v", f.lxmf)
+	}
+	idHex := first.IDHex()
+	for _, s := range f.lxmf {
+		if s.key != "warn:"+idHex+":alert:lxmf:"+s.addressee || s.text != f.alerts[0].text {
+			t.Fatalf("lxmf send: %+v, mesh text %q", s, f.alerts[0].text)
+		}
+	}
+	row, _ := db.GetWarning(idHex)
+	if row.Bearers != `["mesh-alert","mesh-text","aprs","lxmf"]` {
+		t.Fatalf("bearers %s", row.Bearers)
+	}
+	// The same digest again: nothing more to LXMF either.
+	if err := r.Handle(context.Background(), encode(t, first, key), "iridium_0"); !errors.Is(err, ErrSeen) || len(f.lxmf) != 3 {
+		t.Fatalf("redelivery: %v, %d lxmf sends", err, len(f.lxmf))
+	}
+	// An Update: the new text to the same peers under the new id.
+	upd := alertDigest()
+	upd.MsgType, upd.ID, upd.Ref, upd.Severity, upd.Text = TypeUpdate, idOf("nl-2"), first.ID, 3, "Zware windstoten tot 110 km/u"
+	if err := r.Handle(context.Background(), encode(t, upd, key), "hub"); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.lxmf) != 6 || !strings.HasPrefix(f.lxmf[3].text, "UPDATE: WARNING Wind Severe") || f.lxmf[3].key != "warn:"+upd.IDHex()+":update:lxmf:"+destHex(5) {
+		t.Fatalf("update: %+v", f.lxmf[3:])
+	}
+	// A Cancel goes too: the peers have the warning.
+	cancel := &Digest{MsgType: TypeCancel, Source: SourceMeteoAlarmNL, ID: idOf("nl-3"), Ref: upd.ID, Sent: upd.Sent.Add(time.Hour), Event: 1}
+	if err := r.Handle(context.Background(), encode(t, cancel, key), "hub"); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.lxmf) != 9 || !strings.HasPrefix(f.lxmf[6].text, "CANCELLED: Wind\n") {
+		t.Fatalf("cancel: %+v", f.lxmf[6:])
+	}
+	// No peer heard recently: no send, no bearer; the mesh still goes.
+	f.peers = []LXMFPeer{{Dest: destHex(2), LastSeen: now.Add(-48 * time.Hour)}}
+	quiet := alertDigest()
+	quiet.ID = idOf("q-1")
+	if err := r.Handle(context.Background(), encode(t, quiet, key), "hub"); err != nil || len(f.lxmf) != 9 {
+		t.Fatalf("no peers: %v, %d sends", err, len(f.lxmf))
+	}
+	row, _ = db.GetWarning(quiet.IDHex())
+	if row.Bearers != `["mesh-alert","mesh-text","aprs"]` {
+		t.Fatalf("bearers without a peer %s", row.Bearers)
+	}
+	// The ledger refusing every send: no bearer either.
+	f.peers, f.lxmfFail = []LXMFPeer{{Dest: destHex(7), LastSeen: now}}, errors.New("ledger closed")
+	failed := alertDigest()
+	failed.ID = idOf("f-1")
+	if err := r.Handle(context.Background(), encode(t, failed, key), "hub"); err != nil {
+		t.Fatal(err)
+	}
+	row, _ = db.GetWarning(failed.IDHex())
+	if row.Bearers != `["mesh-alert","mesh-text","aprs"]` {
+		t.Fatalf("bearers with the ledger refusing %s", row.Bearers)
+	}
+	// The cap: sixty recent peers, fifty sends, the most recent first.
+	f.lxmfFail, f.peers = nil, nil
+	for i := 0; i < 60; i++ {
+		f.peers = append(f.peers, LXMFPeer{Dest: destHex(100 + i), LastSeen: now.Add(-time.Duration(i) * time.Minute)})
+	}
+	many := alertDigest()
+	many.ID = idOf("m-1")
+	before := len(f.lxmf)
+	if err := r.Handle(context.Background(), encode(t, many, key), "hub"); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(f.lxmf) - before; got != LXMFMaxPeers || f.lxmf[before].addressee != destHex(100) || f.lxmf[len(f.lxmf)-1].addressee != destHex(149) {
+		t.Fatalf("cap: %d sends, first %s last %s", got, f.lxmf[before].addressee, f.lxmf[len(f.lxmf)-1].addressee)
+	}
+}
+
+// Every kept digest is one event on the Bridge's event stream: type
+// "warning", the headline as the message, the row with its label as the
+// data; a redelivery is none; an expired arrival says so.
+func TestAKeptDigestIsOneEventOnTheStream(t *testing.T) {
+	r, f, _ := relayRig(t)
+	key := testKey(t)
+	first := alertDigest()
+	wire := encode(t, first, key)
+	if err := r.Handle(context.Background(), wire, "hub"); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.events) != 1 {
+		t.Fatalf("events: %+v", f.events)
+	}
+	ev := f.events[0]
+	if ev.Type != "warning" || !strings.HasPrefix(ev.Message, "WARNING Wind Moderate until 10:11 UTC: Kans op windstoten") || ev.Time != "2026-10-28T12:00:00Z" {
+		t.Fatalf("event: %+v", ev)
+	}
+	var data Event
+	if err := json.Unmarshal(ev.Data, &data); err != nil {
+		t.Fatal(err)
+	}
+	if data.ID != first.IDHex() || data.MsgType != "Alert" || data.Test || data.Cancelled || data.Expired || data.Source != "meteoalarm-nl" ||
+		data.Event != "Wind" || data.Severity != "Moderate" || data.Text != "Kans op windstoten tot 90 km/u" || data.Via != "hub" ||
+		data.Bearers != `["mesh-alert","mesh-text","aprs"]` || data.Label != "Relay of KNMI via MeteoAlarm warning, issued 28 Oct 10:11 UTC via MeshSat, not an official NL-Alert" ||
+		!data.Expires.Equal(first.Expires) {
+		t.Fatalf("data: %+v", data)
+	}
+	// The raw JSON carries the row's fields flat, as GET /api/warnings does.
+	if !strings.Contains(string(ev.Data), `"msg_type":"Alert"`) || !strings.Contains(string(ev.Data), `"label":"Relay of`) || strings.Contains(string(ev.Data), `"Warning"`) {
+		t.Fatalf("data json: %s", ev.Data)
+	}
+	// A redelivery: no event.
+	_ = r.Handle(context.Background(), wire, "iridium_0")
+	if len(f.events) != 1 {
+		t.Fatal("a seen digest made an event")
+	}
+	// A Cancel: cancelled, type Cancel.
+	cancel := &Digest{MsgType: TypeCancel, Source: SourceMeteoAlarmNL, ID: idOf("c-1"), Ref: first.ID, Sent: first.Sent.Add(time.Hour), Event: 1}
+	if err := r.Handle(context.Background(), encode(t, cancel, key), "hub"); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.events) != 2 || !strings.HasPrefix(f.events[1].Message, "CANCELLED: Wind") {
+		t.Fatalf("cancel event: %+v", f.events)
+	}
+	data = Event{}
+	_ = json.Unmarshal(f.events[1].Data, &data)
+	if data.MsgType != "Cancel" || !data.Cancelled || data.Ref != first.IDHex() {
+		t.Fatalf("cancel data: %+v", data)
+	}
+	// An expired arrival: kept, relayed nowhere, and the event says so.
+	expired := alertDigest()
+	expired.ID, expired.Expires = idOf("old"), time.Date(2026, 10, 28, 11, 0, 0, 0, time.UTC)
+	_ = r.Handle(context.Background(), encode(t, expired, key), "hub")
+	if len(f.events) != 3 {
+		t.Fatalf("expired event: %+v", f.events)
+	}
+	data = Event{}
+	_ = json.Unmarshal(f.events[2].Data, &data)
+	if !data.Expired || data.Bearers != "[]" || data.ID != expired.IDHex() {
+		t.Fatalf("expired data: %+v", data)
+	}
+	// A test digest is marked.
+	test := alertDigest()
+	test.Test, test.Source, test.ID = true, SourceTest, idOf("t-1")
+	_ = r.Handle(context.Background(), encode(t, test, key), "hub")
+	data = Event{}
+	_ = json.Unmarshal(f.events[3].Data, &data)
+	if !data.Test || data.Source != "test" || !strings.HasPrefix(f.events[3].Message, "TEST WARNING") || !strings.Contains(data.Label, "MeshSat test") {
+		t.Fatalf("test data: %+v / %s", data, f.events[3].Message)
+	}
+}
+
+// InForce is what the Post portal's banner shows: kept, current, not
+// expired, newest sent first; a warning with no expiry for a day.
+func TestInForceIsWhatTheBannerShows(t *testing.T) {
+	r, _, _ := relayRig(t)
+	key := testKey(t)
+	now := r.now()
+	first := alertDigest() // sent 10:11, expires tomorrow
+	handle := func(d *Digest) {
+		t.Helper()
+		if err := r.Handle(context.Background(), encode(t, d, key), "hub"); err != nil && !errors.Is(err, ErrExpired) {
+			t.Fatal(err)
+		}
+	}
+	handle(first)
+	test := alertDigest()
+	test.Test, test.Source, test.ID, test.Sent = true, SourceTest, idOf("t-1"), now.Add(-time.Hour)
+	handle(test)
+	expired := alertDigest()
+	expired.ID, expired.Expires = idOf("old"), now.Add(-time.Minute)
+	handle(expired)
+	open := alertDigest() // no expiry, sent two hours ago
+	open.ID, open.Expires, open.Sent, open.Event = idOf("open"), time.Time{}, now.Add(-2*time.Hour), 9
+	handle(open)
+	stale := alertDigest() // no expiry, sent thirty hours ago
+	stale.ID, stale.Expires, stale.Sent = idOf("stale"), time.Time{}, now.Add(-30*time.Hour)
+	handle(stale)
+
+	ids := func() []string {
+		t.Helper()
+		list, err := r.InForce()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, w := range list {
+			out = append(out, w.ID)
+		}
+		return out
+	}
+	if got := ids(); strings.Join(got, ",") != strings.Join([]string{test.IDHex(), first.IDHex(), open.IDHex()}, ",") {
+		t.Fatalf("in force: %v", got)
+	}
+	// An Update replaces the first; a Cancel of the update takes both out.
+	upd := alertDigest()
+	upd.MsgType, upd.ID, upd.Ref, upd.Sent = TypeUpdate, idOf("nl-2"), first.ID, now.Add(-30*time.Minute)
+	handle(upd)
+	if got := ids(); strings.Join(got, ",") != strings.Join([]string{upd.IDHex(), test.IDHex(), open.IDHex()}, ",") {
+		t.Fatalf("after the update: %v", got)
+	}
+	cancel := &Digest{MsgType: TypeCancel, Source: SourceMeteoAlarmNL, ID: idOf("nl-3"), Ref: upd.ID, Sent: now, Event: 1}
+	handle(cancel)
+	if got := ids(); strings.Join(got, ",") != strings.Join([]string{test.IDHex(), open.IDHex()}, ",") {
+		t.Fatalf("after the cancel: %v", got)
+	}
+	// Time passes: the open one ages out, the test one expires.
+	r.now = func() time.Time { return now.Add(23 * time.Hour) }
+	if got := ids(); len(got) != 0 {
+		t.Fatalf("a day on: %v", got)
+	}
+	// The label a kept row renders is the mesh's.
+	if LabelFor("dwd", first.Sent) != "Relay of DWD warning, issued 28 Oct 10:11 UTC via MeshSat, not an official NL-Alert" ||
+		LabelFor("meteoalarm-nl", first.Sent) != Label(first) || !strings.HasPrefix(LabelFor("nobody", first.Sent), "Relay of unknown source warning") {
+		t.Fatalf("labels: %q", LabelFor("dwd", first.Sent))
 	}
 }

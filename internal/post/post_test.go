@@ -858,3 +858,81 @@ func TestPrinterReportAgesOut(t *testing.T) {
 		t.Fatalf("stale report: %+v", st)
 	}
 }
+
+// The public warnings in force at this kit stand at the top of every page
+// (MESHSAT-1734): the event and severity, until when, the words, the label
+// the mesh carries, TEST for a test; a cancelled, replaced or expired one is
+// not shown; the three languages have their own words around it.
+func TestWarningsInForceStandAtTheTopOfEveryPage(t *testing.T) {
+	e := newEnv(t, Config{})
+	c := e.client()
+	if _, body := e.get(c, "/?lang=en"); strings.Contains(body, `class="warn"`) {
+		t.Fatal("a banner with no warning")
+	}
+	sent := e.clock.Add(-2 * time.Hour)
+	rows := []*database.Warning{
+		{ID: "f161d743dd14e974", MsgType: "Alert", Source: "meteoalarm-nl", Sent: sent, Expires: e.clock.Add(22 * time.Hour), Severity: "Moderate",
+			Event: "Wind", Language: "nl", Text: "Kans op windstoten tot 90 km/u", Via: "hub", ReceivedAt: sent},
+		{ID: "0101010101010101", MsgType: "Update", Ref: "0000000000000001", Test: true, Source: "test", Sent: sent.Add(time.Minute), Severity: "Extreme",
+			Event: "Flood", Text: "Oefening, geen echte waarschuwing", Via: "iridium_0", ReceivedAt: sent},
+		{ID: "0202020202020202", MsgType: "Alert", Source: "dwd", Sent: sent, Expires: e.clock.Add(-time.Minute), Severity: "Severe", Event: "Rain",
+			Text: "voorbij", Via: "hub", ReceivedAt: sent},
+		{ID: "0303030303030303", MsgType: "Alert", Source: "dwd", Sent: sent, Expires: e.clock.Add(time.Hour), Severity: "Minor", Event: "Fog",
+			Text: "ingetrokken", Via: "hub", ReceivedAt: sent, Cancelled: true},
+	}
+	for _, w := range rows {
+		if err := e.db.InsertWarning(w); err != nil {
+			t.Fatal(err)
+		}
+	}
+	label := "Relay of KNMI via MeteoAlarm warning, issued 28 Oct 10:00 UTC via MeshSat, not an official NL-Alert"
+	for _, path := range []string{"/", "/pickup", "/board", "/about", "/done"} {
+		res, body := e.get(c, path+"?lang=en")
+		if res.StatusCode != http.StatusOK {
+			t.Fatalf("%s: %d", path, res.StatusCode)
+		}
+		for _, want := range []string{`class="warn" role="alert"`, "Public warning", "<strong>Wind Moderate</strong>", "until 10:00 UTC",
+			"Kans op windstoten tot 90 km/u", label, "TEST", "Update", "<strong>Flood Extreme</strong>", "Oefening, geen echte waarschuwing",
+			"Relay of MeshSat test warning"} {
+			if !strings.Contains(body, want) {
+				t.Fatalf("%s lacks %q:\n%s", path, want, body)
+			}
+		}
+		for _, no := range []string{"voorbij", "ingetrokken", "Rain Severe", "Fog Minor"} {
+			if strings.Contains(body, no) {
+				t.Fatalf("%s shows a warning no longer in force (%q)", path, no)
+			}
+		}
+		// Newest sent first: the test above the wind warning; and the
+		// banner right under the navigation, above the page's own content.
+		if strings.Index(body, "Flood Extreme") > strings.Index(body, "Wind Moderate") {
+			t.Fatalf("%s: the order is not newest first", path)
+		}
+		if nav := strings.Index(body, "</nav>"); nav < 0 || strings.Index(body, `class="warn"`) < nav {
+			t.Fatalf("%s: the banner is not right under the navigation", path)
+		}
+		if strings.Contains(strings.ToLower(body), "<script") || strings.Contains(body, "http://") || strings.Contains(body, "https://") {
+			t.Fatalf("%s carries a script or an outside reference", path)
+		}
+	}
+	// The three languages.
+	if _, body := e.get(c, "/?lang=nl"); !strings.Contains(body, "Publieke waarschuwing") || !strings.Contains(body, "tot 10:00 UTC") || !strings.Contains(body, label) {
+		t.Fatal("Dutch banner")
+	}
+	if _, body := e.get(c, "/?lang=el"); !strings.Contains(body, "Δημόσια προειδοποίηση") || !strings.Contains(body, "ΔΟΚΙΜΗ") || !strings.Contains(body, "έως 10:00 UTC") {
+		t.Fatal("Greek banner")
+	}
+	// A closed post still shows it.
+	if _, err := e.svc.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, body := e.get(c, "/?lang=en"); !strings.Contains(body, "This post is closed") || !strings.Contains(body, "Kans op windstoten") {
+		t.Fatal("the closed page lost the banner")
+	}
+	// Time passes: the wind warning expires and the test one, which names
+	// no expiry, ages out after a day; the banner goes.
+	e.clock = e.clock.Add(23 * time.Hour)
+	if _, body := e.get(c, "/?lang=en"); strings.Contains(body, `class="warn"`) {
+		t.Fatal("an expired warning is still on the banner")
+	}
+}

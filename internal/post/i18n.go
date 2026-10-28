@@ -81,6 +81,10 @@ var strs = map[string]map[string]string{
 		"err_other":      "Something went wrong at the post. Tell the operator.",
 		"language":       "Language",
 		"powered":        "MeshSat Community Post",
+		"warn_title":     "Public warning",
+		"warn_test":      "TEST",
+		"warn_update":    "Update",
+		"warn_until":     "until",
 	},
 	"nl": {
 		"lang_name":      "Nederlands",
@@ -149,6 +153,10 @@ var strs = map[string]map[string]string{
 		"err_other":      "Er ging iets mis op de post. Zeg het tegen de medewerker.",
 		"language":       "Taal",
 		"powered":        "MeshSat Berichtenpost",
+		"warn_title":     "Publieke waarschuwing",
+		"warn_test":      "TEST",
+		"warn_update":    "Update",
+		"warn_until":     "tot",
 	},
 	"el": {
 		"lang_name":      "Ελληνικά",
@@ -217,6 +225,10 @@ var strs = map[string]map[string]string{
 		"err_other":      "Κάτι πήγε στραβά στο σημείο. Πες το στον χειριστή.",
 		"language":       "Γλώσσα",
 		"powered":        "MeshSat Κοινοτικό Ταχυδρομείο",
+		"warn_title":     "Δημόσια προειδοποίηση",
+		"warn_test":      "ΔΟΚΙΜΗ",
+		"warn_update":    "Ενημέρωση",
+		"warn_until":     "έως",
 	},
 }
 

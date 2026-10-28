@@ -2541,8 +2541,10 @@ func main() {
 	// Public warnings the Hub relays for this kit's area (MESHSAT-1734): a
 	// digest signed by the pinned Hub directory key, on the kit's own
 	// warn/in or as a satellite MT, verified and put on the mesh (ALERT_APP
-	// with BEL, and a text) and on APRS as a bulletin, each once through the
-	// delivery ledger under the digest's id.
+	// with BEL, and a text), on APRS as a bulletin, on the 2G cell, and to
+	// the LXMF peers heard in the last day, each once through the delivery
+	// ledger under the digest's id; then one "warning" event on /api/events.
+	// The Community Post portal reads the warnings in force itself.
 	warnRelay := warnings.New(db, warnings.Deps{
 		Key: warnings.KeyFromConfig(db, directory.RotationKeyConfig),
 		SendAlert: func(key, text string) error {
@@ -2577,6 +2579,29 @@ func main() {
 			}
 			return cellCBC.DeleteRef(ctx, ref, "warning relay: cancel of "+ref)
 		},
+		// The LXMF leg: the peers the Reticulum node's path table holds
+		// as lxmf.delivery, when each last announced, and whether its
+		// path leaves on a paid link (the satellite); the relay keeps the
+		// ones heard in the last day on free links. Each send is the same
+		// row handleLXMFSend writes, keyed by the digest and the peer.
+		LXMFPeers: func() []warnings.LXMFPeer {
+			if rnsStack == nil || rnsStack.LXMF == nil {
+				return nil
+			}
+			var out []warnings.LXMFPeer
+			for _, p := range rnsStack.LXMF.Peers() {
+				seen, _ := time.Parse(time.RFC3339, p.LastSeen)
+				out = append(out, warnings.LXMFPeer{Dest: p.DestHash, LastSeen: seen, Paid: rnsStack.CrossesPaidLink(p.DestHash)})
+			}
+			return out
+		},
+		SendLXMF: func(key, dest, text string) error {
+			body, _ := json.Marshal(rnsstack.LXMFBody{Content: text})
+			_, _, _, err := dispatcher.QueueDirectSendKeyed("warnings", key, warningFingerprint(dest+" "+text), "lxmf_0", text,
+				engine.DirectSendOptions{Class: database.DeliveryClassLXMF, Destination: dest, MaxRetries: 5, Payload: body})
+			return err
+		},
+		Emit: proc.Emit,
 	})
 	proc.SetWarningInbound(warnRelay.HandleSatellite)
 

@@ -2,10 +2,12 @@
 // (MESHSAT-1734): the Hub hands this Bridge a compact digest of an official
 // public warning for its area, signed by the Hub's directory key the Bridge
 // already pins, on the Bridge's own {root}/bridge/<id>/warn/in or as a
-// satellite MT; the Bridge verifies it, keeps it, and puts it on the mesh
-// and on APRS. The contract, the byte layout and the test vector are the
-// Hub's docs/warning-relay.md; the layout here must stay byte for byte the
-// Hub's internal/warnings.
+// satellite MT; the Bridge verifies it, keeps it, and puts it on the mesh,
+// on APRS, on its 2G cell, to the LXMF peers heard recently, on its event
+// stream and at the top of the Community Post portal (the Bridge's
+// docs/warning-relay.md). The contract, the byte layout and the test vector
+// are the Hub's docs/warning-relay.md; the layout here must stay byte for
+// byte the Hub's internal/warnings.
 package warnings
 
 import (
