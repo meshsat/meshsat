@@ -306,7 +306,15 @@ func (c *TAKChat) Deliver(ev *CotEvent) int {
 			continue
 		}
 		node, ok := c.resolve(p, heard)
-		if !ok || done[node] {
+		if !ok {
+			// The Hub lists a crew for a day after its last export; this
+			// Bridge sends only to a node its radio heard in that time. Say
+			// so, or a dispatcher's message vanishes without a trace.
+			log.Info().Str("from", from.Callsign).Str("to", p.UID).Str("callsign", p.Callsign).
+				Msg("tak chat: to a crew this Bridge has not heard for a day, not sent")
+			continue
+		}
+		if done[node] {
 			continue
 		}
 		done[node] = true

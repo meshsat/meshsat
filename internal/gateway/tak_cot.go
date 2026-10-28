@@ -437,6 +437,12 @@ type PositionEnrichment struct {
 	Battery             int     // 0-100 percentage, -1 = unknown
 	SatsInView          int
 	FixQuality, FixType int
+	// FixTime is when the fix was taken, as the node stamped it; zero when
+	// the node has no clock. The event's time is this, not the moment of
+	// export: a radio's node table replays a fix from days ago on a reconnect,
+	// and an event stamped "now" would put that node on the Hub's map as a
+	// crew seen this minute (MESHSAT-1736).
+	FixTime time.Time
 }
 
 // CeFromHDOP converts horizontal dilution of precision to CoT Circular Error (meters).
@@ -465,6 +471,14 @@ func LeFromVDOP(vdop, pdop float64) float64 {
 // BuildEnrichedPositionEvent creates a CoT PLI with real GPS quality and velocity data.
 func BuildEnrichedPositionEvent(uid, callsign string, e PositionEnrichment, staleSec int) CotEvent {
 	ev := BuildPositionEvent(uid, callsign, e.Lat, e.Lon, e.Alt, staleSec)
+	// The event's time is the fix's; its stale time stays the export's, so a
+	// crew heard now with an hour-old fix is still current to a TAK server
+	// and to the Hub, which refuses an event already stale.
+	if !e.FixTime.IsZero() && e.FixTime.Before(time.Now()) {
+		fix := e.FixTime.UTC()
+		ev.Time = fix.Format(cotTimeFormat)
+		ev.Start = fix.Format(cotTimeFormat)
+	}
 
 	// GPS accuracy
 	ev.Point.Ce = CeFromHDOP(e.HDOP, e.PDOP)

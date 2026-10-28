@@ -700,6 +700,9 @@ func (g *TAKGateway) sendMessage(msg *transport.MeshMessage) {
 					FixType:    int(pos.FixType),
 					Battery:    -1, // unknown unless we have telemetry
 				}
+				if pos.Time > 0 {
+					enrich.FixTime = time.Unix(int64(pos.Time), 0)
+				}
 				ev = BuildEnrichedPositionEvent(uid, callsign, enrich, g.config.CotStaleSec)
 			} else {
 				ev = BuildPositionEvent(uid, callsign, 0, 0, 0, g.config.CotStaleSec)
