@@ -106,6 +106,8 @@ type Runner struct {
 	radioErr string
 	ctx      context.Context
 	cancel   context.CancelFunc
+
+	onRadioStop func()
 }
 
 // New makes a runner; Up starts it.
@@ -118,6 +120,15 @@ func New(cfg Config, txlog TXLog) (*Runner, error) {
 
 // Password is the SMPP password the gateway binds with.
 func (r *Runner) Password() string { return r.cfg.SMPPPassword }
+
+// SetRadioStopHook runs fn after the radio keyed down (the cell broadcast
+// client takes its messages off osmo-cbc then, or they would go out again
+// unlogged on the next key-up). [MESHSAT-1734]
+func (r *Runner) SetRadioStopHook(fn func()) {
+	r.mu.Lock()
+	r.onRadioStop = fn
+	r.mu.Unlock()
+}
 
 // Config returns the configuration.
 func (r *Runner) Config() Config { return r.cfg }
@@ -334,6 +345,12 @@ func (r *Runner) RadioStop(ctx context.Context) error {
 		log.Debug().Err(err).Msg("cell: the Pluto's transmitter was not parked")
 	}
 	log.Info().Msg("cell: radio keyed down")
+	r.mu.Lock()
+	hook := r.onRadioStop
+	r.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	return nil
 }
 

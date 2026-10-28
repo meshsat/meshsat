@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
+	"meshsat/internal/cell"
 	"meshsat/internal/channel"
 	"meshsat/internal/clockstate"
 	"meshsat/internal/database"
@@ -72,6 +73,7 @@ type Server struct {
 	oob           *oob.Service      // OOB management frames [MESHSAT-756]
 	host          *oob.HostClient   // host agent for reboot / poweroff [MESHSAT-831]
 	cellHost      *gateway.CellHost // the cell's SDR, core and radio on the host [MESHSAT-1578]
+	cellCBC       *cell.CBC         // cell broadcast on the cell [MESHSAT-1734]
 	transforms    *engine.TransformPipeline
 	ifaceRegistry *routing.InterfaceRegistry
 	tcpIface      *routing.TCPInterface
@@ -631,6 +633,11 @@ func (s *Server) Router() http.Handler {
 		r.Post("/cell/radio", s.handleCellRadio) // the operator keys the radio, with a purpose [MESHSAT-1578]
 		r.Post("/cell/core", s.handleCellCore)
 		r.Get("/cell/txlog", s.handleCellTXLog) // the transmit log the licence asks for
+		// Cell broadcast on the cell: the operator's test sends, what is on
+		// the air, a stop (MESHSAT-1734, docs/cell-broadcast.md).
+		r.Post("/cell/cbs/test", s.handleCellCBSTest)
+		r.Get("/cell/cbs", s.handleCellCBS)
+		r.Delete("/cell/cbs/{channel}", s.handleCellCBSStop)
 
 		// Directory import / export — vCard 4.0 + CSV [MESHSAT-541].
 		// Writes land in the v44+ directory_* tables; legacy /api/contacts

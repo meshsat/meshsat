@@ -13,6 +13,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"meshsat/internal/cell"
 	"meshsat/internal/database"
 )
 
@@ -43,7 +44,26 @@ type Deps struct {
 	SendBulletin func(key, addressee, text string) error
 	// APRSUp reports whether the APRS gateway runs.
 	APRSUp func() bool
+	// The 2G cell leg (docs/cell-broadcast.md): CellUp reports whether the
+	// kit's own cell has its radio keyed up; CellBroadcast puts a warning
+	// on the broadcast channel the request names, under the digest's id,
+	// through the cell's allow-list and TX log; CellCancel takes every
+	// broadcast about ref off the air and answers how many there were.
+	// nil CellBroadcast turns the leg off.
+	CellUp        func() bool
+	CellBroadcast func(ctx context.Context, req cell.BroadcastRequest) error
+	CellCancel    func(ctx context.Context, ref string) (int, error)
 }
+
+// The cell leg's timing: a warning repeats about once a minute (32 x
+// 1.883 s) until it expires, at least CellMinBroadcasts times and at most
+// a day's worth; CellDefaultBroadcasts when the digest names no expiry.
+const (
+	CellRepetitionPeriod  = 32
+	CellMinBroadcasts     = 10
+	CellMaxBroadcasts     = 1440
+	CellDefaultBroadcasts = 60
+)
 
 // Relay verifies, keeps and fans out the digests the Hub sends.
 type Relay struct {
@@ -161,11 +181,117 @@ func (r *Relay) Handle(ctx context.Context, wire []byte, via string) error {
 			log.Info().Str("id", id).Str("addressee", addr).Str("text", text).Msg("warnings: queued to APRS as a bulletin")
 		}
 	}
+	if r.deps.CellBroadcast != nil {
+		if bearer := r.relayCell(ctx, d, id, mesh); bearer != "" {
+			bearers = append(bearers, bearer)
+		}
+	}
 	b, _ := json.Marshal(bearers)
 	if err := r.db.SetWarningBearers(id, string(b)); err != nil {
 		log.Warn().Err(err).Msg("warnings: bearers not recorded")
 	}
 	return nil
+}
+
+// relayCell is the 2G cell leg. A Cancel takes the referenced warning off
+// the air whether or not the radio is up (osmo-cbc holds it either way).
+// An Alert or an Update goes on the air only while the radio is keyed up,
+// on the channel CellChannel picks, and on the ordinary channel when the
+// cell's allow-list refuses that one (a real alert identifier the owner
+// has not cleared). It answers the bearer name for the warning's row, ""
+// when nothing happened.
+func (r *Relay) relayCell(ctx context.Context, d *Digest, id, text string) string {
+	if d.MsgType == TypeCancel {
+		if r.deps.CellCancel == nil || d.RefHex() == "" {
+			return ""
+		}
+		n, err := r.deps.CellCancel(ctx, d.RefHex())
+		if err != nil {
+			log.Warn().Err(err).Str("ref", d.RefHex()).Msg("warnings: the cell broadcast was not taken off the air")
+			return ""
+		}
+		if n == 0 {
+			return ""
+		}
+		log.Info().Str("ref", d.RefHex()).Int("broadcasts", n).Msg("warnings: cell broadcast off the air")
+		return "cell-cancel"
+	}
+	if r.deps.CellUp == nil || !r.deps.CellUp() {
+		log.Debug().Str("id", id).Msg("warnings: the cell's radio is not keyed up, nothing broadcast on it")
+		return ""
+	}
+	ch := CellChannel(d)
+	req := cell.BroadcastRequest{Channel: ch, Text: text, Language: d.Language, Ref: id, Replaces: d.RefHex(),
+		Purpose: CellPurpose(d, id), Test: d.Test, Period: CellRepetitionPeriod, Count: CellBroadcasts(d, r.now())}
+	err := r.deps.CellBroadcast(ctx, req)
+	if errors.Is(err, cell.ErrChannelRefused) && ch != cell.OrdinaryChannel {
+		log.Warn().Err(err).Str("id", id).Int("channel", ch).Int("instead", cell.OrdinaryChannel).
+			Msg("warnings: the cell refused the alert identifier, the ordinary channel carries the warning")
+		req.Channel = cell.OrdinaryChannel
+		err = r.deps.CellBroadcast(ctx, req)
+	}
+	if err != nil {
+		log.Warn().Err(err).Str("id", id).Int("channel", req.Channel).Msg("warnings: not broadcast on the cell")
+		return ""
+	}
+	log.Info().Str("id", id).Int("channel", req.Channel).Int("broadcasts", req.Count).Bool("test", d.Test).Msg("warnings: broadcast on the cell")
+	return "cell"
+}
+
+// CellChannel is the cell broadcast identifier a digest goes out on: the
+// EU-Alert / CMAS test identifier 4380 for a test; by the TS 23.041
+// 9.4.1.2.2 table for a real Extreme (4371-4374) or Severe (4375-4378)
+// warning, the four of each being observed or likely times immediate or
+// expected; the ordinary channel for anything milder, which has no alert
+// identifier. The cell's allow-list decides whether a real identifier may
+// go out; relayCell falls back to the ordinary channel when not.
+func CellChannel(d *Digest) int {
+	if d.Test {
+		return cell.ChannelEUAlertTest
+	}
+	var base int
+	switch d.Severity {
+	case 4: // Extreme
+		base = cell.ChannelExtremeFirst
+	case 3: // Severe
+		base = cell.ChannelSevereFirst
+	default:
+		return cell.OrdinaryChannel
+	}
+	off := 0
+	if d.Certainty != 4 { // not Observed: likely (or less)
+		off++
+	}
+	if d.Urgency != 3 { // not Immediate: expected (or anything else)
+		off += 2
+	}
+	return base + off
+}
+
+// CellBroadcasts is how many times a warning repeats on the cell: once a
+// minute until it expires, within the bounds.
+func CellBroadcasts(d *Digest, now time.Time) int {
+	if d.Expires.IsZero() {
+		return CellDefaultBroadcasts
+	}
+	every := time.Duration(float64(CellRepetitionPeriod) * cell.RepetitionUnit * float64(time.Second))
+	n := int(d.Expires.Sub(now) / every)
+	if n < CellMinBroadcasts {
+		return CellMinBroadcasts
+	}
+	if n > CellMaxBroadcasts {
+		return CellMaxBroadcasts
+	}
+	return n
+}
+
+// CellPurpose is the TX-log row's purpose for a relayed warning.
+func CellPurpose(d *Digest, id string) string {
+	p := "warning relay " + id + ": " + d.TypeName() + " from " + SourceName(d.Source) + " (" + EventName(d.Event) + " " + SeverityName(d.Severity) + ")"
+	if d.Test {
+		p += " [test]"
+	}
+	return p
 }
 
 // HandleSatellite is Handle for what a satellite link delivered: it answers

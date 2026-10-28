@@ -200,6 +200,14 @@ type Config struct {
 	CellLicence     string // MESHSAT_CELL_LICENCE: cited on every TX-log row
 	CellAuth        string // MESHSAT_CELL_AUTH (optional): optional or required (needs the USIM keys)
 	CellSubscribers string // MESHSAT_CELL_SUBSCRIBERS: "IMSI:MSISDN,..."; empty = the four test USIMs
+	// MESHSAT_CELL_CBS_REAL_IDS (""): real public-warning cell broadcast
+	// identifiers (4352-6399, "4370,4371-4378") the cell may broadcast on,
+	// beside the ordinary channels and the test identifiers 4355/4380/4381
+	// it always may. Set ONLY once the owner has recorded the RDI clearance
+	// for exactly those identifiers in meshsat-cell/docs/COMPLIANCE.md
+	// (docs/cell-broadcast.md, step 0); empty keeps every real identifier
+	// refused, as core/cbs.sh refuses it. [MESHSAT-1734]
+	CellCBSRealIDs string
 
 	// LXMF endpoint on the Reticulum node. [MESHSAT-1348]
 	LXMFEnabled              bool   // MESHSAT_LXMF_ENABLED (default true)
@@ -357,6 +365,7 @@ func Load() *Config {
 		CellLicence:                  envStr("MESHSAT_CELL_LICENCE", ""),
 		CellAuth:                     envStr("MESHSAT_CELL_AUTH", "optional"),
 		CellSubscribers:              envStr("MESHSAT_CELL_SUBSCRIBERS", ""),
+		CellCBSRealIDs:               envStr("MESHSAT_CELL_CBS_REAL_IDS", ""),
 		LXMFEnabled:                  envBool("MESHSAT_LXMF_ENABLED", true),
 		LXMFDisplayName:              envStr("MESHSAT_LXMF_DISPLAY_NAME", "MeshSat "+defaultHostname()),
 		LXMFStampCost:                envInt("MESHSAT_LXMF_STAMP_COST", 0),

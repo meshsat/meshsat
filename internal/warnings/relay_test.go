@@ -3,11 +3,13 @@ package warnings
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"meshsat/internal/cell"
 	"meshsat/internal/database"
 )
 
@@ -20,10 +22,38 @@ type fakeDeps struct {
 	alerts, texts, bulletins []send
 	aprsUp                   bool
 	fail                     error
+	// The cell: what the fake osmo-cbc side was asked, which channels its
+	// allow-list refuses, what was cancelled, and what is on air by ref.
+	cellUp      bool
+	cellReqs    []cell.BroadcastRequest
+	cellRefuse  map[int]bool
+	cellCancels []string
+	cellOnAir   map[string]int
 }
 
 func (f *fakeDeps) deps(pub []byte) Deps {
 	return Deps{
+		CellUp: func() bool { return f.cellUp },
+		CellBroadcast: func(ctx context.Context, req cell.BroadcastRequest) error {
+			f.cellReqs = append(f.cellReqs, req)
+			if f.cellRefuse[req.Channel] {
+				return fmt.Errorf("%w: %d", cell.ErrChannelRefused, req.Channel)
+			}
+			if f.cellOnAir == nil {
+				f.cellOnAir = map[string]int{}
+			}
+			delete(f.cellOnAir, req.Replaces)
+			f.cellOnAir[req.Ref] = req.Channel
+			return nil
+		},
+		CellCancel: func(ctx context.Context, ref string) (int, error) {
+			f.cellCancels = append(f.cellCancels, ref)
+			if _, ok := f.cellOnAir[ref]; ok {
+				delete(f.cellOnAir, ref)
+				return 1, nil
+			}
+			return 0, nil
+		},
 		Key: func() ([]byte, error) { return pub, nil },
 		SendAlert: func(key, text string) error {
 			if f.fail != nil {
@@ -261,5 +291,148 @@ func TestTextsStayWithinTheBearers(t *testing.T) {
 	}
 	if a, b := BulletinAddressee(&Digest{ID: [8]byte{7: 13}}), BulletinAddressee(&Digest{ID: [8]byte{7: 23}}); a != "BLN3" || b != "BLN3" {
 		t.Fatalf("addressees: %s %s", a, b)
+	}
+}
+
+// The 2G cell leg (MESHSAT-1734): a test digest goes out on 4380, a real
+// one on the identifier the TS 23.041 table gives its severity, certainty
+// and urgency, or on the ordinary channel when the cell's allow-list
+// refuses that identifier or the severity has none; an Update replaces
+// under the first id; a Cancel takes it off the air, radio up or not; a
+// radio that is down gets no broadcast and the other bearers still go.
+func TestTheCellLeg(t *testing.T) {
+	r, f, db := relayRig(t)
+	key := testKey(t)
+	f.cellUp = true
+	f.cellRefuse = map[int]bool{4371: true, 4372: true, 4373: true, 4374: true, 4375: true, 4376: true, 4377: true, 4378: true}
+
+	// A test: 4380, marked as a test run, the mesh text, a minute apart
+	// until it expires (22 h 11 min from the rig's noon: 1326 broadcasts).
+	test := alertDigest()
+	test.Test, test.Source, test.ID = true, SourceTest, idOf("t-1")
+	if err := r.Handle(context.Background(), encode(t, test, key), "hub"); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.cellReqs) != 1 {
+		t.Fatalf("cell requests %+v", f.cellReqs)
+	}
+	req := f.cellReqs[0]
+	if req.Channel != 4380 || !req.Test || req.Ref != test.IDHex() || req.Replaces != "" || req.Language != "nl" || req.Period != CellRepetitionPeriod ||
+		req.Count != 1326 || req.Text != f.alerts[0].text || !strings.HasPrefix(req.Purpose, "warning relay "+test.IDHex()+": Alert from test (Wind Moderate) [test]") {
+		t.Fatalf("test request %+v", req)
+	}
+	row, _ := db.GetWarning(test.IDHex())
+	if row.Bearers != `["mesh-alert","mesh-text","aprs","cell"]` {
+		t.Fatalf("bearers %s", row.Bearers)
+	}
+
+	// A real Extreme, observed, immediate: 4371, refused by the allow-list,
+	// so the ordinary channel carries it.
+	ext := alertDigest()
+	ext.ID, ext.Severity, ext.Certainty, ext.Urgency = idOf("x-1"), 4, 4, 3
+	if err := r.Handle(context.Background(), encode(t, ext, key), "hub"); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.cellReqs) != 3 || f.cellReqs[1].Channel != 4371 || f.cellReqs[2].Channel != cell.OrdinaryChannel || f.cellReqs[2].Ref != ext.IDHex() || f.cellReqs[2].Test {
+		t.Fatalf("extreme: %+v", f.cellReqs[1:])
+	}
+	// Its Update, now Severe, likely, expected: 4378 refused, ordinary again, replacing the first.
+	upd := alertDigest()
+	upd.MsgType, upd.ID, upd.Ref, upd.Severity, upd.Certainty, upd.Urgency = TypeUpdate, idOf("x-2"), ext.ID, 3, 3, 2
+	if err := r.Handle(context.Background(), encode(t, upd, key), "hub"); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.cellReqs) != 5 || f.cellReqs[3].Channel != 4378 || f.cellReqs[4].Channel != cell.OrdinaryChannel || f.cellReqs[4].Replaces != ext.IDHex() ||
+		!strings.Contains(f.cellReqs[4].Purpose, "Update from meteoalarm-nl (Wind Severe)") {
+		t.Fatalf("update: %+v", f.cellReqs[3:])
+	}
+	if _, on := f.cellOnAir[ext.IDHex()]; on {
+		t.Fatal("the replaced broadcast is still on air")
+	}
+	// A Moderate real warning: no alert identifier, the ordinary channel at once.
+	mod := alertDigest()
+	mod.ID = idOf("m-1")
+	if err := r.Handle(context.Background(), encode(t, mod, key), "hub"); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.cellReqs) != 6 || f.cellReqs[5].Channel != cell.OrdinaryChannel {
+		t.Fatalf("moderate: %+v", f.cellReqs[5:])
+	}
+	// A cleared identifier goes out as it is.
+	delete(f.cellRefuse, 4375)
+	sev := alertDigest()
+	sev.ID, sev.Severity, sev.Certainty, sev.Urgency = idOf("s-1"), 3, 4, 3
+	if err := r.Handle(context.Background(), encode(t, sev, key), "hub"); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.cellReqs) != 7 || f.cellReqs[6].Channel != 4375 {
+		t.Fatalf("severe: %+v", f.cellReqs[6:])
+	}
+
+	// The radio down: nothing on the cell, the mesh and APRS still go; a
+	// Cancel still takes the update off the air.
+	f.cellUp = false
+	quiet := alertDigest()
+	quiet.ID = idOf("q-1")
+	if err := r.Handle(context.Background(), encode(t, quiet, key), "hub"); err != nil || len(f.cellReqs) != 7 {
+		t.Fatalf("radio down: %v, %d requests", err, len(f.cellReqs))
+	}
+	row, _ = db.GetWarning(quiet.IDHex())
+	if row.Bearers != `["mesh-alert","mesh-text","aprs"]` {
+		t.Fatalf("bearers with the radio down %s", row.Bearers)
+	}
+	cancel := &Digest{MsgType: TypeCancel, Source: SourceMeteoAlarmNL, ID: idOf("c-1"), Ref: upd.ID, Sent: upd.Sent.Add(time.Hour), Event: 1}
+	if err := r.Handle(context.Background(), encode(t, cancel, key), "hub"); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.cellCancels) != 1 || f.cellCancels[0] != upd.IDHex() || len(f.cellReqs) != 7 {
+		t.Fatalf("cancel: %v", f.cellCancels)
+	}
+	row, _ = db.GetWarning(cancel.IDHex())
+	if row.Bearers != `["mesh-alert","mesh-text","aprs","cell-cancel"]` {
+		t.Fatalf("cancel bearers %s", row.Bearers)
+	}
+	// A Cancel of something never on the cell is no cell bearer.
+	orphan := &Digest{MsgType: TypeCancel, Source: SourceDWD, ID: idOf("c-2"), Ref: idOf("never"), Sent: upd.Sent, Event: 2}
+	if err := r.Handle(context.Background(), encode(t, orphan, key), "hub"); err != nil {
+		t.Fatal(err)
+	}
+	row, _ = db.GetWarning(orphan.IDHex())
+	if row.Bearers != `["mesh-alert","mesh-text","aprs"]` {
+		t.Fatalf("orphan cancel bearers %s", row.Bearers)
+	}
+}
+
+// The channel table and the repetition count.
+func TestCellChannelTable(t *testing.T) {
+	cases := []struct {
+		sev, cert, urg int
+		test           bool
+		want           int
+	}{
+		{4, 4, 3, true, 4380}, {2, 4, 3, true, 4380},
+		{4, 4, 3, false, 4371}, {4, 3, 3, false, 4372}, {4, 4, 2, false, 4373}, {4, 3, 2, false, 4374},
+		{3, 4, 3, false, 4375}, {3, 3, 3, false, 4376}, {3, 4, 2, false, 4377}, {3, 3, 2, false, 4378},
+		{4, 2, 1, false, 4374}, {3, 0, 4, false, 4378},
+		{2, 4, 3, false, 50}, {1, 4, 3, false, 50}, {0, 0, 0, false, 50},
+	}
+	for _, c := range cases {
+		d := &Digest{Severity: c.sev, Certainty: c.cert, Urgency: c.urg, Test: c.test}
+		if got := CellChannel(d); got != c.want {
+			t.Errorf("severity %d certainty %d urgency %d test %v: %d, want %d", c.sev, c.cert, c.urg, c.test, got, c.want)
+		}
+	}
+	now := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	if n := CellBroadcasts(&Digest{}, now); n != CellDefaultBroadcasts {
+		t.Fatalf("no expiry: %d", n)
+	}
+	if n := CellBroadcasts(&Digest{Expires: now.Add(2 * time.Hour)}, now); n != 119 {
+		t.Fatalf("two hours: %d", n)
+	}
+	if n := CellBroadcasts(&Digest{Expires: now.Add(time.Minute)}, now); n != CellMinBroadcasts {
+		t.Fatalf("a minute: %d", n)
+	}
+	if n := CellBroadcasts(&Digest{Expires: now.Add(72 * time.Hour)}, now); n != CellMaxBroadcasts {
+		t.Fatalf("three days: %d", n)
 	}
 }

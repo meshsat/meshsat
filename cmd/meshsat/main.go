@@ -734,6 +734,11 @@ func main() {
 	// daemons: the SDR on USB is the whole configuration. The SMPP password
 	// is generated once and kept in system_config. [MESHSAT-1578]
 	var cellRunner *gsmcell.Runner
+	// Cell broadcast on the cell (MESHSAT-1734, docs/cell-broadcast.md):
+	// osmo-cbc's REST client with the allow-list; real alert identifiers
+	// only from MESHSAT_CELL_CBS_REAL_IDS, which stays empty until the
+	// owner records the RDI clearance.
+	var cellCBC *gsmcell.CBC
 	if gsmcell.Available("") {
 		subs := gsmcell.DefaultSubscribers
 		if cfg.CellSubscribers != "" {
@@ -766,6 +771,17 @@ func main() {
 				cellRunner = r
 				log.Info().Int("arfcn", rc.ARFCN).Bool("auto_radio", rc.AutoRadio).Int("sims", len(subs)).
 					Msg("cell: the image carries the cell; plug the SDR in and it runs")
+				realIDs, err := gsmcell.ParseRealIDs(cfg.CellCBSRealIDs)
+				if err != nil {
+					log.Error().Err(err).Msg("cell: MESHSAT_CELL_CBS_REAL_IDS refused; no real alert identifier is allowed")
+					realIDs = nil
+				}
+				cellCBC = gsmcell.NewCBC(cellTXLog{db: db}, gsmcell.NewAllow(realIDs),
+					func() (int, string, string) { c := r.Config(); return c.ARFCN, c.Operator, c.Licence }, r.RadioActive)
+				r.SetRadioStopHook(func() { cellCBC.ClearAll(context.Background(), "the radio keyed down") })
+				if len(realIDs) > 0 {
+					log.Warn().Ints("real_ids", realIDs).Msg("cell: real public-warning identifiers are allowed on the cell (MESHSAT_CELL_CBS_REAL_IDS); the RDI clearance must be on record")
+				}
 			}
 		}
 	} else {
@@ -1818,6 +1834,7 @@ func main() {
 	proc.SetGeofenceMonitor(geofenceMon)
 	srv.SetHostClient(oobHost) // host reboot / poweroff from the panel, independent of the OOB service [MESHSAT-831]
 	srv.SetCellHost(cellHost)  // the cell's host side: Pluto, core, radio, phones [MESHSAT-1578]
+	srv.SetCellCBC(cellCBC)    // cell broadcast on the cell, nil without the daemons [MESHSAT-1734]
 	srv.SetBurstQueue(burstQueue)
 	srv.SetSpectrumMonitor(spectrumMon)
 	srv.SetTimeConsensus(tsConsensus) // nil without routing [MESHSAT-778]
@@ -2544,6 +2561,22 @@ func main() {
 			return err
 		},
 		APRSUp: func() bool { return gwMgr.GatewayByInterfaceID("aprs_0") != nil },
+		// The 2G cell leg: on the cell's broadcast channel while the radio
+		// is keyed up, through the allow-list and the TX log. [MESHSAT-1734]
+		CellUp: func() bool { return cellCBC != nil && cellCBC.Live() },
+		CellBroadcast: func(ctx context.Context, req gsmcell.BroadcastRequest) error {
+			if cellCBC == nil {
+				return errors.New("no cell in this image")
+			}
+			_, err := cellCBC.Broadcast(ctx, req)
+			return err
+		},
+		CellCancel: func(ctx context.Context, ref string) (int, error) {
+			if cellCBC == nil {
+				return 0, nil
+			}
+			return cellCBC.DeleteRef(ctx, ref, "warning relay: cancel of "+ref)
+		},
 	})
 	proc.SetWarningInbound(warnRelay.HandleSatellite)
 
