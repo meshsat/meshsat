@@ -71,10 +71,10 @@ func frameRig(hubUp bool, heard ...uint32) (*chatRig, *frameLog, *viaThreads) {
 }
 
 // vecChat is the shared vector's C1 as the Hub sends it to the crew on
-// parallax: operator 7 as "Anna", to meshsat-a1b3c2ec, reply on this bearer.
+// parallax: operator 7 as "Anna", to meshsat-0a0b0c0d, reply on this bearer.
 func vecChat(t *testing.T) crewchat.Chat {
 	t.Helper()
-	raw, _ := hex.DecodeString("4305" + "0102030405060708090a0b0c0d0e0f10" + "a1b3c2ec" + "3f24d8f92959c061" + "04416e6e61" + "07c48020f29794")
+	raw, _ := hex.DecodeString("4305" + "0102030405060708090a0b0c0d0e0f10" + "0a0b0c0d" + "3f24d8f92959c061" + "04416e6e61" + "07c48020f29794")
 	c, err := crewchat.DecodeChat(raw)
 	if err != nil {
 		t.Fatal(err)
@@ -83,20 +83,20 @@ func vecChat(t *testing.T) crewchat.Chat {
 }
 
 func TestAChatThatCameAsAFrameIsDeliveredLikeTheGeoChat(t *testing.T) {
-	r, l, threads := frameRig(true, 0xa1b3c2ec)
+	r, l, threads := frameRig(true, 0x0a0b0c0d)
 	f := vecChat(t)
 	if n := r.chat.DeliverFrame(f, "sms"); n != 1 {
 		t.Fatalf("delivered %d", n)
 	}
-	if len(r.dms) != 1 || r.dms[0] != (sent{0xa1b3c2ec, "Anna: check in please"}) {
+	if len(r.dms) != 1 || r.dms[0] != (sent{0x0a0b0c0d, "Anna: check in please"}) {
 		t.Fatalf("direct messages %+v", r.dms)
 	}
 	if len(r.reports) != 1 || r.reports[0].MessageID != f.MessageID || r.reports[0].Status != TAKChatQueued ||
-		r.reports[0].Bearer != "sms" || !r.reports[0].ReplyHere || r.reports[0].CrewUID != "meshsat-a1b3c2ec" {
+		r.reports[0].Bearer != "sms" || !r.reports[0].ReplyHere || r.reports[0].CrewUID != "meshsat-0a0b0c0d" {
 		t.Fatalf("reports %+v", r.reports)
 	}
 	// The thread remembers the operator by hash, the bearer and the id.
-	uid, callsign, bearer, id, replyHere, ok, _ := threads.TAKChatThreadVia(0xa1b3c2ec, time.Now().Add(-time.Hour))
+	uid, callsign, bearer, id, replyHere, ok, _ := threads.TAKChatThreadVia(0x0a0b0c0d, time.Now().Add(-time.Hour))
 	if !ok || uid != "meshsat-hub-op-~3f24d8f92959c061" || callsign != "Anna" || bearer != "sms" || id != f.MessageID || !replyHere {
 		t.Errorf("thread %q %q %q %q %v %v", uid, callsign, bearer, id, replyHere, ok)
 	}
@@ -108,7 +108,7 @@ func TestAChatThatCameAsAFrameIsDeliveredLikeTheGeoChat(t *testing.T) {
 	}
 	raw, _ := hex.DecodeString(got[0][4:])
 	st, err := crewchat.DecodeStatus(raw[4:])
-	if err != nil || raw[3] != crewchat.UplinkTypeStatus || st.MessageID != f.MessageID || st.Node != 0xa1b3c2ec || st.Status != "queued" {
+	if err != nil || raw[3] != crewchat.UplinkTypeStatus || st.MessageID != f.MessageID || st.Node != 0x0a0b0c0d || st.Status != "queued" {
 		t.Errorf("C3 %+v %v", st, err)
 	}
 	// The same frame again (a carrier retry): not a second message, no word.
@@ -146,13 +146,13 @@ func TestTheWordGoesAsAFrameOnlyWhenOwed(t *testing.T) {
 	f := vecChat(t)
 	f.ReplyHere = false
 	// Hub link up, the Hub did not ask: MQTT only.
-	r, l, _ := frameRig(true, 0xa1b3c2ec)
+	r, l, _ := frameRig(true, 0x0a0b0c0d)
 	r.chat.DeliverFrame(f, "sbd")
 	if len(r.reports) != 1 || len(l.list()) != 0 {
 		t.Errorf("link up: reports %d frames %q", len(r.reports), l.list())
 	}
 	// Hub link down: the frame goes, on the chat's bearer.
-	r, l, _ = frameRig(false, 0xa1b3c2ec)
+	r, l, _ = frameRig(false, 0x0a0b0c0d)
 	r.chat.DeliverFrame(f, "sbd")
 	if got := l.list(); len(got) != 1 || got[0][:4] != "sbd " {
 		t.Errorf("link down: frames %q", got)
@@ -164,14 +164,14 @@ func TestTheWordGoesAsAFrameOnlyWhenOwed(t *testing.T) {
 		t.Errorf("an MQTT chat: reports %+v frames %q", r.reports, l.list())
 	}
 	// Without the frames set, nothing is spent.
-	r, l, _ = frameRig(false, 0xa1b3c2ec)
+	r, l, _ = frameRig(false, 0x0a0b0c0d)
 	r.chat.SetFrames(nil)
 	r.chat.DeliverFrame(f, "sms")
 	if len(l.list()) != 0 || len(r.reports) != 1 {
 		t.Errorf("no frames: %q", l.list())
 	}
 	// The ledger giving up later is a failed on the same bearer.
-	r, l, _ = frameRig(false, 0xa1b3c2ec)
+	r, l, _ = frameRig(false, 0x0a0b0c0d)
 	r.chat.DeliverFrame(f, "sms")
 	r.chat.ObserveDelivery(deliveryEvent(t, "delivery_dead", 101, "radio gone"))
 	if len(r.reports) != 2 || r.reports[1].Status != TAKChatFailed || r.reports[1].Bearer != "sms" {
@@ -181,7 +181,7 @@ func TestTheWordGoesAsAFrameOnlyWhenOwed(t *testing.T) {
 		t.Errorf("frames %q", got)
 	}
 	// A bearer that refuses the frame is logged, the MQTT report stands.
-	r, l, _ = frameRig(false, 0xa1b3c2ec)
+	r, l, _ = frameRig(false, 0x0a0b0c0d)
 	l.fail = errors.New("no Hub SMS number")
 	r.chat.DeliverFrame(f, "sms")
 	if len(r.reports) != 1 {
@@ -190,11 +190,11 @@ func TestTheWordGoesAsAFrameOnlyWhenOwed(t *testing.T) {
 }
 
 func TestTheCrewsAnswerGoesBackOnTheFramesBearer(t *testing.T) {
-	r, l, _ := frameRig(true, 0xa1b3c2ec)
+	r, l, _ := frameRig(true, 0x0a0b0c0d)
 	f := vecChat(t)
 	r.chat.DeliverFrame(f, "sms")
 	before := len(l.list())
-	if !r.chat.Reply(0xa1b3c2ec, " on my way ") {
+	if !r.chat.Reply(0x0a0b0c0d, " on my way ") {
 		t.Fatal("not answered")
 	}
 	got := l.list()
@@ -203,19 +203,19 @@ func TestTheCrewsAnswerGoesBackOnTheFramesBearer(t *testing.T) {
 	}
 	raw, _ := hex.DecodeString(got[before][4:])
 	a, err := crewchat.DecodeAnswer(raw[4:])
-	if err != nil || raw[3] != crewchat.UplinkTypeAnswer || a.MessageID != f.MessageID || a.Node != 0xa1b3c2ec || a.Text != "on my way" {
+	if err != nil || raw[3] != crewchat.UplinkTypeAnswer || a.MessageID != f.MessageID || a.Node != 0x0a0b0c0d || a.Text != "on my way" {
 		t.Errorf("C2 %+v %v", a, err)
 	}
 	// A second answer goes the same way: the thread stayed open as it was.
-	if !r.chat.Reply(0xa1b3c2ec, "still here") || len(l.list()) != before+2 {
+	if !r.chat.Reply(0x0a0b0c0d, "still here") || len(l.list()) != before+2 {
 		t.Errorf("the second answer: %q", l.list())
 	}
 	// With the Hub link up and no ask, the answer is a GeoChat to the hashed
 	// operator, which the Hub resolves; no frame.
 	f.ReplyHere = false
-	r, l, _ = frameRig(true, 0xa1b3c2ec)
+	r, l, _ = frameRig(true, 0x0a0b0c0d)
 	r.chat.DeliverFrame(f, "sbd")
-	if !r.chat.Reply(0xa1b3c2ec, "roger") || len(l.list()) != 0 {
+	if !r.chat.Reply(0x0a0b0c0d, "roger") || len(l.list()) != 0 {
 		t.Errorf("link up: frames %q", l.list())
 	}
 	// A question that came over MQTT is answered over MQTT whatever the link.

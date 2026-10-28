@@ -12,14 +12,14 @@ import (
 // the same bytes. A change here is a change there and in the doc.
 const (
 	vecMessageID = "01020304-0506-0708-090a-0b0c0d0e0f10"
-	vecNode      = uint32(0xa1b3c2ec) // the test crew on parallax, uid meshsat-a1b3c2ec
+	vecNode      = uint32(0x0a0b0c0d) // the test crew on parallax, uid meshsat-0a0b0c0d
 	vecOperator  = "meshsat-hub-op-7"
 	vecOpHash    = "3f24d8f92959c061"
 	vecAt        = int64(1793188800) // 2026-10-28T12:00:00Z
-	vecC1        = "4305" + "0102030405060708090a0b0c0d0e0f10" + "a1b3c2ec" + vecOpHash + "04416e6e61" + "07c48020f29794"
-	vecC2        = "4d530143" + "0102030405060708090a0b0c0d0e0f10" + "a1b3c2ec" + "6ae1e3c0" + "01" + "86206d7920f579"
+	vecC1        = "4305" + "0102030405060708090a0b0c0d0e0f10" + "0a0b0c0d" + vecOpHash + "04416e6e61" + "07c48020f29794"
+	vecC2        = "4d530143" + "0102030405060708090a0b0c0d0e0f10" + "0a0b0c0d" + "6ae1e3c0" + "01" + "86206d7920f579"
 	vecC3Detail  = "the kit has not heard MESHSAT-c2ec in the last day"
-	vecC3Head    = "4d530144" + "0102030405060708090a0b0c0d0e0f10" + "a1b3c2ec" + "6ae1e3c0" + "04" + "01" + "32"
+	vecC3Head    = "4d530144" + "0102030405060708090a0b0c0d0e0f10" + "0a0b0c0d" + "6ae1e3c0" + "04" + "01" + "32"
 )
 
 func TestC1VectorDecodesAndEncodes(t *testing.T) {

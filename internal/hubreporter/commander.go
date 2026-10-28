@@ -685,7 +685,7 @@ func (ch *CommandHandler) handleKeyRotate(cmd Command) (json.RawMessage, error) 
 
 	var payload struct {
 		ChannelType string `json:"channel_type"` // e.g. "sms"
-		Address     string `json:"address"`      // e.g. "+31653618463"
+		Address     string `json:"address"`      // e.g. "+31612345678"
 		KeyHex      string `json:"key_hex"`      // hex-encoded AES-256 key
 		Version     int    `json:"version"`      // Hub's version number
 	}
