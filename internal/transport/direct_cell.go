@@ -153,6 +153,14 @@ type DirectCellTransport struct {
 	excludePorts   []string
 	excludePortFns []func() string // dynamic resolvers (take precedence)
 
+	// Cell broadcast: cbs puts the pages of one message together;
+	// cbsHeader is a +CBM header waiting for its data line, read and
+	// written on the I/O loop only. [MESHSAT-1737]
+	cbs         *cbsAssembler
+	cbsOnce     sync.Once
+	cbsHeader   string
+	cbsHeaderAt time.Time
+
 	// SIM card management
 	iccid       string             // cached ICCID from AT+CCID
 	simLabel    string             // user label from SIM card DB
@@ -420,7 +428,7 @@ func (t *DirectCellTransport) connectLocked(_ context.Context) error {
 			netType = parseCOPSNetType(resp)
 		}
 		sendAT(sp, "AT+COPS=3,0", cellATTimeout) // restore long alpha format
-		sendAT(sp, "AT+CSCB=0", cellATTimeout)
+		cbsAcceptOn(sp)                          // every cell broadcast [MESHSAT-1737]
 	}
 
 	// Query ICCID (AT+CCID) — unique SIM card identifier
@@ -539,7 +547,7 @@ func (t *DirectCellTransport) connectLocked(_ context.Context) error {
 					}
 					sendAT(sp, "AT+COPS=3,0", cellATTimeout)
 					sendAT(sp, "AT+CNMI=2,1,2,0,0", cellATTimeout)
-					sendAT(sp, "AT+CSCB=0", cellATTimeout)
+					cbsAcceptOn(sp) // every cell broadcast [MESHSAT-1737]
 				} else {
 					log.Warn().Str("state", verifiedState).
 						Msg("cellular: PIN unlock sent OK but SIM still not READY (wrong PIN or PUK required)")
@@ -878,9 +886,13 @@ func (t *DirectCellTransport) executeCommand(cmd atCommand) {
 
 	// Extract URCs embedded in the AT response — +CMTI notifications
 	// can arrive during any AT command's read window. [MESHSAT-447]
+	// A +CBM header's data is the line after it. [MESHSAT-1737]
 	for _, line := range strings.Split(resp, "\n") {
 		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "+CMTI:") || strings.HasPrefix(line, "+CBM:") {
+		if line == "" {
+			continue
+		}
+		if t.cbsHeader != "" || strings.HasPrefix(line, "+CMTI:") || strings.HasPrefix(line, "+CBM:") {
 			t.handleURC(line)
 		}
 	}
@@ -891,6 +903,10 @@ func (t *DirectCellTransport) executeCommand(cmd atCommand) {
 // handleURC processes unsolicited result codes from the modem.
 // Called only from ioLoop.
 func (t *DirectCellTransport) handleURC(line string) {
+	// A +CBM header's data is the next line. [MESHSAT-1737]
+	if t.cbsLine(line) {
+		return
+	}
 	// +CMTI: "SM",3 — new SMS notification
 	if strings.HasPrefix(line, "+CMTI:") {
 		idx := parseCMTI(line)
@@ -899,9 +915,11 @@ func (t *DirectCellTransport) handleURC(line string) {
 		}
 		return
 	}
-	// +CBM: <sn>,<mid>,<dcs>,<page>,<pages> — cell broadcast header
+	// +CBM: <sn>,<mid>,<dcs>,<page>,<pages> (or +CBM: <length> in PDU
+	// mode) — a cell broadcast header; its data is the line after it, not
+	// a read of its own, which the line reader had already taken.
 	if strings.HasPrefix(line, "+CBM:") {
-		go t.readAndEmitCBS(line)
+		t.cbsHeader, t.cbsHeaderAt = line, time.Now()
 		return
 	}
 }
@@ -930,30 +948,6 @@ func (t *DirectCellTransport) readAndEmitSMS(index int) {
 		Type:    "sms_received",
 		Message: sms.Text,
 		Data:    smsJSON,
-		Time:    time.Now().UTC().Format(time.RFC3339),
-	})
-}
-
-// readAndEmitCBS reads the CBS message body after the +CBM header line.
-func (t *DirectCellTransport) readAndEmitCBS(header string) {
-	// Read the CBS body via I/O loop
-	body, _ := t.execRawFn(func(sp serial.Port) (string, error) {
-		return readATResponse(sp, 2*time.Second)
-	}, 3*time.Second)
-
-	cbs := parseCBM(header, body)
-	if cbs == nil {
-		return
-	}
-
-	log.Info().Int("mid", cbs.MessageID).Str("severity", cbs.Severity).
-		Str("text", cbs.Text).Msg("cellular: CBS alert received")
-
-	cbsJSON, _ := json.Marshal(cbs)
-	t.emitEvent(CellEvent{
-		Type:    "cbs_received",
-		Message: cbs.Text,
-		Data:    cbsJSON,
 		Time:    time.Now().UTC().Format(time.RFC3339),
 	})
 }
@@ -2705,7 +2699,7 @@ func (t *DirectCellTransport) UnlockPIN(_ context.Context, pin string) error {
 	t.execAT("AT+COPS=3,0", cellATTimeout) // restore long alpha format
 
 	t.execAT("AT+CNMI=2,1,2,0,0", cellATTimeout)
-	t.execAT("AT+CSCB=0", cellATTimeout)
+	t.cbsAcceptExec() // every cell broadcast [MESHSAT-1737]
 
 	// Query subscriber number after PIN unlock
 	resp, _ = t.execAT("AT+CNUM", cellATTimeout)
@@ -3017,54 +3011,6 @@ func actToNetworkType(act int) string {
 		return "5G" // EC-GSM-IoT
 	default:
 		return ""
-	}
-}
-
-// parseCBM parses a +CBM unsolicited response code (cell broadcast).
-// Format: +CBM: <sn>,<mid>,<dcs>,<page>,<pages>\r\n<data>
-func parseCBM(header, body string) *CellBroadcastMsg {
-	idx := strings.Index(header, "+CBM:")
-	if idx == -1 {
-		return nil
-	}
-	parts := strings.Split(strings.TrimSpace(header[idx+5:]), ",")
-	if len(parts) < 3 {
-		return nil
-	}
-
-	sn, _ := strconv.Atoi(strings.TrimSpace(parts[0]))
-	mid, _ := strconv.Atoi(strings.TrimSpace(parts[1]))
-
-	msg := &CellBroadcastMsg{
-		SerialNumber: sn,
-		MessageID:    mid,
-		Channel:      mid, // CBS channel = message ID
-		Text:         strings.TrimSpace(body),
-		Severity:     cbsSeverity(mid),
-	}
-	return msg
-}
-
-// cbsSeverity maps CBS message IDs to severity levels.
-// Based on ETSI TS 123 041 and 3GPP TS 23.041.
-func cbsSeverity(mid int) string {
-	switch {
-	case mid >= 4370 && mid <= 4379:
-		return "extreme" // EU-Alert Level 1 / CMAS Presidential
-	case mid >= 4380 && mid <= 4389:
-		return "severe" // EU-Alert Level 2 / CMAS Extreme
-	case mid >= 4390 && mid <= 4395:
-		return "amber" // AMBER Alert
-	case mid == 4396 || mid == 4397:
-		return "test" // Monthly test / exercise
-	case mid >= 4398 && mid <= 4399:
-		return "info" // EU-Alert Level 3 / CMAS Severe
-	case mid == 919:
-		return "test" // ETWS test
-	case mid >= 4352 && mid <= 4359:
-		return "extreme" // ETWS earthquake/tsunami
-	default:
-		return "unknown"
 	}
 }
 

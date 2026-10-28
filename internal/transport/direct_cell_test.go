@@ -193,25 +193,31 @@ func TestParseCBM(t *testing.T) {
 	if cbs.MessageID != 4370 {
 		t.Errorf("MessageID = %d, want 4370", cbs.MessageID)
 	}
-	if cbs.Severity != "extreme" {
-		t.Errorf("Severity = %q, want extreme", cbs.Severity)
+	if cbs.Severity != "presidential" {
+		t.Errorf("Severity = %q, want presidential", cbs.Severity)
 	}
 	if cbs.Text != "EXTREME ALERT: Earthquake detected in your area" {
 		t.Errorf("unexpected text: %q", cbs.Text)
 	}
+	if cbs.Language != "en" || cbs.Charset != "gsm7" || cbs.Page != 1 || cbs.Pages != 1 {
+		t.Errorf("DCS 1: %+v", cbs)
+	}
 }
 
+// The severity table follows 3GPP TS 23.041 9.4.1.2.2 and the Regeling
+// NL-Alert; the amber identifier is 4379, as meshsat-cell's cbs.sh has it,
+// not the 4390-4395 the table had until MESHSAT-1737.
 func TestCbsSeverity(t *testing.T) {
 	tests := []struct {
 		mid  int
 		want string
 	}{
-		{4370, "extreme"},
-		{4380, "severe"},
-		{4390, "amber"},
-		{4396, "test"},
-		{4398, "info"},
-		{1000, "unknown"},
+		{919, "alert"}, {3471, "alert"},
+		{4352, "extreme"}, {4353, "extreme"}, {4354, "extreme"}, {4355, "test"}, {4356, "extreme"}, {4357, "unknown"},
+		{4370, "presidential"}, {4371, "extreme"}, {4374, "extreme"}, {4375, "severe"}, {4378, "severe"},
+		{4379, "amber"}, {4380, "test"}, {4381, "test"}, {4382, "operator"}, {4383, "presidential"},
+		{4387, "extreme"}, {4388, "severe"}, {4390, "severe"}, {4392, "amber"}, {4393, "test"}, {4395, "operator"},
+		{4396, "info"}, {4398, "test"}, {4399, "test"}, {4400, "unknown"}, {50, "unknown"}, {1000, "unknown"},
 	}
 	for _, tt := range tests {
 		got := cbsSeverity(tt.mid)

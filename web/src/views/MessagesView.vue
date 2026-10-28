@@ -165,6 +165,8 @@ const filteredBroadcasts = computed(() => {
 
 function cbsSeverityClass(severity) {
   switch (severity) {
+    case 'presidential':
+    case 'alert':
     case 'extreme': return 'bg-red-900/40 text-red-400'
     case 'severe': return 'bg-orange-900/40 text-orange-400'
     case 'amber': return 'bg-amber-900/40 text-amber-400'
@@ -175,6 +177,8 @@ function cbsSeverityClass(severity) {
 
 function cbsCardClass(severity) {
   switch (severity) {
+    case 'presidential':
+    case 'alert':
     case 'extreme': return 'bg-red-950/30 border-red-900/40'
     case 'severe': return 'bg-orange-950/30 border-orange-900/40'
     case 'amber': return 'bg-amber-950/30 border-amber-900/40'
@@ -686,6 +690,8 @@ onUnmounted(() => {
           <div class="text-[11px] text-gray-500">Cell Broadcast Alerts</div>
           <select v-model="cbsFilter" class="px-2 py-1 text-[10px] rounded bg-gray-800 border border-gray-700 text-gray-300">
             <option value="all">All</option>
+            <option value="presidential">Presidential</option>
+            <option value="alert">NL-Alert</option>
             <option value="extreme">Extreme</option>
             <option value="severe">Severe</option>
             <option value="amber">AMBER</option>

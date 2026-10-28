@@ -112,6 +112,49 @@ func DecodeGSM7(septets []byte) string {
 	return string(out)
 }
 
+// PackSeptets packs septet values (one per byte) into octets, least
+// significant bit first, as GSM 03.38 6.1.2.1.1 lays a cell broadcast page
+// or an SMS user data field out on the air. [MESHSAT-1737]
+func PackSeptets(septets []byte) []byte {
+	out := make([]byte, 0, (len(septets)*7+7)/8)
+	var acc uint32
+	bits := 0
+	for _, s := range septets {
+		acc |= uint32(s&0x7F) << bits
+		bits += 7
+		for bits >= 8 {
+			out = append(out, byte(acc))
+			acc >>= 8
+			bits -= 8
+		}
+	}
+	if bits > 0 {
+		out = append(out, byte(acc))
+	}
+	return out
+}
+
+// UnpackSeptets reads n septet values out of packed octets; n at most what
+// the octets hold, and all of them when n is 0 or less. [MESHSAT-1737]
+func UnpackSeptets(octets []byte, n int) []byte {
+	if n <= 0 || n > len(octets)*8/7 {
+		n = len(octets) * 8 / 7
+	}
+	out := make([]byte, 0, n)
+	var acc uint32
+	bits := 0
+	for _, b := range octets {
+		acc |= uint32(b) << bits
+		bits += 8
+		for bits >= 7 && len(out) < n {
+			out = append(out, byte(acc&0x7F))
+			acc >>= 7
+			bits -= 7
+		}
+	}
+	return out
+}
+
 // EncodeUCS2 turns text into UCS-2 (UTF-16 big-endian) bytes.
 func EncodeUCS2(text string) []byte {
 	units := utf16.Encode([]rune(text))

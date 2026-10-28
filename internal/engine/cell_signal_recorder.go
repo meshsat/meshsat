@@ -239,7 +239,8 @@ func (r *CellSignalRecorder) handleCBSReceived(ev transport.CellEvent) {
 	if _, err := r.db.InsertCellBroadcast(cbs.SerialNumber, cbs.MessageID, cbs.Channel, cbs.Severity, cbs.Text, time.Now().Unix()); err != nil {
 		log.Warn().Err(err).Msg("cellular event recorder: CBS insert failed")
 	}
-	log.Info().Int("mid", cbs.MessageID).Str("severity", cbs.Severity).Msg("cellular: CBS alert persisted")
+	log.Info().Int("mid", cbs.MessageID).Int("serial", cbs.SerialNumber).Str("severity", cbs.Severity).Str("language", cbs.Language).
+		Str("charset", cbs.Charset).Int("pages", cbs.Pages).Bool("complete", cbs.Complete).Msg("cellular: CBS alert persisted")
 	r.emitSSE("cellular", fmt.Sprintf("CBS alert [%s]: %s", cbs.Severity, truncateStr(cbs.Text, 80)), ev.Data)
 }
 

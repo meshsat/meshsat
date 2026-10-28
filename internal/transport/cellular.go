@@ -120,8 +120,16 @@ type CellBroadcastMsg struct {
 	SerialNumber int    `json:"serial_number"`
 	MessageID    int    `json:"message_id"`
 	Channel      int    `json:"channel"`
-	Severity     string `json:"severity"` // extreme, severe, amber, test, unknown
+	Severity     string `json:"severity"` // presidential, extreme, severe, amber, alert (NL-Alert), test, operator, info, unknown
 	Text         string `json:"text"`
+	// What the data coding scheme said and how the pages came in. [MESHSAT-1737]
+	DCS           int    `json:"dcs"`
+	Charset       string `json:"charset,omitempty"`  // gsm7, ucs2, 8bit
+	Language      string `json:"language,omitempty"` // ISO 639-1 where the DCS or a language prefix carried one
+	Page          int    `json:"page,omitempty"`     // this page's number, 1-based (one page: 1)
+	Pages         int    `json:"pages,omitempty"`    // pages in the message
+	PagesReceived int    `json:"pages_received,omitempty"`
+	Complete      bool   `json:"complete"` // every page came in; false for what the window closed on
 }
 
 // SMSTextModeModem is implemented by a cell transport that types an SMS into
