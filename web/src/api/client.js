@@ -1,11 +1,47 @@
 /**
  * MeshSat API Client
  *
- * Simple unauthenticated fetch wrapper for standalone deployment.
- * All endpoints are relative to /api on the same origin.
+ * Fetch wrapper for standalone deployment. All endpoints are relative to
+ * /api on the same origin.
+ *
+ * The API token [MESHSAT-1738]: a kit may require one (MESHSAT_API_TOKEN).
+ * The token lives in localStorage `meshsat.apiToken` and goes out as
+ * `Authorization: Bearer` on every request here. A 401 fires a
+ * `meshsat:unauthorized` event on window, once per lock-out, and the
+ * ApiLogin overlay in App.vue asks for the token; login() hands it to
+ * POST /api/auth/login, which sets the cookie the event stream needs
+ * (an EventSource cannot carry a header). A kit that needs no token
+ * never answers 401, so none of this shows: the kiosk on the kit itself
+ * is trusted by the Bridge and never sees it either.
  */
 
 const BASE = '/api'
+const TOKEN_KEY = 'meshsat.apiToken'
+
+export function apiToken() {
+  try { return window.localStorage?.getItem(TOKEN_KEY) || '' } catch { return '' }
+}
+
+export function setApiToken(token) {
+  try {
+    if (token) window.localStorage?.setItem(TOKEN_KEY, token)
+    else window.localStorage?.removeItem(TOKEN_KEY)
+  } catch { /* private mode */ }
+}
+
+function authHeaders(token = apiToken()) {
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
+// One event per lock-out: every poll in flight gets its 401, the overlay
+// must open once. login() re-arms it.
+let unauthorizedTold = false
+
+function tellUnauthorized() {
+  if (unauthorizedTold || typeof window === 'undefined') return
+  unauthorizedTold = true
+  window.dispatchEvent(new CustomEvent('meshsat:unauthorized'))
+}
 
 // `timeoutMs` aborts the fetch so a caller that must not wait forever (the
 // booth route selector during a bridge restart) gets an error instead of
@@ -28,7 +64,7 @@ async function request(method, path, body = null, params = null, timeoutMs = 0, 
 
   const opts = {
     method,
-    headers: { 'Content-Type': 'application/json', ...(headers || {}) }
+    headers: { 'Content-Type': 'application/json', ...authHeaders(), ...(headers || {}) }
   }
   if (body && method !== 'GET') {
     opts.body = JSON.stringify(body)
@@ -39,6 +75,7 @@ async function request(method, path, body = null, params = null, timeoutMs = 0, 
 
   const res = await fetch(url, opts)
   if (!res.ok) {
+    if (res.status === 401) tellUnauthorized()
     const text = await res.text().catch(() => '')
     let msg = text || `HTTP ${res.status}`
     let parsed = null
@@ -60,6 +97,29 @@ export default {
   del: (path) => request('DELETE', path),
   patch: (path, body) => request('PATCH', path, body),
 
+  /**
+   * Hand a token to the Bridge: POST /api/auth/login with it as the Bearer
+   * (not the stored one). A 204 means it is right: it is kept for every
+   * later request, the Bridge has set the event stream's cookie, and the
+   * caller reloads so every poll and stream starts over with it. A 401
+   * keeps nothing. [MESHSAT-1738]
+   */
+  async login(token) {
+    const t = (token || '').trim()
+    const res = await fetch(`${BASE}/auth/login`, { method: 'POST', headers: { ...authHeaders(t) } })
+    if (res.status === 401) return false
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    setApiToken(t)
+    unauthorizedTold = false
+    return true
+  },
+
+  /** Forget the token here and clear the Bridge's cookie. */
+  async logout() {
+    setApiToken('')
+    try { await fetch(`${BASE}/auth/logout`, { method: 'POST' }) } catch { /* the kit may be away */ }
+  },
+
   /** Upload a file via multipart/form-data. */
   async upload(path, file, fields = {}) {
     const form = new FormData()
@@ -67,8 +127,9 @@ export default {
     for (const [k, v] of Object.entries(fields)) {
       form.append(k, v)
     }
-    const res = await fetch(`${BASE}${path}`, { method: 'POST', body: form })
+    const res = await fetch(`${BASE}${path}`, { method: 'POST', body: form, headers: { ...authHeaders() } })
     if (!res.ok) {
+      if (res.status === 401) tellUnauthorized()
       const text = await res.text().catch(() => '')
       let msg = text || `HTTP ${res.status}`
       try { const j = JSON.parse(text); if (j.error) msg = j.error } catch {}

@@ -8,6 +8,7 @@ import StatusStrip from '@/components/StatusStrip.vue'
 import MeshSatOSK from '@/components/MeshSatOSK.vue'
 import PowerWidget from '@/components/PowerWidget.vue'
 import KioskScreensaver from '@/components/KioskScreensaver.vue'
+import ApiLogin from '@/components/ApiLogin.vue'
 import { useShortcuts } from '@/composables/useShortcuts'
 
 // Spectrum store is mounted at App level so the sticky jamming alert
@@ -201,6 +202,9 @@ onUnmounted(() => {
 
     <!-- Poster interlude on an untouched panel (20 s every 4 min after 3 min idle), kiosk only [MESHSAT-826] -->
     <KioskScreensaver v-if="isKioskShell" />
+
+    <!-- The token field a kit with an API token shows a browser without one; never on an open kit [MESHSAT-1738] -->
+    <ApiLogin />
   </div>
 </template>
 
