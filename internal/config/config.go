@@ -33,6 +33,13 @@ type Config struct {
 	// HTTP API rate limit: max requests per minute per source IP (0 = disabled)
 	APIRateLimit int
 
+	// The API token [MESHSAT-1738]: empty = the API is open, as it always
+	// was; set = every request under /api needs it (or the cookie, or
+	// comes from the kit itself while APITrustLoopback is on, or through
+	// the Hub relay). An empty env falls back to the hash in system_config.
+	APIToken         string
+	APITrustLoopback bool // default true: the kiosk, host services and the operator's shell need no token
+
 	// Serial health watchdog: minutes of silence before forcing serial reconnect (0 = disabled)
 	MeshWatchdogMin int
 
@@ -271,6 +278,8 @@ func Load() *Config {
 		ZigBeePort:                   envStr("MESHSAT_ZIGBEE_PORT", "auto"),
 		PaidRateLimit:                envInt("MESHSAT_PAID_RATE_LIMIT", 60),
 		APIRateLimit:                 envInt("MESHSAT_API_RATE_LIMIT", 600),
+		APIToken:                     envStr("MESHSAT_API_TOKEN", ""),
+		APITrustLoopback:             envBool("MESHSAT_API_TRUST_LOOPBACK", true),
 		MeshWatchdogMin:              envInt("MESHSAT_MESH_WATCHDOG_MIN", 0),
 		APRSRxWatchdogMin:            envInt("MESHSAT_APRS_RX_WATCHDOG_MIN", 5),
 		APRSRxHeardWithinMin:         envInt("MESHSAT_APRS_RX_HEARD_WITHIN_MIN", 120),

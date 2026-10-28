@@ -134,6 +134,9 @@ type Server struct {
 	// node and GPS fallbacks (SetSelfPosition, position.go). [MESHSAT-1421]
 	selfPos        *selfpos.Store
 	selfPosResolve func() (selfpos.Fix, bool)
+	// auth is the API token state (auth.go); its zero value is "no token",
+	// the API open as it always was. [MESHSAT-1738]
+	auth apiAuth
 }
 
 // SetBaseContext gives the server the process's long-lived context (main.go:
@@ -449,7 +452,7 @@ func (s *Server) Router() http.Handler {
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.RequestID)
-	r.Use(corsMiddleware)
+	r.Use(s.corsMiddleware)
 	if s.apiRateLimit > 0 {
 		r.Use(apiRateLimiter(s.apiRateLimit))
 	}
@@ -462,6 +465,16 @@ func (s *Server) Router() http.Handler {
 
 	// API routes
 	r.Route("/api", func(r chi.Router) {
+		// The API token, off by default: a pass through until one is set.
+		// Everything under /api is behind it but auth/status and
+		// auth/login. [MESHSAT-1738]
+		r.Use(s.authMiddleware)
+		r.Get("/auth/status", s.handleAuthStatus)
+		r.Post("/auth/login", s.handleAuthLogin)
+		r.Post("/auth/logout", s.handleAuthLogout)
+		r.Put("/auth/token", s.handleSetAuthToken)
+		r.Delete("/auth/token", s.handleClearAuthToken)
+
 		r.Get("/messages", s.handleGetMessages)
 		r.Get("/messages/stats", s.handleGetMessageStats)
 		r.Post("/messages/send", s.handleSendMessage)
@@ -1071,20 +1084,6 @@ func (s *Server) Router() http.Handler {
 	}
 
 	return r
-}
-
-func corsMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-HAL-Key")
-
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {

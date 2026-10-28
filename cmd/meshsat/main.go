@@ -1926,6 +1926,18 @@ func main() {
 	srv.SetDispatcher(dispatcher)
 	srv.SetPaidRateLimit(cfg.PaidRateLimit)
 	srv.SetAPIRateLimit(cfg.APIRateLimit)
+	// The API token [MESHSAT-1738]: off until MESHSAT_API_TOKEN or a
+	// PUT /api/auth/token sets one; then every request under /api needs
+	// it, except from the kit itself (loopback, trusted by default) and
+	// through the Hub relay. The Bridge's own calls to its API carry a
+	// process-local token so they get in with the loopback trust off.
+	if err := srv.ConfigureAuth(api.AuthConfig{Token: cfg.APIToken, TrustLoopback: cfg.APITrustLoopback}); err != nil {
+		log.Warn().Err(err).Msg("api token: could not read system_config; the API is open")
+	}
+	if srv.AuthRequired() {
+		log.Info().Str("source", srv.AuthSource()).Bool("trust_loopback", cfg.APITrustLoopback).Msg("api token required on /api")
+	}
+	hubreporter.SetLocalAPIAuth(srv.LocalAPIToken)
 	srv.SetWebHandler(webHandler(cfg.WebDir))
 	if linkMgr != nil {
 		srv.SetLinkManager(linkMgr)
@@ -2848,7 +2860,10 @@ func main() {
 				CertPEM:   hubTLSCertPEM,
 				KeyPEM:    hubTLSKeyPEM,
 				CAPEM:     hubTLSCAPEM,
-				Handler:   srv.Router(),
+				// A request through the tunnel is authenticated by the
+				// tunnel: the Hub verified the phone's certificate before
+				// it opened one. [MESHSAT-1738]
+				Handler: srv.RelayRouter(),
 			}
 			if err := relayCfg.Validate(); err != nil {
 				log.Warn().Err(err).Msg("hub relay not started")

@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -37,6 +38,32 @@ func localAPIBase() string {
 
 var sysmgmtHTTPClient = &http.Client{Timeout: 60 * time.Second}
 
+// localAPIAuth gives the token the local API takes from this process when
+// an API token is set (api.Server.LocalAPIToken, wired in main.go), so a
+// Hub command still reaches the handlers with the loopback trust off. Nil
+// or "" = no header, today's call. [MESHSAT-1738]
+var (
+	localAPIAuthMu sync.RWMutex
+	localAPIAuth   func() string
+)
+
+// SetLocalAPIAuth installs the token source for callLocalAPI.
+func SetLocalAPIAuth(fn func() string) {
+	localAPIAuthMu.Lock()
+	localAPIAuth = fn
+	localAPIAuthMu.Unlock()
+}
+
+func localAPIToken() string {
+	localAPIAuthMu.RLock()
+	fn := localAPIAuth
+	localAPIAuthMu.RUnlock()
+	if fn == nil {
+		return ""
+	}
+	return fn()
+}
+
 // callLocalAPI is the shared Hub-command → local-REST shim.  It hands
 // the same JSON body a UI would POST, so the validation / exec /
 // error-shape stays identical to what the WebUI sees.
@@ -54,6 +81,9 @@ func callLocalAPI(method, path string, body interface{}) (json.RawMessage, error
 		return nil, fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if tok := localAPIToken(); tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
+	}
 	resp, err := sysmgmtHTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("local api: %w", err)
