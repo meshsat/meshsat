@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"meshsat/internal/gateway"
 	"meshsat/internal/transport"
@@ -86,7 +87,28 @@ func TestLocalNodeTAKHooks(t *testing.T) {
 	}
 
 	// No mesh at all: no hooks.
-	if h := localNodeTAKHooks(ctx, nil); h.NodeID != nil || h.SelfPosition != nil {
+	if h := localNodeTAKHooks(ctx, nil); h.NodeID != nil || h.SelfPosition != nil || h.NodeHeardAt != nil {
 		t.Error("hooks without a mesh transport")
+	}
+}
+
+// When the radio last heard a node comes from the node table: it dates a
+// position packet that carries no rx_time. [MESHSAT-1750]
+func TestLocalNodeTAKHooks_NodeHeardAt(t *testing.T) {
+	heard := time.Date(2026, 9, 19, 12, 0, 0, 0, time.UTC)
+	h := localNodeTAKHooks(context.Background(), &takHookMesh{nodes: []transport.MeshNode{
+		{Num: 0x0a0bc2ec, LastHeard: heard.Unix()},
+		{Num: 0x0a0b0549},
+	}})
+	if at, ok := h.NodeHeardAt(0x0a0bc2ec); !ok || !at.Equal(heard) {
+		t.Errorf("heard at %v %v, want %v", at, ok, heard)
+	}
+	for name, node := range map[string]uint32{"never heard": 0x0a0b0549, "not in the table": 0x0a0b0c0d, "no node": 0} {
+		if at, ok := h.NodeHeardAt(node); ok || !at.IsZero() {
+			t.Errorf("%s: %v %v", name, at, ok)
+		}
+	}
+	if _, ok := localNodeTAKHooks(context.Background(), &takHookMesh{err: errors.New("hal down")}).NodeHeardAt(0x0a0bc2ec); ok {
+		t.Error("a failing transport dated a node")
 	}
 }

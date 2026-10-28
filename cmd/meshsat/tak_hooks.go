@@ -33,7 +33,30 @@ func localNodeTAKHooks(ctx context.Context, mesh transport.MeshTransport) gatewa
 		SelfPosition: func() (lat, lon, altM float64, ok bool) {
 			return localNodePosition(ctx, mesh)
 		},
+		NodeHeardAt: func(node uint32) (time.Time, bool) {
+			return meshNodeHeardAt(ctx, mesh, node)
+		},
 	}
+}
+
+// meshNodeHeardAt is when the radio last heard a node, from the node table;
+// false for a node it does not list or never heard. [MESHSAT-1750]
+func meshNodeHeardAt(ctx context.Context, mesh transport.MeshTransport, node uint32) (time.Time, bool) {
+	if node == 0 {
+		return time.Time{}, false
+	}
+	cctx, cancel := context.WithTimeout(ctx, localNodeLookup)
+	defer cancel()
+	nodes, err := mesh.GetNodes(cctx)
+	if err != nil {
+		return time.Time{}, false
+	}
+	for _, n := range nodes {
+		if n.Num == node && n.LastHeard > 0 {
+			return time.Unix(n.LastHeard, 0), true
+		}
+	}
+	return time.Time{}, false
 }
 
 // localNodeLookup bounds a status or node-table read through HAL.

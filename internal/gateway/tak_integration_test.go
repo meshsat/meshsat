@@ -107,11 +107,14 @@ func TestTAKIntegration_ForwardPosition(t *testing.T) {
 	}
 	defer gw.Stop()
 
-	// Send a mesh position message
+	// Send a mesh position message, heard now as every packet the mesh
+	// transport hands over says (a position nothing dates is not exported,
+	// MESHSAT-1750).
 	msg := &transport.MeshMessage{
 		From:        0xAABBCCDD,
 		To:          0xFFFFFFFF,
 		PortNum:     3, // POSITION_APP
+		RxTime:      time.Now().Unix(),
 		DecodedText: "Position report from field",
 	}
 	if err := gw.Forward(ctx, msg); err != nil {

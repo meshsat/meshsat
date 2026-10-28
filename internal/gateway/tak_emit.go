@@ -44,6 +44,10 @@ type TAKHooks struct {
 	// NodeID is the local mesh node's id as hex without "!" ("aabbccdd"), or
 	// "" when there is none. It makes the own uid and callsign.
 	NodeID func() string
+	// NodeHeardAt is when the radio last heard a mesh node, from its node
+	// table; ok false when the node is unknown or was never heard. It dates a
+	// position packet that carries no rx_time. [MESHSAT-1750]
+	NodeHeardAt func(node uint32) (at time.Time, ok bool)
 	// Hub takes MQTT Export. Leave it nil without a Hub reporter; never set
 	// it to a nil *hubreporter.HubReporter.
 	Hub TAKHub

@@ -240,8 +240,13 @@ func (g *TAKGateway) closeServerConn() {
 }
 
 // Forward enqueues a MeshSat message for CoT delivery through the gateway's
-// outputs (the TAK server, SA multicast, the Hub).
+// outputs (the TAK server, SA multicast, the Hub). A position the kit did not
+// hear within cot_stale_seconds is taken and dropped before the queue, for
+// every output alike (staleReplay). [MESHSAT-1750]
 func (g *TAKGateway) Forward(ctx context.Context, msg *transport.MeshMessage) error {
+	if g.staleReplay(msg) {
+		return nil
+	}
 	select {
 	case g.outCh <- msg:
 		return nil
@@ -700,15 +705,19 @@ func (g *TAKGateway) sendMessage(msg *transport.MeshMessage) {
 					FixType:    int(pos.FixType),
 					Battery:    -1, // unknown unless we have telemetry
 				}
-				if pos.Time > 0 {
-					enrich.FixTime = time.Unix(int64(pos.Time), 0)
+				// The event's time is the fix's own, else when the kit heard
+				// the packet; never the moment of export. [MESHSAT-1750]
+				if at, ok := g.positionTime(msg, pos.Time); ok {
+					enrich.FixTime = at
 				}
 				ev = BuildEnrichedPositionEvent(uid, callsign, enrich, g.config.CotStaleSec)
 			} else {
 				ev = BuildPositionEvent(uid, callsign, 0, 0, 0, g.config.CotStaleSec)
+				g.stampHeard(&ev, msg)
 			}
 		} else {
 			ev = BuildPositionEvent(uid, callsign, 0, 0, 0, g.config.CotStaleSec)
+			g.stampHeard(&ev, msg)
 		}
 
 		if msg.DecodedText != "" {
@@ -728,6 +737,91 @@ func (g *TAKGateway) sendMessage(msg *transport.MeshMessage) {
 	if hard := withoutLinkDown(err); hard != nil {
 		log.Warn().Err(hard).Str("uid", ev.UID).Msg("tak: CoT not delivered")
 	}
+}
+
+// heardAt is when this kit heard a mesh packet: its rx_time as the radio
+// stamped it, else the node table's last-heard for its sender, else the fix's
+// own time when the packet is a position. Never the moment of export: that is
+// what a packet the radio replayed got, and it put a node last heard in
+// September on the Hub's map as a crew seen this minute. ok is false when
+// nothing dates the packet. A time in the future (a radio or a node with a
+// wrong clock) is not trusted. [MESHSAT-1750]
+func (g *TAKGateway) heardAt(msg *transport.MeshMessage, fixTime uint32) (time.Time, bool) {
+	now := time.Now()
+	if msg.RxTime > 0 {
+		if at := time.Unix(msg.RxTime, 0); !at.After(now) {
+			return at, true
+		}
+	}
+	if f := g.hooksNow().NodeHeardAt; f != nil {
+		if at, ok := f(msg.From); ok && !at.IsZero() && !at.After(now) {
+			return at, true
+		}
+	}
+	if fixTime > 0 {
+		if at := time.Unix(int64(fixTime), 0); !at.After(now) {
+			return at, true
+		}
+	}
+	return time.Time{}, false
+}
+
+// positionTime is the time a position event carries: the fix's own time when
+// the node stamped one that is not in the future (MESHSAT-1736), else when
+// the kit heard the packet (heardAt). [MESHSAT-1750]
+func (g *TAKGateway) positionTime(msg *transport.MeshMessage, fixTime uint32) (time.Time, bool) {
+	if fixTime > 0 {
+		if at := time.Unix(int64(fixTime), 0); !at.After(time.Now()) {
+			return at, true
+		}
+	}
+	return g.heardAt(msg, 0)
+}
+
+// stampHeard puts the time the kit heard the packet on an event that was
+// built at the moment of export. [MESHSAT-1750]
+func (g *TAKGateway) stampHeard(ev *CotEvent, msg *transport.MeshMessage) {
+	if at, ok := g.heardAt(msg, 0); ok {
+		ev.Time = at.UTC().Format(cotTimeFormat)
+		ev.Start = ev.Time
+	}
+}
+
+// staleReplay reports whether msg is a position the kit did not hear within
+// cot_stale_seconds, or one nothing dates. Meshtastic 2.8 replays every node
+// in the radio's NodeDB as a broadcast POSITION_APP packet after each config
+// download (PhoneAPI::makeReplayPositionPacket: rx_time is the node's
+// last_heard, the payload's time is the fix's own and often 0), and the
+// Bridge takes it like a live packet. Exported at the moment of delivery, each
+// Bridge restart and each radio reconnect brought nodes last heard weeks ago
+// to the Hub's map as crews seen this minute (both kits, 28 Oct 2026). The
+// packet's rx_time dates it; a position older than cot_stale_seconds is not a
+// fresh sighting on any output. [MESHSAT-1750]
+func (g *TAKGateway) staleReplay(msg *transport.MeshMessage) bool {
+	if msg == nil || msg.PortNum != transport.PortNumPosition {
+		return false
+	}
+	var fixTime uint32
+	if len(msg.RawPayload) > 0 {
+		if pos, err := transport.ParsePositionPayload(msg.RawPayload); err == nil && pos != nil {
+			fixTime = pos.Time
+		}
+	}
+	heard, ok := g.heardAt(msg, fixTime)
+	if !ok {
+		log.Debug().Uint32("from", msg.From).Msg("tak: a position nothing dates is not exported")
+		return true
+	}
+	stale := time.Duration(g.config.CotStaleSec) * time.Second
+	if stale <= 0 {
+		return false
+	}
+	if age := time.Since(heard); age > stale {
+		log.Debug().Uint32("from", msg.From).Dur("heard_ago", age.Truncate(time.Second)).Dur("cot_stale", stale).
+			Msg("tak: a position heard longer ago than cot_stale_seconds is not exported (the radio's node-table replay after a config download)")
+		return true
+	}
+	return false
 }
 
 // reconnect attempts to re-establish the TAK server connection with backoff.

@@ -55,6 +55,10 @@ type DirectMeshTransport struct {
 	rebootCount uint32
 	configID    uint32
 	configDone  bool
+	// configDoneAt is when the config download of this session completed,
+	// for the log line that names a packet delivered long after the radio
+	// heard it. [MESHSAT-1750]
+	configDoneAt time.Time
 
 	nodes   map[uint32]*MeshNode
 	nodesMu sync.RWMutex
@@ -598,6 +602,7 @@ func (t *DirectMeshTransport) connectLocked(ctx context.Context) error {
 			if t.file == sp {
 				log.Warn().Msg("meshtastic config handshake timed out, continuing with partial NodeDB")
 				t.configDone = true
+				t.configDoneAt = time.Now()
 			}
 			t.mu.Unlock()
 			return nil
@@ -618,6 +623,11 @@ func (t *DirectMeshTransport) connectLocked(ctx context.Context) error {
 // from the radio before its handshake is abandoned as silent. Package var so
 // tests can shorten it. [MESHSAT-850]
 var meshSilentAfter = 15 * time.Second
+
+// meshLatePacketAge is how far behind now a packet's rx_time may be before
+// its delivery is logged as late (handlePacket): a live packet reaches the
+// host within the second it was heard. [MESHSAT-1750]
+var meshLatePacketAge = time.Minute
 
 // sessionHasMyInfo reports whether MyNodeInfo arrived in the current serial
 // session. [MESHSAT-850]
@@ -1043,6 +1053,7 @@ func (t *DirectMeshTransport) handleFromRadio(data []byte) {
 		t.mu.Lock()
 		if fr.ConfigCompleteID == t.configID {
 			t.configDone = true
+			t.configDoneAt = time.Now()
 			t.configReal = true
 			t.handshakeFails = 0
 			t.nodesMu.RLock()
@@ -1152,9 +1163,27 @@ func (t *DirectMeshTransport) handlePacket(pkt *ProtoMeshPacket) {
 	// Track last external packet for serial health watchdog
 	t.mu.RLock()
 	myNum := t.myNodeNum
+	configDoneAt := t.configDoneAt
 	t.mu.RUnlock()
 	if pkt.From != myNum {
 		t.lastExternalPkt.Store(time.Now().Unix())
+	}
+
+	// A packet whose rx_time is well behind now was not heard just now: after
+	// each config download Meshtastic 2.8 replays every node in its NodeDB as
+	// a broadcast position packet stamped with that node's last_heard
+	// (PhoneAPI::makeReplayPositionPacket), and after a disconnect its ToPhone
+	// queue hands over what it heard meanwhile. The message keeps the radio's
+	// rx_time; whoever must know when the kit heard a node reads that, never
+	// the moment of delivery. [MESHSAT-1750]
+	if pkt.RxTime > 0 && pkt.Decoded != nil {
+		if age := time.Since(time.Unix(int64(pkt.RxTime), 0)); age > meshLatePacketAge {
+			ev := log.Debug().Uint32("from", pkt.From).Str("portnum", msg.PortNumName).Dur("heard_ago", age.Truncate(time.Second))
+			if !configDoneAt.IsZero() {
+				ev = ev.Dur("since_config_complete", time.Since(configDoneAt).Truncate(time.Second))
+			}
+			ev.Msg("meshtastic: packet delivered long after the radio heard it (the node-table replay after a config download, or the ToPhone queue after a disconnect)")
+		}
 	}
 
 	// Admin replies from the local radio (the device health probe's
