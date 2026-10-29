@@ -357,6 +357,13 @@ func (r *byteSliceReader) Read(p []byte) (int, error) {
 // is placed under /run (tmpfs in the container) so it disappears on
 // restart — no stale configs to worry about.
 func writeDirewolfConf(path string, cfg APRSConfig) error {
+	// Every value below goes into the file through fmt.Sprintf and Direwolf
+	// runs SPEECH lines with system() at parse time: refuse anything that
+	// is not one plain token, whatever path the config took to get here.
+	// [MESHSAT-1754]
+	if err := cfg.validateDirewolfTokens(); err != nil {
+		return fmt.Errorf("refusing to write direwolf.conf: %w", err)
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}

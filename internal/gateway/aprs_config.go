@@ -217,6 +217,13 @@ func (c *APRSConfig) Validate() error {
 	if c.Callsign == "" {
 		return fmt.Errorf("callsign is required for APRS")
 	}
+	// The callsign is an AX.25 address and one token of a direwolf.conf
+	// line in every mode, not only on APRS-IS: one to six letters and
+	// digits, the SSID in its own field. Until MESHSAT-1754 KISS mode took
+	// any non-empty string. [MESHSAT-1754]
+	if !aprsISCallsignOK(c.Callsign) {
+		return fmt.Errorf("callsign must be 1-6 letters and digits (the SSID is its own field)")
+	}
 	if c.SSID < 0 || c.SSID > 15 {
 		return fmt.Errorf("ssid must be 0-15")
 	}
@@ -260,7 +267,48 @@ func (c *APRSConfig) Validate() error {
 	if c.FrequencyMHz == 0 {
 		c.FrequencyMHz = 144.800
 	}
+	return c.validateDirewolfTokens()
+}
+
+// validateDirewolfTokens refuses a value that could not stand as one token
+// on a direwolf.conf line. renderDirewolfConf writes callsign, audio_card,
+// ptt_device and ptt_line into that file with fmt.Sprintf, and Direwolf
+// reads every line of it as a directive, SPEECH among them, which it hands
+// to system() while still parsing. A line break in one of these fields
+// made the rest of an unauthenticated PUT /api/gateways/aprs body a second
+// directive (github.com/meshsat/meshsat/issues/4). The same check runs
+// again in writeDirewolfConf, so a config that reached the supervisor by
+// another path cannot write the file either. [MESHSAT-1754]
+func (c *APRSConfig) validateDirewolfTokens() error {
+	for _, f := range []struct{ name, value string }{
+		{"callsign", c.Callsign},
+		{"audio_card", c.AudioCard},
+		{"ptt_device", c.PTTDevice},
+		{"ptt_line", c.PTTLine},
+	} {
+		if !direwolfTokenOK(f.value) {
+			return fmt.Errorf("%s: only letters, digits and . _ - / : , = are allowed, no spaces, # or line breaks", f.name)
+		}
+	}
 	return nil
+}
+
+// direwolfTokenOK reports whether s can be one token on a direwolf.conf
+// line: empty, or at most 128 characters from a short allow-list that has
+// no whitespace, no #, no quotes and no control characters.
+func direwolfTokenOK(s string) bool {
+	if len(s) > 128 {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '.', r == '_', r == '-', r == '/', r == ':', r == ',', r == '=':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // validateIS checks and completes the APRS-IS Direct settings. The passcode
