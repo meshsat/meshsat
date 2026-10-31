@@ -461,7 +461,7 @@ func (n *Node) Inbound(raw []byte, ifaceID string) bool {
 				n.handlePathRequest(pkt)
 				return true
 			}
-			return false // legacy MeshSat path request/response, HeMB, etc.
+			return false // legacy MeshSat path request/response, etc.
 		case reticulum.DestSingle:
 			if d := n.LocalDestination(hdr.DestHash); d != nil {
 				n.deliverLocal(d, pkt)

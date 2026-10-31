@@ -138,8 +138,8 @@ func (r *InterfaceRegistry) Unregister(id string) bool {
 }
 
 // GetMTU returns the declared MTU of a registered interface, or 0 if
-// it isn't registered. Used by hemb.BuildBearers to size each bearer
-// to its real wire limit rather than a fleet-wide floor.
+// it isn't registered, so a caller sizes to the real wire limit rather
+// than a fleet-wide floor.
 func (r *InterfaceRegistry) GetMTU(ifaceID string) int {
 	iface := r.Get(ifaceID)
 	if iface == nil {

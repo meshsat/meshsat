@@ -57,7 +57,6 @@
   "concept.announce":           "Reticulum announce",
   "concept.precedence":         "STANAG 4406 precedence",
   "concept.key_bundle":         "Key bundle",
-  "concept.hemb":               "HeMB bonding",
   "concept.store_forward":      "Store-and-forward",
   "concept.qos":                "QoS",
   "concept.transform_pipeline": "Transform pipeline",

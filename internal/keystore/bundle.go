@@ -23,7 +23,7 @@ const (
 )
 
 // Channel type enum — matches Android ConversationKey types.
-// 0x03 is APRS (AX.25), 0x07 is HeMB bond-group — both fill reserved
+// 0x03 is APRS (AX.25), 0x07 was the HeMB bond group — both fill reserved
 // gaps in the original 0x00-0x06 enumeration and keep new bundles
 // wire-compatible with older readers that don't recognise the values
 // (they surface as "unknown" and skip the entry rather than failing
@@ -36,7 +36,7 @@ const (
 	ChannelZigBee  byte = 0x04
 	ChannelMQTT    byte = 0x05
 	ChannelWebhook byte = 0x06
-	ChannelBond    byte = 0x07
+	ChannelBond    byte = 0x07 // HeMB v1's bond-group key; retired with HeMB v1 (MESHSAT-1763), still read so old keystores list, never reused
 	// ChannelMgmt carries an OOB management key; the entry address is the
 	// alias of the kit that issued it. Older readers surface it as
 	// "unknown" and skip the entry. [MESHSAT-756]

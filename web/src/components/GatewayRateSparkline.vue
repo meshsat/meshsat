@@ -8,7 +8,7 @@
 
   Props:
     - samples: array of { ts, inCount, outCount } ordered oldest → newest
-    - variant: 'mesh' | 'aprs' | 'cellular' | 'iridium' | 'tak' | 'zigbee' | 'tetra' | 'bond' (colour token)
+    - variant: 'mesh' | 'aprs' | 'cellular' | 'iridium' | 'tak' | 'zigbee' | 'tetra' (colour token)
 
   Empty state renders a dashed baseline so the widget has a consistent
   height regardless of traffic. [MESHSAT-686]
@@ -86,7 +86,6 @@ const barClass = computed(() => {
     case 'iridium':  return 'fill-red-400/70'
     case 'tak':      return 'fill-blue-400/70'
     case 'zigbee':   return 'fill-pink-400/70'
-    case 'bond':     return 'fill-teal-400/70'
     case 'tetra':    return 'fill-cyan-400/70' // cyan is Sand in the brand palette
     case 'mesh':
     default:         return 'fill-emerald-400/70'

@@ -273,9 +273,7 @@ func RegisterDefaults(r *Registry) {
 
 	// IPoUGRS is RESERVED AND NOT IMPLEMENTED. It originates from an
 	// April-1st RFC-tradition draft and has no transmit or receive driver
-	// anywhere in the tree — only this descriptor, a HeMB bearer profile
-	// (internal/hemb/profiles.go) and failover branches
-	// (internal/engine/failover.go) reference it.
+	// anywhere in the tree; only this descriptor references it.
 	//
 	// Do NOT include it in any public or funder-facing channel or transport
 	// count. The supported figure is 8 transport bearers across 9 wired

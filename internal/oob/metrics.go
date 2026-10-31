@@ -6,8 +6,8 @@ import (
 )
 
 // Metrics holds the process-wide OOB counters. The Prometheus collector in
-// internal/api reads Snapshot on every scrape, the same bridge pattern the
-// HeMB counters use. Frame results: accepted, replay, bad_tag, unknown_peer,
+// internal/api reads Snapshot on every scrape (no registered series).
+// Frame results: accepted, replay, bad_tag, unknown_peer,
 // disabled_peer, disabled, bad_header. Command results: ResultCode strings.
 type Metrics struct {
 	mu       sync.Mutex

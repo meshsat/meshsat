@@ -1571,15 +1571,6 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     } catch (e) { error.value = e.message; throw e }
   }
 
-  // HeMB stats (for dashboard widget)
-  const hembStats = ref(null)
-
-  async function fetchHeMBStats() {
-    try {
-      hembStats.value = await api.get('/hemb/stats')
-    } catch { /* HeMB may not be active */ }
-  }
-
   // Burst Queue
   const burstStatus = ref({ pending: 0, max_size: 10, max_age_min: 30 })
 
@@ -1898,17 +1889,6 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     catch { wifiP2PStatus.value = null }
   }
 
-  // HeMB bond groups — needed for the operator-dashboard Active Comms
-  // tile to render "HeMB <label> · mesh_0 + ax25_0" style when a bond
-  // is the actual outbound route, instead of naming a single member.
-  const bondGroups = ref([])
-  async function fetchBondGroups() {
-    try {
-      const data = await api.get('/bond-groups')
-      bondGroups.value = Array.isArray(data) ? data : []
-    } catch { bondGroups.value = [] }
-  }
-
   // APRS dashboard widget (v0.4.0)
   const aprsStatus = ref(null)
   const aprsHeard = ref([])
@@ -2036,7 +2016,6 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     exportConfig, importConfig, validateTransforms,
     healthScores, fetchHealthScores,
     deadmanEnabled, deadmanTimeout, deadmanConfig, fetchDeadmanConfig, setDeadmanConfig,
-    hembStats, fetchHeMBStats,
     burstStatus, fetchBurstStatus, flushBurst,
     geofences, fetchGeofences, createGeofence, deleteGeofence,
     sseConnected, connectSSE, closeSSE,
@@ -2046,7 +2025,6 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     paidLinks, fetchPaidLinks, setPaidLink,
     reticulumStatus, fetchReticulumStatus,
     aprsStatus, aprsHeard, aprsActivity, fetchAPRSStatus, fetchAPRSHeard, fetchAPRSActivity,
-    bondGroups, fetchBondGroups,
     // BLE + WiFi system-mgmt [MESHSAT-623 + MESHSAT-624]
     bluetoothStatus, bluetoothDevices,
     fetchBluetoothStatus, fetchBluetoothDevices, bluetoothScan,

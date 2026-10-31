@@ -17,7 +17,6 @@ import (
 	"meshsat/internal/database"
 	"meshsat/internal/engine"
 	"meshsat/internal/gateway"
-	"meshsat/internal/hemb"
 	"meshsat/internal/hubreporter"
 	"meshsat/internal/keystore"
 	"meshsat/internal/lxmf"
@@ -91,13 +90,6 @@ type Server struct {
 	// handlers are safe to call without it (they just skip auto-peer).
 	// [MESHSAT-633]
 	blePeerMgr *BLEPeerManager
-	// hembTUN + hembTUNBond are set by SetHeMBTUNAdapter when the
-	// TUN HeMB bonder is live. Used by autoWireP2PPeer (MESHSAT-647)
-	// to hot-reload the bonder's bearer list after tcp_0 is added
-	// to a bond group, so the new bearer actually starts carrying
-	// HeMB-coded frames without a bridge restart.
-	hembTUN     *hemb.TUNAdapter
-	hembTUNBond string // bond group ID the TUN bonder is bound to
 	// p2pReconciler keeps the WiFi-Direct overlay IPv4 pinned to
 	// whatever group iface is current, so the TCP peer address stays
 	// zone-free and bulletproof to iface rename/teardown. Nil until
@@ -204,14 +196,6 @@ func (s *Server) SetBLEPeerManager(m *BLEPeerManager) {
 	s.blePeerMgr = m
 }
 
-// SetHeMBTUNAdapter wires the TUN adapter so runtime bond-member
-// changes can call tunAdapter.Rebind() + rebuild bearer list.
-// [MESHSAT-647 HeMB hot-reload]
-func (s *Server) SetHeMBTUNAdapter(a *hemb.TUNAdapter, bondID string) {
-	s.hembTUN = a
-	s.hembTUNBond = bondID
-}
-
 // StartP2PReconciler spawns the WiFi-Direct overlay-IP reconciler.
 // Must be called after tcpIface is set so the TCP peer wiring works
 // on the first reconcile cycle. Idempotent via the reconciler's
@@ -223,26 +207,6 @@ func (s *Server) StartP2PReconciler(ctx context.Context) {
 	}
 	s.p2pReconciler = NewP2PReconciler(s)
 	s.p2pReconciler.Start(ctx)
-}
-
-// rebuildHeMBBearers rebuilds the TUN bonder's bearer list from the
-// current bond_members row for the TUN-bound bond group. Called by
-// autoWireP2PPeer after updating bond_members. Safe no-op when TUN
-// isn't configured (MESHSAT_HEMB_TUN unset).
-func (s *Server) rebuildHeMBBearers() {
-	if s.hembTUN == nil || s.hembTUNBond == "" || s.db == nil || s.ifaceRegistry == nil {
-		return
-	}
-	members, err := s.db.GetBondMembers(s.hembTUNBond)
-	if err != nil {
-		return
-	}
-	ifaceIDs := make([]string, 0, len(members))
-	for _, m := range members {
-		ifaceIDs = append(ifaceIDs, m.InterfaceID)
-	}
-	bearers := hemb.BuildBearers(ifaceIDs, s.dispatcher, s.ifaceRegistry)
-	s.hembTUN.Rebind(bearers)
 }
 
 // SetRestartFunc sets the function called by POST /api/system/restart
@@ -913,23 +877,6 @@ func (s *Server) Router() http.Handler {
 		r.Get("/geofences/events", s.handleGetGeofenceEvents) // [MESHSAT-1414]
 		r.Post("/geofences", s.handleCreateGeofence)
 		r.Delete("/geofences/{id}", s.handleDeleteGeofence)
-
-		// HeMB bond groups + observability
-		r.Get("/bond-groups", s.handleGetBondGroups)
-		r.Post("/bond-groups", s.handleCreateBondGroup)
-		r.Put("/bond-groups/{id}", s.handleUpdateBondGroup)
-		r.Delete("/bond-groups/{id}", s.handleDeleteBondGroup)
-		r.Post("/hemb/send", s.handleHeMBSend)
-		r.Get("/hemb/stats", s.handleGetHeMBStats)
-		r.Get("/hemb/events", s.handleHeMBSSE)
-		r.Get("/hemb/topology", s.handleGetHeMBTopology)
-		r.Get("/hemb/events/history", s.handleGetHeMBEventHistory)
-		r.Get("/hemb/streams", s.handleGetHeMBStreams)
-		r.Get("/hemb/streams/{id}", s.handleGetHeMBStreamDetail)
-		r.Get("/hemb/generations/{stream_id}/{gen_id}", s.handleGetHeMBGenerationInspect)
-		r.Post("/hemb/fault-inject", s.handleHeMBFaultInject)
-		r.Get("/hemb/fault-inject", s.handleHeMBFaultList)
-		r.Delete("/hemb/fault-inject/{id}", s.handleHeMBFaultClear)
 
 		// Dead man's switch
 		r.Get("/deadman", s.handleGetDeadmanConfig)

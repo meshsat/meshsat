@@ -21,7 +21,6 @@ import (
 	"meshsat/internal/codec"
 	"meshsat/internal/database"
 	"meshsat/internal/gateway"
-	"meshsat/internal/hemb"
 	"meshsat/internal/routing"
 	"meshsat/internal/rules"
 	"meshsat/internal/transport"
@@ -72,11 +71,6 @@ func (m *LoopMetrics) Snapshot() map[string]int64 {
 }
 
 // Dispatcher evaluates access rules and fans out messages to per-channel delivery workers.
-// PacketSenderProvider returns a send function for a Reticulum interface ID.
-type PacketSenderProvider interface {
-	GetPacketSender(ifaceID string) func(ctx context.Context, data []byte) error
-}
-
 type Dispatcher struct {
 	lxmf       LXMFSender   // class lxmf deliveries [MESHSAT-1348]
 	hubRoute   *hubRouteRef // the Hub app route's adapter, shared with the workers [MESHSAT-1584]
@@ -90,7 +84,6 @@ type Dispatcher struct {
 	registry   *channel.Registry
 	gwProv     GatewayProvider
 	mesh       transport.MeshTransport
-	pktSender  PacketSenderProvider // Reticulum packet senders (tcp_0, etc.)
 	workers    map[string]*DeliveryWorker
 	emit       func(transport.MeshEvent) // SSE broadcast callback
 	packets    *PacketRing               // live packet feed for mesh sends (nil = off) [MESHSAT-826]
@@ -297,10 +290,6 @@ func (d *Dispatcher) SetLXMFSender(s LXMFSender) {
 	for _, w := range d.workers {
 		w.lxmf = s
 	}
-}
-
-func (d *Dispatcher) SetPacketSenderProvider(p PacketSenderProvider) {
-	d.pktSender = p
 }
 
 // parseCustodyID converts a hex-encoded custody ID string to a [16]byte array.
@@ -712,10 +701,10 @@ func (d *Dispatcher) DispatchAccess(sourceInterface string, msg rules.RouteMessa
 // counts rules; the others count pieces of work (a rule to the cell makes one per phone).
 type DispatchResult struct {
 	Matched  int // rules that matched
-	Queued   int // work this call made: rows queued, bonded sends made
+	Queued   int // work this call made: rows queued
 	Existing int // work an earlier dispatch under the same origin made, not made again
-	Skipped  int // matches the rules or the dispatcher's limits carry nowhere (loop, recent copy, no interface, queue full, HeMB off, a bad address)
-	Failed   int // work that could not be made (a write or a bonded send failed): a keyed dispatch tried again makes only this
+	Skipped  int // matches the rules or the dispatcher's limits carry nowhere (loop, recent copy, no interface, queue full, a bad address)
+	Failed   int // work that could not be made (a write failed): a keyed dispatch tried again makes only this
 }
 
 // dispatchOrigin is a keyed dispatch's message identity and the work listed for it.
@@ -827,123 +816,6 @@ func (d *Dispatcher) dispatchAccess(sourceInterface string, msg rules.RouteMessa
 		// The rule's work, as a keyed dispatch lists it: the rule and its target as written
 		// (a failover group, not the interface it resolves to now), then the destination.
 		workPrefix := fmt.Sprintf("rule:%d/%s/", m.Rule.ID, m.ForwardTo)
-		// Check if the forwarding target is a HeMB bond group.
-		if d.db.IsBondGroup(m.ForwardTo) {
-			// HeMB is experimental and opt-in: with it off, a rule that
-			// forwards to a bond group sends nothing. [MESHSAT-1581]
-			if !hemb.Experimental() {
-				log.Warn().Str("bond_group", m.ForwardTo).Msg("hemb: rule forwards to a bond group, HeMB is experimental and off, not sent")
-				if d.signing != nil {
-					d.signing.AuditEvent("drop", nil, nil, nil, nil, "HeMB experimental off: bond group "+m.ForwardTo)
-				}
-				res.Skipped++
-				continue
-			}
-			// A bonded send keeps no row; a keyed dispatch lists it once it went.
-			if origin != nil && origin.done[workPrefix] {
-				res.Existing++
-				continue
-			}
-			if d.failover != nil {
-				sendFnProvider := func(ifaceID string) func(ctx context.Context, data []byte) error {
-					// Try gateway first (satellite, cellular, MQTT, etc.).
-					gw := d.gwProv.GatewayByInterfaceID(ifaceID)
-					if gw != nil {
-						return func(ctx context.Context, data []byte) error {
-							return gw.Forward(ctx, &transport.MeshMessage{
-								RawPayload: data,
-							})
-						}
-					}
-					// Fallback: Reticulum packet sender for any interface (mesh_0, tcp_0, etc.).
-					// Uses the RNS transport node which relays PRIVATE_APP between bridges.
-					// Direct mesh.SendRaw(PortNum:256) doesn't cross Meshtastic nodes.
-					if d.pktSender != nil {
-						if fn := d.pktSender.GetPacketSender(ifaceID); fn != nil {
-							return fn
-						}
-					}
-					// Last resort: raw mesh transport (local delivery only).
-					if d.mesh != nil && strings.HasPrefix(ifaceID, "mesh") {
-						return func(ctx context.Context, data []byte) error {
-							return d.mesh.SendRaw(ctx, transport.RawRequest{
-								PortNum: 256, // PRIVATE_APP
-								Payload: encoding_base64.StdEncoding.EncodeToString(data),
-							})
-						}
-					}
-					return nil
-				}
-				bearers := d.failover.SelectBearers(m.ForwardTo, sendFnProvider)
-				if len(bearers) > 0 {
-					// Encrypt-then-code: run the bond's own egress
-					// transforms on the payload BEFORE it enters the
-					// bonder. HeMB then codes the ciphertext across
-					// bearers; per-bearer re-encryption would break
-					// erasure reconstruction (nonce-distinct AES-GCM
-					// blobs don't compose). Transforms default to [].
-					// [MESHSAT-664]
-					bondPayload := payload
-					if bg, gErr := d.db.GetBondGroup(m.ForwardTo); gErr == nil && bg != nil &&
-						d.transforms != nil && bg.EgressTransforms != "" && bg.EgressTransforms != "[]" {
-						transformed, tErr := d.transforms.ApplyEgress(bondPayload, bg.EgressTransforms)
-						if tErr != nil {
-							log.Error().Err(tErr).Str("bond_group", m.ForwardTo).
-								Msg("hemb: bond egress transforms failed — dropping send")
-							res.Skipped++
-							continue
-						}
-						bondPayload = transformed
-					}
-					// HeMB's RLNC segmenter zero-pads the payload up to
-					// K×symSize, and the reassembler returns that full
-					// padded buffer — not the original length. Without
-					// a length hint the receiver can't distinguish
-					// meaningful bytes from trailing zero padding, and
-					// ApplyIngress's base64 stage (or any byte-precise
-					// transform) rejects the garbage tail. Prepend a
-					// 2-byte big-endian length header so the peer can
-					// trim to exactly what we sent. [MESHSAT-672]
-					if len(bondPayload) > 0xFFFF {
-						log.Error().Int("bytes", len(bondPayload)).Str("bond_group", m.ForwardTo).
-							Msg("hemb: bond payload exceeds 65535 bytes — dropping")
-						res.Skipped++
-						continue
-					}
-					framed := make([]byte, 2+len(bondPayload))
-					framed[0] = byte(len(bondPayload) >> 8)
-					framed[1] = byte(len(bondPayload) & 0xFF)
-					copy(framed[2:], bondPayload)
-					bondPayload = framed
-
-					bdr := hemb.NewBonder(hemb.Options{
-						Bearers:   bearers,
-						DeliverFn: nil,                           // send-only path
-						EventCh:   hemb.GlobalEventBus.Channel(), // fan-out to SSE subscribers
-					})
-					if err := bdr.Send(context.Background(), bondPayload); err != nil {
-						res.Failed++
-						log.Error().Err(err).Str("bond_group", m.ForwardTo).
-							Msg("hemb: bonded send failed")
-					} else {
-						res.Queued++
-						if origin != nil {
-							if err := d.db.NoteDispatchWork(origin.key, workPrefix); err != nil {
-								log.Warn().Err(err).Str("origin", origin.key).Msg("hemb: bonded send not listed; a dispatch tried again sends it again")
-							}
-						}
-						log.Info().Str("bond_group", m.ForwardTo).Int("bearers", len(bearers)).
-							Int("payload_in", len(payload)).Int("payload_wire", len(bondPayload)).
-							Msg("hemb: payload sent via bond group")
-					}
-					continue
-				}
-			}
-			log.Warn().Str("bond_group", m.ForwardTo).Msg("hemb: no online bearers in bond group")
-			res.Skipped++
-			continue
-		}
-
 		// Resolve failover groups to concrete interface ID
 		destInterface := m.ForwardTo
 		if d.failover != nil {
@@ -1582,121 +1454,6 @@ func (d *Dispatcher) reapAckTimeouts() {
 			}
 		}
 	}
-}
-
-// SendViaBondGroup sends a payload through a HeMB bond group.
-// Returns the number of bearers used or an error.
-func (d *Dispatcher) SendViaBondGroup(groupID string, payload []byte) (int, error) {
-	if !hemb.Experimental() {
-		return 0, hemb.ErrExperimentalOff // [MESHSAT-1581]
-	}
-	if d.failover == nil {
-		return 0, fmt.Errorf("failover resolver not initialized")
-	}
-	if !d.db.IsBondGroup(groupID) {
-		return 0, fmt.Errorf("unknown bond group: %s", groupID)
-	}
-
-	sendFnProvider := func(ifaceID string) func(ctx context.Context, data []byte) error {
-		// MESHSAT-672 diagnostic: log every bearer symbol going out so
-		// the hex head can be compared against the peer's
-		// `handleRoutingPacket entry` log to localise where the HeMB
-		// frame shape is lost. Wrapped inline so it's one line per
-		// SendFn invocation, not per SendViaBondGroup.
-		wrap := func(kind string, inner func(ctx context.Context, data []byte) error) func(ctx context.Context, data []byte) error {
-			return func(ctx context.Context, data []byte) error {
-				head := data
-				if len(head) > 16 {
-					head = head[:16]
-				}
-				log.Debug().Str("iface", ifaceID).Str("kind", kind).
-					Int("len", len(data)).Hex("head", head).
-					Msg("hemb: bearer TX symbol (MESHSAT-672 diag)")
-				return inner(ctx, data)
-			}
-		}
-
-		gw := d.gwProv.GatewayByInterfaceID(ifaceID)
-		if gw != nil {
-			log.Debug().Str("iface", ifaceID).Msg("hemb: sendFn resolved via gateway")
-			return wrap("gateway", func(ctx context.Context, data []byte) error {
-				return gw.Forward(ctx, &transport.MeshMessage{RawPayload: data})
-			})
-		}
-		// Reticulum packet sender: crosses bridges via TCP/HDLC.
-		if d.pktSender != nil {
-			if fn := d.pktSender.GetPacketSender(ifaceID); fn != nil {
-				log.Debug().Str("iface", ifaceID).Msg("hemb: sendFn resolved via packet sender")
-				return wrap("pktsender", fn)
-			}
-		}
-		// Last resort: raw mesh (local only — doesn't cross Meshtastic nodes).
-		if d.mesh != nil && strings.HasPrefix(ifaceID, "mesh") {
-			log.Debug().Str("iface", ifaceID).Msg("hemb: sendFn resolved via raw mesh")
-			return wrap("rawmesh", func(ctx context.Context, data []byte) error {
-				return d.mesh.SendRaw(ctx, transport.RawRequest{
-					PortNum: 256,
-					Payload: encoding_base64.StdEncoding.EncodeToString(data),
-				})
-			})
-		}
-		log.Warn().Str("iface", ifaceID).Msg("hemb: no sendFn for bearer — skipped")
-		return nil
-	}
-
-	bearers := d.failover.SelectBearers(groupID, sendFnProvider)
-	if len(bearers) == 0 {
-		return 0, fmt.Errorf("no online bearers in bond group %s", groupID)
-	}
-
-	// Encrypt-then-code (MESHSAT-664): if the bond has egress
-	// transforms configured, run them once on the payload so HeMB
-	// codes the resulting ciphertext across all bearers. See the
-	// matching block in DispatchAccess for the rationale.
-	bondPayload := payload
-	if bg, gErr := d.db.GetBondGroup(groupID); gErr == nil && bg != nil &&
-		d.transforms != nil && bg.EgressTransforms != "" && bg.EgressTransforms != "[]" {
-		transformed, tErr := d.transforms.ApplyEgress(bondPayload, bg.EgressTransforms)
-		if tErr != nil {
-			return 0, fmt.Errorf("bond %s egress transforms: %w", groupID, tErr)
-		}
-		bondPayload = transformed
-	}
-	// 2-byte BE length prefix so the peer can strip HeMB's
-	// zero-pad after reassembly. [MESHSAT-672]
-	if len(bondPayload) > 0xFFFF {
-		return 0, fmt.Errorf("bond %s payload exceeds 65535 bytes", groupID)
-	}
-	framed := make([]byte, 2+len(bondPayload))
-	framed[0] = byte(len(bondPayload) >> 8)
-	framed[1] = byte(len(bondPayload) & 0xFF)
-	copy(framed[2:], bondPayload)
-	bondPayload = framed
-
-	bdr := hemb.NewBonder(hemb.Options{
-		Bearers:   bearers,
-		DeliverFn: nil,
-		EventCh:   hemb.GlobalEventBus.Channel(),
-	})
-	if err := bdr.Send(context.Background(), bondPayload); err != nil {
-		return 0, fmt.Errorf("bonded send failed: %w", err)
-	}
-	return len(bearers), nil
-}
-
-// ForwardHeMBFrame sends a raw HeMB frame to a specific interface via its gateway.
-// Used by the TUN adapter to route coded symbols to physical transports.
-func (d *Dispatcher) ForwardHeMBFrame(ifaceID string, data []byte) error {
-	if !hemb.Experimental() {
-		return hemb.ErrExperimentalOff // [MESHSAT-1581]
-	}
-	gw := d.gwProv.GatewayByInterfaceID(ifaceID)
-	if gw == nil {
-		return fmt.Errorf("no gateway for interface %q", ifaceID)
-	}
-	return gw.Forward(context.Background(), &transport.MeshMessage{
-		RawPayload: data,
-	})
 }
 
 // LXMFSender delivers a class-lxmf ledger row: it packs, signs and sends the

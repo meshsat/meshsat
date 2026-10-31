@@ -32,11 +32,6 @@ func TestMetricsEndpoint_ReturnsPrometheusFormat(t *testing.T) {
 		"meshsat_system_memory_percent",
 		"meshsat_system_disk_percent",
 		"meshsat_system_uptime_seconds",
-		// HeMB global stats always present (singleton)
-		"meshsat_hemb_symbols_sent_total",
-		"meshsat_hemb_generations_decoded_total",
-		"meshsat_hemb_cost_usd_total",
-		"meshsat_hemb_decode_latency_p50_ms",
 		// Messages from DB
 		"meshsat_messages_total",
 		"meshsat_messages_today",
@@ -80,12 +75,13 @@ func TestMetricsEndpoint_NilSubsystems(t *testing.T) {
 		t.Error("delivery metrics should be absent with nil dispatcher")
 	}
 
-	// System + HeMB + message metrics still present
+	// System + message metrics still present
 	if !strings.Contains(body, "meshsat_system_cpu_percent") {
 		t.Error("system metrics should be present regardless")
 	}
-	if !strings.Contains(body, "meshsat_hemb_symbols_sent_total") {
-		t.Error("HeMB metrics should be present regardless")
+	// HeMB v1 is gone, and its metrics with it. [MESHSAT-1763]
+	if strings.Contains(body, "meshsat_hemb_") {
+		t.Error("HeMB metrics should be gone")
 	}
 }
 
@@ -106,7 +102,7 @@ func TestMetricsEndpoint_HELP_and_TYPE(t *testing.T) {
 	if !strings.Contains(body, "# TYPE meshsat_system_cpu_percent gauge") {
 		t.Error("missing TYPE for system_cpu_percent")
 	}
-	if !strings.Contains(body, "# TYPE meshsat_hemb_symbols_sent_total counter") {
-		t.Error("missing TYPE counter for hemb_symbols_sent_total")
+	if !strings.Contains(body, "# TYPE meshsat_messages_total gauge") {
+		t.Error("missing TYPE gauge for messages_total")
 	}
 }

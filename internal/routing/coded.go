@@ -9,7 +9,7 @@ package routing
 //
 //   - the row is not in the InterfaceRegistry and has no packet sender in
 //     the processor, so the legacy routing layer (transport node, path
-//     finder, announce relay, time sync, custody, resources, HeMB) cannot
+//     finder, announce relay, time sync, custody, resources) cannot
 //     address it;
 //   - its frames go to the node's Inbound and nowhere else; a frame the node
 //     declines is dropped;

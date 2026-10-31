@@ -7,7 +7,7 @@ import (
 )
 
 // oobCollector exposes the OOB management frame counters on every scrape,
-// the same bridge pattern as the HeMB counters: no registration of
+// the same bridge pattern as the delivery counters: no registration of
 // individual series, the process-wide snapshot is read when asked.
 // [MESHSAT-756]
 type oobCollector struct {

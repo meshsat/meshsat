@@ -91,10 +91,9 @@ func (t *TCPInterface) Start(ctx context.Context) error {
 
 // Send transmits a Reticulum packet to all connected peers (HDLC framed).
 // Returns an error when there are no peers to send to — previously this
-// was a silent success, which hid bond-bearer failures where tcp_0 was
-// configured with zero peers. A real error here lets the HeMB bonder's
-// per-bearer error log fire so operators see the "no peers" gap.
-// [MESHSAT-672]
+// was a silent success, which hid send failures where tcp_0 was
+// configured with zero peers. A real error here lets the caller's error
+// log fire so operators see the "no peers" gap. [MESHSAT-672]
 func (t *TCPInterface) Send(ctx context.Context, packet []byte) error {
 	frame := reticulum.HDLCFrame(packet)
 

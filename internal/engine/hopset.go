@@ -12,7 +12,6 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"meshsat/internal/database"
-	"meshsat/internal/hemb"
 	"meshsat/internal/hopwire"
 )
 
@@ -51,8 +50,8 @@ import (
 //     use; a device-less link is never absent): out of use whatever the floor
 //     says, and not counted for it (R46-V4).
 //   - Every net change of a link's state, retention or down is audited once
-//     per evaluation; a link going out of use or back into use is a HeMB
-//     bearer event (R46-V5).
+//     per evaluation; a link going out of use or back into use is an event
+//     on the bridge's event stream (R46-V5).
 //   - Part two: a scheduled time-sync request answered on the free link it
 //     went out on is a probe, a positive sign that is no frame heard for the
 //     silence rule. On APRS the answer comes in on routing interface ax25_N,
@@ -349,7 +348,7 @@ type HopSetManager struct {
 	receive   ReceiveChecker
 	avail     func(ifaceID string) (up, known bool)
 	audit     func(eventType, ifaceID, detail string)
-	publish   func(hemb.Event)
+	publish   func(HopEvent)
 	links     map[string]*hopLink
 	peers     map[uint16]HopPeerStatus // the latest report of each OOB peer, shown only
 	onChange  func(gen uint64)         // a link went out of use or back into use
@@ -549,8 +548,25 @@ func (m *HopSetManager) SetAudit(f func(eventType, ifaceID, detail string)) {
 	m.mu.Unlock()
 }
 
-// SetPublisher sets where the HeMB bearer events go.
-func (m *HopSetManager) SetPublisher(f func(hemb.Event)) {
+// HopEvent is a link going out of use or back into use, or the alarm. The
+// Bridge sends it on /api/events (cmd/meshsat/main.go). These went out on
+// the HeMB event bus as HEMB_BEARER_DEGRADED / _RECOVERED until HeMB v1
+// was removed. [MESHSAT-1763]
+type HopEvent struct {
+	Type    string
+	Time    time.Time
+	Payload json.RawMessage
+}
+
+// Event names a HopEvent carries.
+const (
+	HopEventLinkDegraded  = "HOPSET_LINK_DEGRADED"
+	HopEventLinkRecovered = "HOPSET_LINK_RECOVERED"
+	HopEventAlarm         = "HOPSET_ALARM"
+)
+
+// SetPublisher sets where the hop set's events go.
+func (m *HopSetManager) SetPublisher(f func(HopEvent)) {
 	m.mu.Lock()
 	m.publish = f
 	m.mu.Unlock()
@@ -804,7 +820,7 @@ func (m *HopSetManager) PaidAttempt(ifaceID string) {
 		}
 		f.lastAlarm = now
 		detail := fmt.Sprintf("free bearer %s out of use, %s (%s), while a paid attempt goes out on %s", f.id, f.state, f.reason, ifaceID)
-		out = append(out, m.emitLocked("hopset_alarm", "HOPSET_ALARM", f, detail)...)
+		out = append(out, m.emitLocked("hopset_alarm", HopEventAlarm, f, detail)...)
 	}
 	gen := m.gen
 	m.mu.Unlock()
@@ -1051,10 +1067,10 @@ func (m *HopSetManager) evaluateLocked(now time.Time) hopOut {
 		}
 		switch now := usable(l); {
 		case was.usable && !now:
-			out = append(out, m.eventLocked(string(hemb.EventBearerDegraded), l)...)
+			out = append(out, m.eventLocked(HopEventLinkDegraded, l)...)
 			changed = true
 		case !was.usable && now:
-			out = append(out, m.eventLocked(string(hemb.EventBearerRecovered), l)...)
+			out = append(out, m.eventLocked(HopEventLinkRecovered, l)...)
 			changed = true
 		}
 	}
@@ -1192,8 +1208,8 @@ func (m *HopSetManager) auditLocked(l *hopLink) hopOut {
 	return hopOut{func() { audit(typ, id, detail) }}
 }
 
-// eventLocked prepares a HeMB bearer event for a link going out of use or
-// back into use.
+// eventLocked prepares the event for a link going out of use or back into
+// use.
 func (m *HopSetManager) eventLocked(event string, l *hopLink) hopOut {
 	publish := m.publish
 	if publish == nil {
@@ -1201,12 +1217,12 @@ func (m *HopSetManager) eventLocked(event string, l *hopLink) hopOut {
 	}
 	payload, _ := json.Marshal(map[string]any{"interface_id": l.id, "state": l.state, "reason": l.reason,
 		"retained": l.retained, "deaf": l.deaf, "absent": l.absent, "signs": append([]HopSign{}, l.negatives...), "mode": m.mode()})
-	ev := hemb.Event{Type: hemb.EventType(event), Timestamp: m.now(), Payload: payload}
+	ev := HopEvent{Type: event, Time: m.now(), Payload: payload}
 	return hopOut{func() { publish(ev) }}
 }
 
-// emitLocked prepares an audit entry and, when event is set, a HeMB event
-// (the alarm's).
+// emitLocked prepares an audit entry and, when event is set, an event (the
+// alarm's).
 func (m *HopSetManager) emitLocked(auditType, event string, l *hopLink, detail string) hopOut {
 	audit, publish := m.audit, m.publish
 	id, full := l.id, detail+" ("+m.mode()+")"
@@ -1216,7 +1232,7 @@ func (m *HopSetManager) emitLocked(auditType, event string, l *hopLink, detail s
 	}
 	if event != "" && publish != nil {
 		payload, _ := json.Marshal(map[string]any{"interface_id": id, "state": l.state, "reason": l.reason, "mode": m.mode()})
-		ev := hemb.Event{Type: hemb.EventType(event), Timestamp: m.now(), Payload: payload}
+		ev := HopEvent{Type: event, Time: m.now(), Payload: payload}
 		out = append(out, func() { publish(ev) })
 	}
 	return out

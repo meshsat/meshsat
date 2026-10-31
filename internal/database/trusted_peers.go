@@ -10,7 +10,7 @@ import (
 // [MESHSAT-636]
 //
 // Timestamps are stored as ISO-8601 strings — matches the rest of the
-// database/ package (hemb_events, directory_* etc.) because the
+// database/ package (directory_* etc.) because the
 // modernc.org/sqlite driver scans DATETIME into driver.Value of type
 // string. Callers that need time.Time can parse on the way out.
 type TrustedPeer struct {

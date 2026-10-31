@@ -1987,6 +1987,20 @@ var migrations = []string{
 	`ALTER TABLE tak_chat_threads ADD COLUMN bearer TEXT NOT NULL DEFAULT '';
 	ALTER TABLE tak_chat_threads ADD COLUMN message_id TEXT NOT NULL DEFAULT '';
 	ALTER TABLE tak_chat_threads ADD COLUMN reply_here INTEGER NOT NULL DEFAULT 0;`,
+
+	// v87: HeMB v1 (RLNC bonding) is removed; HeMB-NG replaced it. Its bond
+	// groups, members and event history go. A rule that still forwards to
+	// a bond group is switched off first, so it never resolves the group's
+	// id as an interface name. message_deliveries keeps its two dead
+	// hemb_* columns (v40): dropping columns from the live ledger buys
+	// nothing. The keystore's bond:<id> keys stay, inert. The CREATE only
+	// lets the UPDATE run on a database rewound past this version (tests
+	// re-apply it); it makes nothing that outlives the DROP. [MESHSAT-1763]
+	`CREATE TABLE IF NOT EXISTS bond_groups (id TEXT PRIMARY KEY);
+	UPDATE access_rules SET enabled = 0 WHERE forward_to IN (SELECT id FROM bond_groups);
+	DROP TABLE IF EXISTS bond_members;
+	DROP TABLE IF EXISTS bond_groups;
+	DROP TABLE IF EXISTS hemb_events;`,
 }
 
 // postMigration is what a migration needs to know that its SQL cannot see:

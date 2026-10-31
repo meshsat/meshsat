@@ -199,7 +199,7 @@ func (db *DB) DispatchWorkFor(origin string) (map[string]bool, error) {
 }
 
 // NoteDispatchWork lists work of origin that was made without a delivery row (a send
-// that keeps none, a HeMB bond's).
+// that keeps none; HeMB v1's bonded sends were the one until MESHSAT-1763).
 func (db *DB) NoteDispatchWork(origin, work string) error {
 	_, err := db.Exec(`INSERT OR IGNORE INTO dispatch_work (origin, work, created_at) VALUES (?, ?, ?)`,
 		origin, work, time.Now().UnixMilli())

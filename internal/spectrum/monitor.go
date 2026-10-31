@@ -12,8 +12,6 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
-
-	"meshsat/internal/hemb"
 )
 
 // SigningService is the interface for audit logging (avoids circular import).
@@ -29,7 +27,7 @@ type SpectrumMonitor struct {
 	status   map[string]*BandStatus
 	baseline map[string]*Baseline
 	signing  SigningService
-	eventBus *hemb.EventBus
+	emit     func(eventType string, payload json.RawMessage) // nil = no events; main.go sends them on /api/events
 	cancel   context.CancelFunc
 	enabled  bool
 	// lastRound is how long the last completed scan of every band took;
@@ -44,8 +42,8 @@ type SpectrumMonitor struct {
 	// SetHistoryStore in main.go after the DB is open. [MESHSAT-650]
 	//
 	// Writes retry forever. A 5 s context timeout is a transient symptom
-	// (DB busy during boot-time contention with migrations / keystore /
-	// HeMB init), not a permanent failure — so we never latch "disabled".
+	// (DB busy during boot-time contention with migrations / keystore
+	// init), not a permanent failure — so we never latch "disabled".
 	// Errors are rate-limited to one warning per minute to avoid log
 	// flooding, and a recovery line fires when writes resume after an
 	// error window. [MESHSAT-653]
@@ -285,7 +283,6 @@ func NewSpectrumMonitor(scanner Scanner, bands []Band) *SpectrumMonitor {
 		bands:    bands,
 		status:   status,
 		baseline: make(map[string]*Baseline),
-		eventBus: hemb.GlobalEventBus,
 		enabled:  scanner != nil && scanner.Available(),
 	}
 }
@@ -293,6 +290,13 @@ func NewSpectrumMonitor(scanner Scanner, bands []Band) *SpectrumMonitor {
 // SetSigningService sets the audit logging service.
 func (m *SpectrumMonitor) SetSigningService(ss SigningService) {
 	m.signing = ss
+}
+
+// SetEventSink sets where a band's state change (SPECTRUM_<STATE>) goes;
+// main.go sends it on /api/events. Call it before Start. It went out on the
+// HeMB event bus until HeMB v1 was removed. [MESHSAT-1763]
+func (m *SpectrumMonitor) SetEventSink(f func(eventType string, payload json.RawMessage)) {
+	m.emit = f
 }
 
 // SetHistoryStore wires the persistence backend. Safe to call before
@@ -567,7 +571,7 @@ func (m *SpectrumMonitor) persist(evt SpectrumEvent) {
 		// 15 s is enough headroom for early-boot SQLite contention while
 		// still keeping a single stuck write from piling up goroutines.
 		// Healthy saves finish in <10 ms; the long tail we care about is
-		// migrations / keystore / HeMB init fighting for the writer lock.
+		// migrations / keystore init fighting for the writer lock.
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 
@@ -1305,16 +1309,12 @@ func (m *SpectrumMonitor) onTransition(band Band, oldState, newState SpectrumSta
 		Float64("power_db", avgPower).
 		Msg("spectrum: state transition")
 
-	// Publish SSE event
-	if m.eventBus != nil {
+	// Publish the event (/api/events).
+	if m.emit != nil {
 		detail := fmt.Sprintf("band=%s interface=%s power=%.1fdB",
 			band.Name, band.InterfaceID, avgPower)
 		payload, _ := json.Marshal(map[string]string{"detail": detail})
-		m.eventBus.Publish(hemb.Event{
-			Type:      hemb.EventType(fmt.Sprintf("SPECTRUM_%s", strings.ToUpper(string(newState)))),
-			Timestamp: time.Now(),
-			Payload:   payload,
-		})
+		m.emit(fmt.Sprintf("SPECTRUM_%s", strings.ToUpper(string(newState))), payload)
 	}
 
 	// Audit log

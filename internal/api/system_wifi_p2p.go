@@ -25,8 +25,6 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
-
-	"meshsat/internal/database"
 )
 
 // cryptoRandRead is a tiny indirection so tests can stub RNG if ever needed.
@@ -293,8 +291,7 @@ func (s *Server) handleWiFiP2PConnect(w http.ResponseWriter, r *http.Request) {
 	log.Info().Str("iface", req.Interface).Str("peer", req.PeerAddr).Msg("wifi-p2p: PIN-authenticated connect initiated")
 
 	// Close the gap: once the group comes up (async, ~2-8s), auto-add
-	// the peer to our Reticulum TCP peer list and enrol tcp_0 in the
-	// default HeMB bond. The operator shouldn't have to copy IPs
+	// the peer to our Reticulum TCP peer list. The operator shouldn't have to copy IPs
 	// around. Runs in a goroutine so the HTTP response returns
 	// immediately — the poll-and-wire happens out-of-band. [MESHSAT-647]
 	go s.autoWireP2PPeer(req.PeerAddr)
@@ -305,9 +302,8 @@ func (s *Server) handleWiFiP2PConnect(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// autoWireP2PPeer waits for the group to form, then enrols tcp_0 in
-// any existing HeMB bond group and kicks the overlay reconciler to
-// immediately apply the role-keyed IPv4 overlay + register the TCP
+// autoWireP2PPeer waits for the group to form, then kicks the overlay
+// reconciler to immediately apply the role-keyed IPv4 overlay + register the TCP
 // peer. The reconciler (running continuously) handles re-anchoring
 // on iface rename/teardown, so this function's only job is to speed
 // up the first-time setup — the next 2-second reconcile tick would
@@ -325,8 +321,8 @@ func (s *Server) autoWireP2PPeer(peerMAC string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
 
-	// Wait for the group to come up before touching the bond — we
-	// want to tell the reconciler to run only after wpa_supplicant
+	// Wait for the group to come up: we want to tell the reconciler to
+	// run only after wpa_supplicant
 	// has a real group-iface to bind the overlay to.
 	for i := 0; i < 24; i++ {
 		st, _ := readP2PStatus(ctx, "")
@@ -334,42 +330,6 @@ func (s *Server) autoWireP2PPeer(peerMAC string) {
 			break
 		}
 		time.Sleep(1 * time.Second)
-	}
-
-	// HeMB bond membership — add tcp_0 to any existing bond group if
-	// not already there. Leave alone if operator already enrolled it.
-	// [MESHSAT-647 + MESHSAT-421]
-	bondMutated := false
-	if s.db != nil {
-		groups, err := s.db.GetAllBondGroups()
-		if err == nil {
-			for _, g := range groups {
-				members, _ := s.db.GetBondMembers(g.ID)
-				hasTCP := false
-				for _, m := range members {
-					if m.InterfaceID == "tcp_0" {
-						hasTCP = true
-						break
-					}
-				}
-				if !hasTCP {
-					_ = s.db.InsertBondMember(&database.BondMember{
-						GroupID:     g.ID,
-						InterfaceID: "tcp_0",
-						Priority:    len(members),
-					})
-					bondMutated = true
-					log.Info().Str("bond", g.ID).Msg("wifi-p2p: enrolled tcp_0 in existing bond group")
-				}
-			}
-		}
-	}
-	// Hot-reload the TUN bonder's bearer list so tcp_0 actually carries
-	// HeMB-coded frames on the next Send() — without this the bonder
-	// keeps the stale boot-time bearer slice and tcp_0 gets skipped
-	// until a bridge restart. [MESHSAT-647]
-	if bondMutated {
-		s.rebuildHeMBBearers()
 	}
 
 	// Kick the reconciler so the overlay IP + TCP peer are set up

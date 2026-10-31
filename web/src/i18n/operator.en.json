@@ -57,7 +57,6 @@
   "concept.announce":           "I'm here broadcast",
   "concept.precedence":         "Priority",
   "concept.key_bundle":         "Security key",
-  "concept.hemb":               "Multi-radio send",
   "concept.store_forward":      "Outbox",
   "concept.qos":                "Importance",
   "concept.transform_pipeline": "Pre-send processing",

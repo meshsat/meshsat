@@ -37,8 +37,7 @@ const (
 // but `ax25_0` is the Reticulum-over-AX.25 routing interface (dst=RTICUL)
 // and `aprs_0` is the APRS gateway (dst=APMSHT). Both are free.
 // Previously `ax25` fell through to the default `return 1.0` path,
-// which made the HeMB allocator classify it as a paid bearer and
-// exclude it from bond allocation. [MESHSAT-672]
+// which made it read as a paid link. [MESHSAT-672]
 func InterfaceCost(iface InterfaceType) float64 {
 	switch iface {
 	case IfaceMesh, IfaceZigBee, IfaceAPRS, IfaceAX25, IfaceBLE, IfaceTCP, IfaceMQTT, IfaceWebhook,

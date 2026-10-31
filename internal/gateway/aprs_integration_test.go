@@ -458,7 +458,7 @@ func TestAPRSIntegration_MalformedEncryptedFrameDoesNotCrash(t *testing.T) {
 // existing plaintext-APRS wire format (WIDE1-1,WIDE2-1 digipeater path,
 // `[MeshSat !xxx] ...` attribution) still applies when msg.Encrypted is
 // left unset. This is the regression guard that encryption doesn't
-// leak into messages it was never asked to touch (HeMB raw sends, SOS,
+// leak into messages it was never asked to touch (raw sends, SOS,
 // hub-initiated traffic, etc.).
 func TestAPRSIntegration_PlaintextUnchangedWhenEncryptedFalse(t *testing.T) {
 	tnc := newMockKISSTNC(t)

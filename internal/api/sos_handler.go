@@ -92,7 +92,7 @@ type sosActivateBody struct {
 func (s *Server) handleSOSActivate(w http.ResponseWriter, r *http.Request) {
 	// Best-effort trigger capture so the signed audit-log entry can
 	// record whether the activation came from the 3-s hold, the
-	// double-tap, or an external caller (CLI, TAK, HeMB). Unknown =
+	// double-tap, or an external caller (CLI, TAK). Unknown =
 	// "manual". [MESHSAT-562]. The message is the caller's words for every
 	// route (the apps' "SOS: <name> needs help. At <position> at <time>.");
 	// without one the fixed sentence goes. [MESHSAT-1397] A body that does

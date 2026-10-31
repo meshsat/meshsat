@@ -952,88 +952,8 @@ const opNextPass = computed(() => {
   }
 })
 
-// Per-interface "up" predicate by interface_id prefix — used by the bond
-// renderer so each member of a HeMB group gets its own health dot.
-function ifaceOK(id) {
-  if (!id) return false
-  if (id.startsWith('mesh_'))     return opMeshOK.value
-  if (id.startsWith('ax25_'))     return opAprsOK.value
-  if (id.startsWith('sbd_') ||
-      id.startsWith('imt_') ||
-      id.startsWith('iridium_'))  return opSatOK.value
-  if (id.startsWith('cellular_') ||
-      id.startsWith('sms_'))      return opCellOK.value
-  // tcp_/ble_/zigbee_/mqtt_rns_ — check the Reticulum routing
-  // registry's online bit. The registry is the authoritative source
-  // for these Reticulum-native interfaces — anything else here would
-  // be guessing. If the registry hasn't loaded yet, treat as down
-  // rather than silently green.
-  if (id.startsWith('tcp_') ||
-      id.startsWith('ble_') ||
-      id.startsWith('zigbee_') ||
-      id.startsWith('mqtt_rns_')) {
-    const iface = (store.routingInterfaces || []).find(i => i.id === id)
-    return !!(iface && iface.online)
-  }
-  return false
-}
-
-// Active bond: first HeMB group with at least one member currently up.
-// We consider a bond "active" at presence + 1 member because the bond is
-// the routing target regardless of per-member health — HeMB's whole point
-// is to degrade gracefully when some bearers drop.  The widget then shows
-// a dot per member so the operator sees which bearers are actually carrying
-// the parallel transmission.
-const opActiveBond = computed(() => {
-  for (const g of (store.bondGroups || [])) {
-    const members = Array.isArray(g.members) ? g.members : []
-    if (members.length === 0) continue
-    if (members.some(m => ifaceOK(m.interface_id))) return g
-  }
-  return null
-})
-
-// Primary channel for outbound traffic.  Prefer an active HeMB bond (which
-// transmits over N bearers in parallel); fall back to the single-bearer
-// cascade only when no bond is configured or all bonds have all members
-// offline.
-// Map an interface_id to a human-readable short label for the
-// HeMB tile subtitle. Dynamic so newly-enrolled bearers (tcp_0 from
-// the WiFi-Direct auto-wire, ble_peer_N from future BLE mesh peers,
-// etc.) don't need a DB update to show up as "TCP" / "BLE".
-function bearerShortLabel(id) {
-  if (!id) return ''
-  if (id.startsWith('mesh_'))       return 'Mesh'
-  if (id.startsWith('ax25_'))       return 'APRS'
-  if (id.startsWith('iridium_imt')) return 'IMT'
-  if (id.startsWith('iridium_'))    return 'SBD'
-  if (id.startsWith('sms_'))        return 'SMS'
-  if (id.startsWith('cellular_'))   return 'Cell'
-  if (id.startsWith('tcp_'))        return 'TCP'
-  if (id.startsWith('ble_'))        return 'BLE'
-  if (id.startsWith('zigbee_'))     return 'ZB'
-  if (id.startsWith('mqtt_rns_'))   return 'MQTT'
-  return id
-}
-
+// Primary channel for outbound traffic: the single-bearer cascade.
 const opPrimaryChannel = computed(() => {
-  const bond = opActiveBond.value
-  if (bond) {
-    const members = Array.isArray(bond.members) ? bond.members : []
-    const upCount = members.filter(m => ifaceOK(m.interface_id)).length
-    // Build the subtitle from actual members — don't trust the DB
-    // label, which freezes at bond-creation time even after
-    // MESHSAT-647 auto-enrols tcp_0 / ble_peer_N etc.
-    const subtitle = members.map(m => bearerShortLabel(m.interface_id)).join('+')
-    return {
-      name: 'HeMB',
-      subtitle,
-      bars: null,
-      detail: `${upCount}/${members.length} bearers up`,
-      tint: 'text-teal-400',
-      bond,
-    }
-  }
   if (opMeshOK.value) return { name: 'Mesh', bars: null, detail: 'LoRa 868 MHz', tint: 'text-tactical-lora' }
   if (opAprsOK.value) return { name: 'APRS', bars: null,
     detail: `${store.aprsStatus?.frequency_mhz || 144.8} MHz · ${store.aprsStatus?.callsign || ''}`,
@@ -1571,17 +1491,13 @@ async function fetchAll() {
     store.fetchInterfaces(),
     store.fetchHealthScores(),
     store.fetchBurstStatus(),
-    store.fetchHeMBStats(),
     store.fetchReticulumStatus(),
-    // Reticulum routing registry — ifaceOK() uses this to render
-    // per-bearer health dots for tcp_/ble_/mqtt_rns_ members.
     store.fetchRoutingInterfaces(),
     store.fetchWebhookLog(),
     store.fetchConfig(),
     store.fetchAPRSStatus(),
     store.fetchAPRSHeard(),
     store.fetchAPRSActivity(),
-    store.fetchBondGroups(),
     store.fetchZigBeeStatus(),
     store.fetchZigBeeDevices(),
     store.fetchZigBeePermitJoin()
@@ -1626,7 +1542,6 @@ onMounted(() => {
     store.fetchAPRSHeard()
     store.fetchAPRSActivity()
     store.fetchDeviceHealth()
-    store.fetchBondGroups()
     store.fetchZigBeeStatus()
     store.fetchZigBeeDevices()
     store.fetchZigBeePermitJoin()
@@ -1797,29 +1712,14 @@ function widgetGridClass(id) {
           </div>
         </router-link>
 
-        <!-- Active primary comms — honours HeMB bond groups: when a bond
-             is the outbound route we show the bond label + a dot per member
-             bearer (green=up, red=down). Otherwise we fall through to the
-             single-bearer cascade (Mesh → APRS → Sat → Cell). -->
-        <router-link :to="opPrimaryChannel.bond ? '/hemb' : '/radios'"
+        <!-- Active primary comms: the single-bearer cascade (Mesh → APRS →
+             Sat → Cell). It showed a HeMB bond here until HeMB v1 was
+             removed. [MESHSAT-1763] -->
+        <router-link to="/radios"
           class="bg-tactical-surface rounded-lg border border-tactical-border p-3 transition-colors hover:border-tactical-iridium/40">
           <div class="text-[10px] uppercase tracking-widest text-gray-500">Active Comms</div>
-          <!-- Primary label — "HeMB" stays at 2xl regardless of bearer
-               count. For single-bearer fallbacks (Mesh, APRS, Sat,
-               Cell, None) the same 2xl styling applies. -->
           <div class="text-2xl font-bold mt-2" :class="opPrimaryChannel.tint">
             {{ opPrimaryChannel.name }}
-          </div>
-          <!-- Bond subtitle — "Mesh+APRS+WiFi+..." computed from live
-               members.  Font shrinks as more bearers join so 5+
-               bearers still fit without breaking the row layout. -->
-          <div v-if="opPrimaryChannel.subtitle" class="font-semibold mt-0.5 leading-tight" :class="[
-              opPrimaryChannel.tint,
-              (opPrimaryChannel.bond?.members?.length || 0) <= 3 ? 'text-lg' :
-              (opPrimaryChannel.bond?.members?.length || 0) === 4 ? 'text-sm' :
-              'text-xs'
-            ]">
-            {{ opPrimaryChannel.subtitle }}
           </div>
           <!-- signal bars, only when a single-bearer cellular/sat channel is active -->
           <div v-if="opPrimaryChannel.bars != null" class="flex items-end gap-1 h-6 mt-2">
@@ -1828,27 +1728,7 @@ function widgetGridClass(id) {
               :class="opPrimaryChannel.bars >= i ? opPrimaryChannel.tint.replace('text-','bg-') : 'bg-gray-700/40'"
               :style="{ height: `${6 + i * 4}px` }" />
           </div>
-          <!-- bond-member chips — sizes scale down as bearer count
-               grows so 5+ fit. Pills wrap onto a second row if the
-               flex line overflows; -mx-0.5 compensates for the gap. -->
-          <div v-if="opPrimaryChannel.bond" class="flex flex-wrap items-center gap-1 mt-2">
-            <span v-for="m in opPrimaryChannel.bond.members" :key="m.interface_id"
-              class="inline-flex items-center gap-1 font-mono rounded whitespace-nowrap"
-              :class="[
-                ifaceOK(m.interface_id)
-                  ? 'bg-emerald-400/10 text-emerald-300 border border-emerald-500/30'
-                  : 'bg-red-500/10 text-red-300 border border-red-500/30',
-                (opPrimaryChannel.bond.members.length) <= 3 ? 'text-[10px] px-1.5 py-0.5' :
-                (opPrimaryChannel.bond.members.length) === 4 ? 'text-[9px] px-1 py-0.5'   :
-                'text-[9px] px-1 py-0'
-              ]"
-              :title="m.interface_id + (ifaceOK(m.interface_id) ? ' · up' : ' · down')">
-              <span class="w-1.5 h-1.5 rounded-full shrink-0"
-                :class="ifaceOK(m.interface_id) ? 'bg-emerald-400' : 'bg-red-500'" />
-              {{ m.interface_id }}
-            </span>
-          </div>
-          <div class="text-xs text-gray-500 mt-1" :class="(opPrimaryChannel.bond?.members?.length || 0) >= 5 ? 'text-[10px]' : 'text-xs'">
+          <div class="text-xs text-gray-500 mt-1">
             {{ opPrimaryChannel.detail }}
           </div>
           <!-- [MESHSAT-687] footer "X of 4 channels up" removed — duplicated
@@ -3212,29 +3092,6 @@ fingerprint: ${store.aprsStatus.encryption.key_fingerprint || '(unresolved)'}`">
             <span class="text-gray-500">Protocol</span>
             <span class="font-mono text-gray-300">{{ takGw.config.protocol === 'protobuf' ? 'Protobuf' : 'XML' }}{{ takGw.config.tak_ssl ? ' (TLS)' : '' }}</span>
           </div>
-        </div>
-      </div>
-
-      <!-- ═══ HeMB Bonding ═══ -->
-      <div v-if="wid === 'hemb'"
-        :class="['bg-tactical-surface rounded-lg border border-tactical-border p-4', widgetGridClass(wid), dragOver === wid ? 'ring-1 ring-tactical-iridium/40' : '']"
-        draggable="true" :data-widget-id="wid" :style="dragWidget === wid ? 'touch-action:none' : ''" @dragstart="onDragStart($event, wid)" @dragover="onDragOver($event, wid)" @dragleave="onDragLeave" @drop="onDrop($event, wid)" @dragend="onDragEnd" @touchmove="onTouchMove($event, wid)" @touchend="onTouchEnd">
-        <div class="flex items-center justify-between mb-3">
-          <div class="flex items-center gap-2">
-            <span class="p-2 -m-2 inline-flex items-center cursor-grab active:cursor-grabbing" data-drag-handle @touchstart.passive="onTouchStart($event, wid)" title="Drag to rearrange"><svg class="w-3.5 h-3.5 text-gray-600" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg></span>
-            <h2 class="font-display font-semibold text-sm text-teal-400 tracking-wide">HeMB BONDING</h2>
-          </div>
-          <router-link to="/hemb" class="text-[10px] text-gray-500 hover:text-gray-300">View &rarr;</router-link>
-        </div>
-        <div class="grid grid-cols-2 gap-2 text-xs">
-          <div class="flex justify-between"><span class="text-gray-500">Bond Groups</span>
-            <span class="font-mono text-gray-300">{{ store.hembStats?.active_streams ?? 0 }}</span></div>
-          <div class="flex justify-between"><span class="text-gray-500">Decoded</span>
-            <span class="font-mono text-emerald-400">{{ store.hembStats?.generations_decoded ?? 0 }}</span></div>
-          <div class="flex justify-between"><span class="text-gray-500">Failed</span>
-            <span class="font-mono text-red-400">{{ store.hembStats?.generations_failed ?? 0 }}</span></div>
-          <div class="flex justify-between"><span class="text-gray-500">Cost</span>
-            <span class="font-mono text-gray-300">${{ (store.hembStats?.cost_incurred ?? 0).toFixed(3) }}</span></div>
         </div>
       </div>
 

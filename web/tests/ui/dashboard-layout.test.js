@@ -27,6 +27,7 @@ test('an_old_saved_order_gains_new_widgets_in_their_default_place', () => {
   assert.equal(merged[0], 'mesh') // the person's order is kept
   assert.equal(merged[merged.indexOf('aprs') + 1], 'tetra') // TETRA after APRS, as by default
   assert.ok(!merged.includes('gone'))
+  assert.ok(!merged.includes('hemb'), 'the HeMB widget left with HeMB v1 [MESHSAT-1763]')
 })
 
 test('nothing_hides_or_is_announced_before_the_gateways_load', async () => {
@@ -108,11 +109,11 @@ test('show_anyway_and_reset', async () => {
   l.showAnyway('zigbee')
   assert.ok(l.visible.value.includes('zigbee'))
   assert.ok(!l.notDetected.value.some(w => w.id === 'zigbee'))
-  l.remove('hemb')
+  l.remove('burst')
   l.reorder(['activity', ...l.order.value.filter(x => x !== 'activity')])
   l.reset()
   assert.ok(!l.visible.value.includes('zigbee'), 'reset drops show-anyway')
-  assert.ok(l.visible.value.includes('hemb'), 'reset brings removed widgets back')
+  assert.ok(l.visible.value.includes('burst'), 'reset brings removed widgets back')
   assert.equal(l.order.value[0], 'iridium')
 })
 

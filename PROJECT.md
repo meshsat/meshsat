@@ -49,7 +49,6 @@ repository's README, local notes and PROJECT.md. Do not copy a number forward wi
 | engine/ | Dispatcher + scheduler + telemetry |
 | federation/ | Cross-bridge federation |
 | gateway/ | Transport bridge layer |
-| hemb/ | HeMB heterogeneous-media bonding |
 | hubreporter/ | Bridge→Hub MQTT protocol (meshsat-uplink/v1) |
 | keystore/ | Crypto key storage (Article IX) |
 | pair/ | Android pair-protocol v1 |

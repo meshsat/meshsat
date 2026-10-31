@@ -107,22 +107,6 @@ const ruleEdges = computed(() => {
   }).filter(Boolean)
 })
 
-const bondBrackets = computed(() => {
-  return (store.bondGroups.value || []).map(g => {
-    const ms = (g.members || []).map(m => {
-      const mid = typeof m === 'string' ? m : m.interface_id
-      return (ifacePositions.value || []).find(n => n.id === mid)
-    }).filter(Boolean)
-    if (ms.length < 2) return null
-    const xs = ms.map(m => m.x), ys = ms.map(m => m.y)
-    return {
-      id: g.id, label: g.label || g.id,
-      x: Math.min(...xs) - 60, y: Math.min(...ys) - 60,
-      w: Math.max(...xs) - Math.min(...xs) + 120, h: Math.max(...ys) - Math.min(...ys) + 120,
-    }
-  }).filter(Boolean)
-})
-
 // ── Auto-fit viewport (zoomed out) ──
 const autoViewBox = computed(() => {
   const all = [
@@ -192,14 +176,6 @@ const nOp = (id) => store.selectedNodeId.value ? (isSel(id) ? 1 : 0.15) : 1
         </filter>
       </defs>
       <rect :x="vb.x" :y="vb.y" :width="vb.w" :height="vb.h" fill="url(#dot-grid)"/>
-
-      <!-- Bond brackets -->
-      <g v-for="b in bondBrackets" :key="b.id">
-        <rect :x="b.x" :y="b.y" :width="b.w" :height="b.h" rx="14"
-          fill="none" stroke="#0d9488" stroke-width="1.5" stroke-dasharray="8 4" opacity="0.25"/>
-        <text :x="b.x + b.w/2" :y="b.y - 10" text-anchor="middle"
-          fill="#0d9488" font-size="11" opacity="0.4">{{ b.label }}</text>
-      </g>
 
       <!-- Rule edges (curved, orange, with arrow) -->
       <g v-for="r in ruleEdges" :key="r.id">

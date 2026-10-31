@@ -339,12 +339,10 @@ func TestTransformPipeline_DualReadCoexistence(t *testing.T) {
 // key_refs resolve through the existing KeyResolver without changes
 // (the resolver is generic over "<type>:<address>" pairs) and that a
 // full smaz2 → AES-256-GCM → base64 chain round-trips correctly for
-// a realistic bond-payload size. This is the transform layer the
-// dispatcher calls BEFORE handing the payload to the HeMB bonder
-// (MESHSAT-664 encrypt-then-code ordering). The HeMB layer downstream
-// treats the ciphertext as opaque bytes and its coding/reconstruction
-// is covered by the existing HeMB tests — here we're only verifying
-// that the transform wrapper composes.
+// a realistic payload size. HeMB v1's bonder used this chain for its
+// encrypt-then-code ordering (MESHSAT-664) until it was removed
+// (MESHSAT-1763); the test still guards that a "<type>:<address>" key
+// reference and the transform wrapper compose.
 func TestTransformPipeline_BondKeyRef_RoundTrip(t *testing.T) {
 	tp := NewTransformPipeline()
 	tp.SetKeyResolver(stubKeyResolver{hexKey: strings.Repeat("cd", 32)})

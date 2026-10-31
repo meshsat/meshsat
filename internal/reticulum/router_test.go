@@ -238,7 +238,7 @@ func TestInterfaceCost(t *testing.T) {
 		t.Error("MQTT should be free")
 	}
 	if InterfaceCost(IfaceAX25) != 0 {
-		t.Error("AX.25 should be free — a non-zero cost excludes ax25_0 from HeMB bond allocation [MESHSAT-672]")
+		t.Error("AX.25 should be free — a non-zero cost makes ax25_0 read as a paid link [MESHSAT-672]")
 	}
 	if InterfaceCost(IfaceBLE) != 0 {
 		t.Error("BLE should be free")

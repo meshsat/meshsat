@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"meshsat/internal/database"
-	"meshsat/internal/hemb"
 )
 
 // hopRig is a hop set on a fake clock over a fixed list of links, with the
@@ -55,7 +54,7 @@ func newHopRigCfg(t *testing.T, cfg HopSetConfig, links ...string) *hopRig {
 	r.m.SetSpectrum(r)
 	r.m.SetReceiveChecker(r)
 	r.m.SetAudit(func(typ, id, _ string) { r.mu.Lock(); r.audits = append(r.audits, typ+" "+id); r.mu.Unlock() })
-	r.m.SetPublisher(func(e hemb.Event) { r.mu.Lock(); r.events = append(r.events, string(e.Type)); r.mu.Unlock() })
+	r.m.SetPublisher(func(e HopEvent) { r.mu.Lock(); r.events = append(r.events, e.Type); r.mu.Unlock() })
 	return r
 }
 
@@ -510,7 +509,7 @@ func TestHopSetFloor(t *testing.T) {
 	}
 	deg := 0
 	for _, e := range events {
-		if e == string(hemb.EventBearerDegraded) {
+		if e == HopEventLinkDegraded {
 			deg++
 		}
 	}
@@ -589,8 +588,8 @@ func TestHopSetDownAndFloorRepair(t *testing.T) {
 	}
 }
 
-// Exclusions and re-admissions are audited and published as the HeMB
-// bearer events; the alarm fires on a paid attempt while a free link is
+// Exclusions and re-admissions are audited and published as
+// HOPSET_LINK_DEGRADED / _RECOVERED; the alarm fires on a paid attempt while a free link is
 // excluded, once per AlarmEvery.
 func TestHopSetEventsAndAlarm(t *testing.T) {
 	r := newHopRig(t, threeFree...)
@@ -618,7 +617,7 @@ func TestHopSetEventsAndAlarm(t *testing.T) {
 	for _, e := range r.events {
 		ev[e]++
 	}
-	if ev[string(hemb.EventBearerDegraded)] != 1 || ev[string(hemb.EventBearerRecovered)] != 1 || ev["HOPSET_ALARM"] != 1 {
+	if ev[HopEventLinkDegraded] != 1 || ev[HopEventLinkRecovered] != 1 || ev[HopEventAlarm] != 1 {
 		t.Errorf("events %v, want one DEGRADED, one RECOVERED, one HOPSET_ALARM", r.events)
 	}
 }

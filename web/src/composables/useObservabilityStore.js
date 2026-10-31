@@ -9,14 +9,11 @@ const meshTopology = ref(null)
 const reticulumIdentity = ref(null)
 const reticulumPeers = ref([])
 const accessRules = ref([])
-const bondGroups = ref([])
-const hembStats = ref(null)
 const deliveryStats = ref([])
 const bridgeStatus = ref(null)
 
 const events = ref([])
 const sseHandle = ref(null)
-const hembSseHandle = ref(null)
 const connected = ref(false)
 const MAX_EVENTS = 500
 
@@ -64,14 +61,6 @@ export function useObservabilityStore() {
     try { accessRules.value = await api.get('/access-rules') } catch {}
   }
 
-  async function fetchBondGroups() {
-    try { bondGroups.value = await api.get('/bond-groups') } catch {}
-  }
-
-  async function fetchHembStats() {
-    try { hembStats.value = await api.get('/hemb/stats') } catch {}
-  }
-
   async function fetchDeliveryStats() {
     try { deliveryStats.value = await api.get('/deliveries/stats') } catch {}
   }
@@ -95,28 +84,12 @@ export function useObservabilityStore() {
       })
       while (events.value.length > MAX_EVENTS) events.value.pop()
     })
-    // HeMB events
-    hembSseHandle.value = api.sse('/hemb/events?replay=50', (event) => {
-      if (!event?.type || event.type === 'hemb_connected') {
-        connected.value = true
-        return
-      }
-      events.value.unshift({
-        ts: event.ts || new Date().toISOString(),
-        type: event.type,
-        source: 'hemb',
-        payload: event.payload || event,
-      })
-      while (events.value.length > MAX_EVENTS) events.value.pop()
-    })
     connected.value = true
   }
 
   function closeSSE() {
     sseHandle.value?.close?.()
-    hembSseHandle.value?.close?.()
     sseHandle.value = null
-    hembSseHandle.value = null
     connected.value = false
   }
 
@@ -131,8 +104,6 @@ export function useObservabilityStore() {
       fetchMeshTopology(),
       fetchReticulum(),
       fetchAccessRules(),
-      fetchBondGroups(),
-      fetchHembStats(),
       fetchDeliveryStats(),
     ])
   }
@@ -206,7 +177,6 @@ export function useObservabilityStore() {
       const p = e.payload
       if (typeof p === 'object') {
         if (p.interface_id === id || p.source_iface === id) return true
-        if (p.bearer_type === id || p.bearer_idx !== undefined) return true
         if (p.forward_to === id) return true
       }
       if (e.type?.includes(id)) return true
@@ -218,7 +188,7 @@ export function useObservabilityStore() {
     // State
     interfaces, gateways, meshNodes, meshTopology,
     reticulumIdentity, reticulumPeers, accessRules,
-    bondGroups, hembStats, deliveryStats, bridgeStatus,
+    deliveryStats, bridgeStatus,
     events, connected, selectedNodeId,
     // Computed
     interfaceNodes, meshNodeList, peerNodes, ruleEdges,
@@ -226,6 +196,5 @@ export function useObservabilityStore() {
     // Methods
     fetchAll, connectSSE, closeSSE, selectNode,
     fetchInterfaces, fetchGateways, fetchMeshNodes,
-    fetchHembStats,
   }
 }

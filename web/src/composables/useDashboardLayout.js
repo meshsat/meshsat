@@ -33,7 +33,6 @@ export const WIDGETS = [
   { id: 'location',  label: 'Location',   kind: 'core' },
   { id: 'queue',     label: 'Queue',      kind: 'core' },
   { id: 'burst',     label: 'Burst queue', kind: 'software' },
-  { id: 'hemb',      label: 'HeMB bond',  kind: 'software' },
   { id: 'activity',  label: 'Activity',   kind: 'core' },
 ]
 const BY_ID = Object.fromEntries(WIDGETS.map(w => [w.id, w]))

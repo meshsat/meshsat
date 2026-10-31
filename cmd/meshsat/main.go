@@ -36,7 +36,6 @@ import (
 	"meshsat/internal/engine"
 	"meshsat/internal/federation"
 	"meshsat/internal/gateway"
-	"meshsat/internal/hemb"
 	"meshsat/internal/hubreporter"
 	"meshsat/internal/hubroute"
 	"meshsat/internal/keystore"
@@ -1218,8 +1217,8 @@ func main() {
 			log.Error().Err(err).Msg("sms reticulum interface start failed")
 		} else {
 			proc.RegisterPacketSender("sms_0", smsIface.Send)
-			// Also register as cellular_0 so HeMB bond groups can use cellular as a bearer.
-			// The sms_0 interface wraps CellTransport — cellular_0 is the same physical transport. [MESHSAT-448]
+			// Also register as cellular_0: the sms_0 interface wraps CellTransport,
+			// so cellular_0 is the same physical transport. [MESHSAT-448]
 			proc.RegisterPacketSender("cellular_0", smsIface.Send)
 			if ifaceReg != nil {
 				ifaceReg.Register(smsRI)
@@ -1542,8 +1541,6 @@ func main() {
 	}
 	dispatcher.SetTransformPipeline(transforms)
 	// KeyResolver wired after keystore init below [MESHSAT-447]
-	// Wire Reticulum packet senders into dispatcher for HeMB bearer resolution.
-	dispatcher.SetPacketSenderProvider(proc)
 
 	// DTN custody manager (MESHSAT-408)
 	custodyMgr := engine.NewCustodyManager(60 * time.Second)
@@ -1742,6 +1739,11 @@ func main() {
 	if signingService != nil {
 		spectrumMon.SetSigningService(signingService)
 	}
+	// A band's state change goes out on /api/events. [MESHSAT-1763]
+	spectrumMon.SetEventSink(func(eventType string, payload json.RawMessage) {
+		proc.Emit(transport.MeshEvent{Type: eventType, Message: "spectrum", Data: payload,
+			Time: time.Now().UTC().Format(time.RFC3339)})
+	})
 	// MESHSAT-650: wire persistence before Start so the retention
 	// goroutine fires alongside the scan loop. Retention window is
 	// operator-tunable; ClampRetention guards us against zero/huge
@@ -1851,8 +1853,8 @@ func main() {
 	// deaf; the deaf checkers join the scorer further down. Deliberate
 	// exceptions that don't consult it: PRIMARY_ONLY, a round 1 whose every
 	// admitted route is excluded (it still sends), a group with no usable
-	// member online (its first enabled member holds the deliveries), a
-	// direct interface target, and HeMB bond allocation. [MESHSAT-1650]
+	// member online (its first enabled member holds the deliveries) and a
+	// direct interface target. [MESHSAT-1650]
 	//
 	// The hop set (slice (b) of media hopping) keeps per link a state built
 	// from contact-independent evidence. The media hopping switch (Settings >
@@ -1879,7 +1881,12 @@ func main() {
 			signingService.AuditEvent(eventType, &ifaceID, nil, nil, nil, detail)
 		})
 	}
-	hopSet.SetPublisher(hemb.GlobalEventBus.Publish)
+	// A link going out of use or back into use, and the alarm, go out on
+	// /api/events. [MESHSAT-1763]
+	hopSet.SetPublisher(func(e engine.HopEvent) {
+		proc.Emit(transport.MeshEvent{Type: e.Type, Message: "media hopping", Data: e.Payload,
+			Time: e.Time.UTC().Format(time.RFC3339)})
+	})
 	dispatcher.SetHopSigns(hopSet)
 	proc.SetHopSigns(hopSet)
 	srv.SetHopSet(hopSet)
@@ -3338,224 +3345,6 @@ func main() {
 			}
 		}()
 		log.Info().Msg("spectrum-alert: CoT + hub relay active")
-	}
-
-	// HeMB receive-side reassembly — always active when bond groups exist.
-	// Decoded payloads are re-injected into the processor as regular messages.
-	//
-	// Bond-level ingress decryption (MESHSAT-664, encrypt-then-code
-	// peer side): after HeMB reassembles the ciphertext, apply the
-	// bond's ingress transforms once to recover plaintext before
-	// dispatching into the rules engine.
-	//
-	// The current HeMB frame header doesn't carry a bond-group tag, so
-	// we can't look up per-bond transforms from the payload alone. In
-	// practice every kit we've seen runs with a single bond group
-	// (bond1 on tesseract + parallax, 2026-04-22), so we resolve the
-	// transform chain at startup: enumerate bond_groups, require all
-	// enabled ones to agree on ingress_transforms, and use that chain
-	// in the callback. A mismatch logs an error and falls back to
-	// plaintext (status-quo behaviour). A future HeMB frame header
-	// revision should embed the bond-group ID so per-bond transforms
-	// become unambiguous; tracked as a follow-up in MESHSAT-664.
-	// HeMB is experimental and opt-in (MESHSAT_HEMB_EXPERIMENTAL): with it
-	// off no receive bonder is registered, whatever bond groups exist.
-	// [MESHSAT-1581]
-	if !hemb.Experimental() {
-		log.Info().Msg("hemb: experimental and off (MESHSAT_HEMB_EXPERIMENTAL), no receive bonder, no TUN adapter")
-	} else {
-		groups, gerr := db.GetAllBondGroups()
-		if gerr == nil && len(groups) > 0 {
-			bondIngressTransforms := ""
-			mismatch := false
-			for _, g := range groups {
-				t := g.IngressTransforms
-				if t == "" {
-					t = "[]"
-				}
-				if t == "[]" {
-					continue
-				}
-				if bondIngressTransforms == "" {
-					bondIngressTransforms = t
-				} else if bondIngressTransforms != t {
-					mismatch = true
-					break
-				}
-			}
-			if mismatch {
-				log.Error().Msg("hemb: bond groups disagree on ingress_transforms — HeMB receives will NOT decrypt until they match (bond-group tag in frame header is a follow-up)")
-				bondIngressTransforms = ""
-			}
-
-			receiveBonder := hemb.NewBonder(hemb.Options{
-				Bearers: nil, // receive-only — no send bearers needed
-				DeliverFn: func(payload []byte) {
-					log.Info().Int("bytes", len(payload)).Msg("hemb: reassembled payload delivered")
-
-					// Strip the 2-byte BE length prefix the sender
-					// prepended so we can trim off HeMB's zero-pad
-					// (RLNC segmenter pads to K×symSize and the
-					// reassembler returns the full padded buffer).
-					// [MESHSAT-672]
-					trimmed := payload
-					if len(payload) >= 2 {
-						declaredLen := int(payload[0])<<8 | int(payload[1])
-						if declaredLen <= len(payload)-2 {
-							trimmed = payload[2 : 2+declaredLen]
-						} else {
-							log.Warn().Int("declared", declaredLen).Int("bytes", len(payload)).
-								Msg("hemb: reassembled length prefix exceeds buffer — dropping")
-							return
-						}
-					}
-
-					// Bond-level ingress: decrypt BEFORE dispatch.
-					decoded := trimmed
-					if bondIngressTransforms != "" && dispatcher != nil && dispatcher.TransformPipeline() != nil {
-						if tErr := (func() error {
-							res, err := dispatcher.TransformPipeline().ApplyIngress(trimmed, bondIngressTransforms)
-							if err != nil {
-								return err
-							}
-							decoded = res
-							return nil
-						})(); tErr != nil {
-							log.Warn().Err(tErr).Int("bytes", len(trimmed)).
-								Msg("hemb: bond ingress transforms failed — dropping")
-							return
-						}
-						log.Debug().Int("raw", len(trimmed)).Int("decoded", len(decoded)).
-							Msg("hemb: bond ingress transforms applied")
-					}
-
-					// Re-inject decoded HeMB payload into access rules [MESHSAT-447]
-					if dispatcher != nil {
-						if n := dispatcher.DispatchAccess("hemb_0",
-							rules.RouteMessage{Text: string(decoded), From: "hemb"},
-							decoded); n > 0 {
-							log.Info().Int("deliveries", n).
-								Msg("hemb: decoded payload dispatched via access rules")
-						}
-					}
-
-					// Also persist as an inbound message so the decoded
-					// plaintext shows up in /api/messages and the
-					// Messages view without needing an access rule. This
-					// mirrors StartGatewayReceiver's persistence path
-					// for SMS / Iridium / APRS ingress — bond delivery
-					// should look the same from the UI's perspective.
-					// [MESHSAT-672]
-					if db != nil {
-						text := string(decoded)
-						if len(text) > 0 {
-							if err := db.InsertMessage(&database.Message{
-								FromNode:    "hemb",
-								Channel:     0,
-								PortNum:     1,
-								PortNumName: "TEXT_MESSAGE_APP",
-								DecodedText: text,
-								Direction:   "rx",
-								Transport:   "hemb",
-							}); err != nil {
-								log.Warn().Err(err).Msg("hemb: failed to persist decoded bond payload")
-							}
-						}
-					}
-				},
-				EventCh: hemb.GlobalEventBus.Channel(),
-			})
-			proc.SetHeMBBonder(receiveBonder)
-			if bondIngressTransforms != "" {
-				log.Info().Int("groups", len(groups)).
-					Msg("hemb: receive-side reassembly bonder registered (bond-level ingress transforms enabled)")
-			} else {
-				log.Info().Int("groups", len(groups)).
-					Msg("hemb: receive-side reassembly bonder registered")
-			}
-		}
-	}
-
-	// HeMB TUN adapter — creates a virtual network interface for IP-over-HeMB bonding.
-	// Off unless MESHSAT_HEMB_EXPERIMENTAL=true and MESHSAT_HEMB_TUN names
-	// the device (e.g. hemb0); "none" stays accepted. It defaulted to hemb0
-	// in standalone mode until HeMB became opt-in. [MESHSAT-1581]
-	tunName := os.Getenv("MESHSAT_HEMB_TUN")
-	if tunName == "none" || !hemb.Experimental() {
-		tunName = ""
-	}
-	if tunName != "" {
-		// Build bearer profiles from bond group config.
-		groups, gerr := db.GetAllBondGroups()
-		if gerr != nil || len(groups) == 0 {
-			log.Warn().Str("tun", tunName).Msg("hemb: TUN requested but no bond groups configured — skipping")
-		} else {
-			// Use first bond group for TUN bearer set.
-			members, merr := db.GetBondMembers(groups[0].ID)
-			if merr != nil || len(members) == 0 {
-				log.Warn().Str("group", groups[0].ID).Msg("hemb: bond group has no members — TUN skipped")
-			} else {
-				ifaceIDs := make([]string, 0, len(members))
-				for _, m := range members {
-					ifaceIDs = append(ifaceIDs, m.InterfaceID)
-				}
-				bearers := hemb.BuildBearers(ifaceIDs, dispatcher, ifaceReg)
-
-				tunMTU := hemb.ComputeTUNMTU(bearers)
-				tunDev, terr := hemb.OpenTUN(tunName, tunMTU)
-				if terr != nil {
-					log.Error().Err(terr).Str("tun", tunName).Msg("hemb: TUN device creation failed")
-				} else {
-					tunAdapter, tunBonder := hemb.NewTUNAdapter(tunDev, bearers, hemb.TUNConfig{
-						Name:    tunName,
-						MTU:     tunMTU,
-						EventCh: hemb.GlobalEventBus.Channel(),
-					})
-					// Decide which bonder owns the Processor's inbound
-					// symbol demux:
-					//   * bond-encryption mode (any group has
-					//     ingress_transforms): keep the bond-decrypt
-					//     receiveBonder wired earlier — the TUN adapter
-					//     still starts for TX-side IP-over-HeMB flow
-					//     but IP RX over this bond is mutually
-					//     exclusive with message-RX + decrypt (single
-					//     HeMB header carries no stream-type tag).
-					//   * plaintext mode (no ingress transforms on any
-					//     group): fall back to the TUN adapter's
-					//     bonder, which writes reassembled IP frames
-					//     to the TUN fd — the historical behaviour.
-					// Follow-up in MESHSAT-664 / MESHSAT-672 adds a
-					// frame-level stream-type tag so both paths can
-					// coexist. [MESHSAT-672]
-					bondCryptoActive := false
-					if bgList, err := db.GetAllBondGroups(); err == nil {
-						for _, bg := range bgList {
-							if bg.IngressTransforms != "" && bg.IngressTransforms != "[]" {
-								bondCryptoActive = true
-								break
-							}
-						}
-					}
-					if bondCryptoActive {
-						log.Info().Msg("hemb: TUN adapter started in TX-only mode — bond ingress transforms present, inbound symbols handled by the bond-decrypt receiveBonder")
-					} else {
-						proc.SetHeMBBonder(tunBonder)
-					}
-					// Give the API server a handle so autoWireP2PPeer
-					// (MESHSAT-647) can hot-reload bearers when
-					// bond_members changes without a bridge restart.
-					srv.SetHeMBTUNAdapter(tunAdapter, groups[0].ID)
-					go func() {
-						if err := tunAdapter.Start(ctx); err != nil {
-							log.Error().Err(err).Msg("hemb: TUN adapter stopped")
-						}
-					}()
-					defer tunAdapter.Close()
-					log.Info().Str("iface", tunDev.Name()).Int("mtu", tunMTU).Int("bearers", len(bearers)).
-						Msg("hemb: TUN adapter started")
-				}
-			}
-		}
 	}
 
 	// Start the WiFi-Direct overlay reconciler. Runs for the life

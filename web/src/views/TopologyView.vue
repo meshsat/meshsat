@@ -2,10 +2,8 @@
 import { onMounted, onUnmounted, ref, computed } from 'vue'
 import { useObservabilityStore } from '../composables/useObservabilityStore'
 import ObservabilityGraph from '../components/ObservabilityGraph.vue'
-import HeMBMatrixInspector from '../components/HeMBMatrixInspector.vue'
 
 const store = useObservabilityStore()
-const showDebug = ref(false)
 const filterType = ref('')
 
 let pollFast = null
@@ -17,7 +15,6 @@ onMounted(async () => {
   pollFast = setInterval(() => {
     store.fetchInterfaces()
     store.fetchGateways()
-    store.fetchHembStats()
   }, 10000)
   pollSlow = setInterval(() => { store.fetchAll() }, 30000)
 })
@@ -37,10 +34,6 @@ const eventStyles = {
   relay: { icon: '⇌', color: 'text-amber-400', label: 'relay' },
   connected: { icon: '●', color: 'text-emerald-400', label: 'connected' },
   disconnected: { icon: '○', color: 'text-gray-500', label: 'disconnected' },
-  HEMB_SYMBOL_SENT: { icon: '↑', color: 'text-cyan-400', label: 'forwarded' },
-  HEMB_SYMBOL_RECEIVED: { icon: '↓', color: 'text-teal-400', label: 'forwarded' },
-  HEMB_GENERATION_DECODED: { icon: '✓', color: 'text-emerald-400', label: 'forwarded' },
-  HEMB_GENERATION_FAILED: { icon: '✕', color: 'text-red-400', label: 'dropped' },
 }
 function evStyle(type) { return eventStyles[type] || { icon: '·', color: 'text-gray-500', label: type?.substring(0, 12) || '?' } }
 
@@ -59,7 +52,7 @@ function fmtTime(ts) {
 function evSource(ev) {
   const p = ev.payload
   if (typeof p === 'object' && p) {
-    return p.bearer_type || p.interface_id || p.source_iface || ev.source || '—'
+    return p.interface_id || p.source_iface || ev.source || '—'
   }
   return ev.source || '—'
 }
@@ -122,9 +115,6 @@ const filteredEvents = computed(() => {
         <span class="text-gray-500 font-mono">{{ (store.events.value || []).length }} flows</span>
         <button v-if="store.selectedNodeId.value" @click="store.selectNode(null)"
           class="px-2 py-0.5 bg-teal-900/30 text-teal-400 text-[10px] rounded">Clear</button>
-        <button @click="showDebug = !showDebug"
-          class="px-2 py-0.5 rounded text-[10px]"
-          :class="showDebug ? 'bg-purple-900/30 text-purple-400' : 'bg-gray-800 text-gray-500 hover:text-gray-300'">Debug</button>
       </div>
     </div>
 
@@ -141,8 +131,6 @@ const filteredEvents = computed(() => {
         <select v-model="filterType"
           class="bg-gray-800/50 text-gray-400 border border-gray-700/50 rounded px-2 py-0.5 text-xs">
           <option value="">All</option>
-          <option value="HEMB_SYMBOL_SENT">HeMB Sent</option>
-          <option value="HEMB_GENERATION_DECODED">HeMB Decoded</option>
           <option value="forward">Forward</option>
           <option value="signal">Signal</option>
           <option value="inbound">Inbound</option>
@@ -176,8 +164,5 @@ const filteredEvents = computed(() => {
         </div>
       </div>
     </div>
-
-    <!-- Debug panel -->
-    <HeMBMatrixInspector v-if="showDebug" />
   </div>
 </template>
