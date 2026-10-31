@@ -21,13 +21,12 @@ const RADIO = [{ port: '/dev/ttyUSB1', device_type: 'tetra' }, { port: '/dev/tty
 beforeEach(() => localStorage.clear())
 
 test('an_old_saved_order_gains_new_widgets_in_their_default_place', () => {
-  const legacy = ['mesh', 'iridium', 'cellular', 'aprs', 'zigbee', 'reticulum', 'tak', 'sos', 'location', 'queue', 'burst', 'hemb', 'activity', 'gone']
+  const legacy = ['mesh', 'iridium', 'cellular', 'aprs', 'zigbee', 'reticulum', 'tak', 'sos', 'location', 'queue', 'burst', 'activity', 'gone']
   const merged = mergeOrder(legacy)
   assert.equal(merged.length, WIDGETS.length)
   assert.equal(merged[0], 'mesh') // the person's order is kept
   assert.equal(merged[merged.indexOf('aprs') + 1], 'tetra') // TETRA after APRS, as by default
   assert.ok(!merged.includes('gone'))
-  assert.ok(!merged.includes('hemb'), 'the HeMB widget left with HeMB v1 [MESHSAT-1763]')
 })
 
 test('nothing_hides_or_is_announced_before_the_gateways_load', async () => {

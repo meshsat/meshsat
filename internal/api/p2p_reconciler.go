@@ -57,7 +57,7 @@ import (
 
 const (
 	// Deterministic role-keyed overlay IPs. /24 picked to avoid typical
-	// LAN ranges and 10.42.42.0/24 (the old HeMB TUN device's).
+	// LAN ranges and 10.42.42.0/24.
 	P2POverlayGOIP     = "10.42.43.1"
 	P2POverlayClientIP = "10.42.43.2"
 	P2POverlayPrefix   = "24"

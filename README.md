@@ -140,9 +140,6 @@ matters, it is probably the most useful thing on the page.
 | Cellular SMS both directions | Working on hardware |
 | APRS / AX.25 | Working on hardware |
 | Reticulum interoperability | The bridge is a Reticulum transport node and LXMF endpoint, tested in-process against upstream Python RNS 1.5.7 and LXMF 1.2.1: announces, path requests, links, packets with proofs, resources and LXMF messages both ways, also through a stock `rnsd`; RNode, UDP, AutoInterface and KISS interfaces against `rnsd` as well. Not yet exercised against a Sideband or CrossTalk client on real hardware |
-| HeMB bonding across LoRa, TCP and SMS | Three-bearer field test, April 2026, zero failures |
-| HeMB over a paid satellite bearer | **Not validated.** Outstanding work |
-| HeMB mixed free and paid allocation | **Undefined.** See the allocator note below |
 | RTL-SDR jamming detection | Implemented and tested against ambient noise only, **never against a real jammer** |
 | ZigBee gateway | Code complete, light field exposure |
 | OOB management frames | Request leg proven kit to kit over SMS and through the Hub, September 2026. **Reply leg over SMS and APRS not yet observed** |
@@ -151,11 +148,6 @@ matters, it is probably the most useful thing on the page.
 
 The test suite is 1,628 test functions across 203 files, and it gates every deploy. That says the
 code does what the authors expect. It does not say the radio link will hold at 3am in the rain.
-
-**On HeMB specifically:** the current symbol allocator is free-first. While any free bearer is
-healthy, all source symbols go to the largest-MTU free bearer and paid bearers receive none. There
-is no capacity model yet. Capacity-aware paid activation is specification work, not a shipped
-feature, and the 1:900 latency ratio quoted in the design is a target, not a measured result.
 
 ## Hardware
 
@@ -205,8 +197,7 @@ routing across nine interfaces, SBD and IMT as separate gateways, APRS and TAK g
 field intelligence, the Android app.
 
 Next: DTN custody transfer and bundle fragmentation in the delivery ledger, Reed-Solomon forward
-error correction in the transform pipeline, GPS-denied time sync, and capacity-aware cost semantics
-for HeMB with an RFC submission to follow the measurement. Later: the COMING SOON channels in the table above,
+error correction in the transform pipeline and GPS-denied time sync. Later: the COMING SOON channels in the table above,
 federated mesh-of-meshes.
 
 ## Related projects

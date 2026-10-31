@@ -13,8 +13,7 @@ import (
 // delivers PRIVATE_APP frames on the tesseract and parallax field kits.
 // Operators on other LoRa presets (SHORT_FAST, MEDIUM_*, LONG_SLOW) or other
 // antennas can override it with MESHSAT_MESH_MTU in the range [1, 237];
-// values outside the range fall back to 100. It was the HeMB bond's mesh
-// symbol size until HeMB v1 was removed. [MESHSAT-672, MESHSAT-1763]
+// values outside the range fall back to 100. [MESHSAT-672, MESHSAT-1763]
 func meshBearerMTU() int {
 	if v := os.Getenv("MESHSAT_MESH_MTU"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 237 {

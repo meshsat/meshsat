@@ -293,8 +293,7 @@ func (m *SpectrumMonitor) SetSigningService(ss SigningService) {
 }
 
 // SetEventSink sets where a band's state change (SPECTRUM_<STATE>) goes;
-// main.go sends it on /api/events. Call it before Start. It went out on the
-// HeMB event bus until HeMB v1 was removed. [MESHSAT-1763]
+// main.go sends it on /api/events. Call it before Start. [MESHSAT-1763]
 func (m *SpectrumMonitor) SetEventSink(f func(eventType string, payload json.RawMessage)) {
 	m.emit = f
 }

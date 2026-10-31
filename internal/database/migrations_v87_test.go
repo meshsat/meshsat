@@ -2,17 +2,17 @@ package database
 
 import "testing"
 
-// v87 removes HeMB v1's tables. A rule that still forwarded to a bond group
+// v87 removes the bonding layer's tables. A rule that still forwarded to a bond group
 // is switched off first, so it never resolves the group's id as an interface;
 // every other rule is left alone, and the migration can be applied again on
 // a database that no longer has the tables. [MESHSAT-1763]
-func TestV87DropsHeMBTablesAndDisablesBondRules(t *testing.T) {
+func TestV87DropsBondTablesAndDisablesBondRules(t *testing.T) {
 	db := openStaged(t, 86)
 
 	if _, err := db.Exec(`INSERT INTO bond_groups (id, label) VALUES ('bond1', 'Mesh+APRS+TCP')`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO hemb_events (event_type, payload) VALUES ('HEMB_GENERATION_DECODED', '{}')`); err != nil {
+	if _, err := db.Exec(`INSERT INTO hemb_events (event_type, payload) VALUES ('GENERATION_DECODED', '{}')`); err != nil {
 		t.Fatal(err)
 	}
 	for _, r := range []struct{ name, to string }{{"to the bond", "bond1"}, {"to the mesh", "mesh_0"}} {

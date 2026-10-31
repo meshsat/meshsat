@@ -1713,8 +1713,7 @@ function widgetGridClass(id) {
         </router-link>
 
         <!-- Active primary comms: the single-bearer cascade (Mesh → APRS →
-             Sat → Cell). It showed a HeMB bond here until HeMB v1 was
-             removed. [MESHSAT-1763] -->
+             Sat → Cell). [MESHSAT-1763] -->
         <router-link to="/radios"
           class="bg-tactical-surface rounded-lg border border-tactical-border p-3 transition-colors hover:border-tactical-iridium/40">
           <div class="text-[10px] uppercase tracking-widest text-gray-500">Active Comms</div>

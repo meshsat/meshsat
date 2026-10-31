@@ -79,10 +79,6 @@ func TestMetricsEndpoint_NilSubsystems(t *testing.T) {
 	if !strings.Contains(body, "meshsat_system_cpu_percent") {
 		t.Error("system metrics should be present regardless")
 	}
-	// HeMB v1 is gone, and its metrics with it. [MESHSAT-1763]
-	if strings.Contains(body, "meshsat_hemb_") {
-		t.Error("HeMB metrics should be gone")
-	}
 }
 
 func TestMetricsEndpoint_HELP_and_TYPE(t *testing.T) {

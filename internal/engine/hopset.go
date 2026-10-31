@@ -549,9 +549,7 @@ func (m *HopSetManager) SetAudit(f func(eventType, ifaceID, detail string)) {
 }
 
 // HopEvent is a link going out of use or back into use, or the alarm. The
-// Bridge sends it on /api/events (cmd/meshsat/main.go). These went out on
-// the HeMB event bus as HEMB_BEARER_DEGRADED / _RECOVERED until HeMB v1
-// was removed. [MESHSAT-1763]
+// Bridge sends it on /api/events (cmd/meshsat/main.go). [MESHSAT-1763]
 type HopEvent struct {
 	Type    string
 	Time    time.Time

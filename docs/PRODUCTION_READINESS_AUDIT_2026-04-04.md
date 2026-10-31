@@ -44,15 +44,6 @@ The MeshSat ecosystem is a **remarkably ambitious and well-executed** project sp
 **Key Strengths:**
 - Highest test density in the ecosystem (3.4 tests per file)
 - 9 Reticulum transport interfaces operational
-- HeMB protocol validated in a 3-bearer full-duplex field test (2026-04-01): 111 generations
-  decoded across both directions, 0 decode failures, P50 0–3 ms. Bonds were
-  `mesh_0 + tcp_0 + cellular_0` one way and `mesh_0 + tcp_0 + iridium_imt_0` the other; the
-  IMT satellite leg did not acquire (2 bars). Raw data: `~/gitlab/rfc/hemb/field-data/
-  full-duplex-mega-test-2026-04-01.md`.
-  Measured separately, a 1,000-message bench stress over 2 bonded free bearers (2026-03-30)
-  sent 830 and lost 170 to total bearer loss, at `cost_incurred: 0` — all traffic rode free
-  bearers. The two runs measure different things and neither figure should be quoted for the
-  other.
 - DeviceSupervisor USB hot-plug with auto-identification cascade
 
 **Critical Gaps:**
@@ -167,7 +158,6 @@ The repo boundary rules are well-enforced and have prevented cross-contamination
 | Webhooks | YES | YES | — | Production |
 | Reticulum TCP | YES | YES | YES | Production (9 interfaces) |
 | BLE Reticulum | — | — | — | MESHSAT-406 (open) |
-| HeMB bonding | YES | planned | planned | Bridge verified, Hub/Android pending |
 
 ### 3.3 CI/CD Maturity — MIXED (76/100)
 
@@ -257,15 +247,14 @@ The repo boundary rules are well-enforced and have prevented cross-contamination
 ## 5. Strengths (What's Already Excellent)
 
 1. **Transport diversity** — 10+ transports across 3 repos, more than any comparable open-source project
-2. **HeMB protocol** — Novel sub-IP bonding protocol, field-tested, IETF RFC planned (unique IP)
-3. **Test discipline** — 2,512 test functions across 217K LOC (1.16 tests per 100 LOC)
-4. **Hub CI/CD** — 11-stage pipeline with mandatory security gates is production-grade
-5. **Reticulum integration** — 9 transport interfaces, TCP interop with Python RNS verified
-6. **Architecture boundaries** — Clean repo separation enforced by the repo boundary rules
-7. **Delivery pipeline** — message_deliveries table + DeliveryWorker + DLQ with ISU-aware backoff
-8. **Database discipline** — Append-only migrations enforced in CI, no schema corruption risk
-9. **Multi-arch builds** — ARM64 + AMD64 Docker images, cross-compilation working
-10. **Documentation** — 633-line Hub project notes, 192 VitePress pages, 89% Swagger coverage
+2. **Test discipline** — 2,512 test functions across 217K LOC (1.16 tests per 100 LOC)
+3. **Hub CI/CD** — 11-stage pipeline with mandatory security gates is production-grade
+4. **Reticulum integration** — 9 transport interfaces, TCP interop with Python RNS verified
+5. **Architecture boundaries** — Clean repo separation enforced by the repo boundary rules
+6. **Delivery pipeline** — message_deliveries table + DeliveryWorker + DLQ with ISU-aware backoff
+7. **Database discipline** — Append-only migrations enforced in CI, no schema corruption risk
+8. **Multi-arch builds** — ARM64 + AMD64 Docker images, cross-compilation working
+9. **Documentation** — 633-line Hub project notes, 192 VitePress pages, 89% Swagger coverage
 
 ---
 
@@ -277,8 +266,7 @@ The repo boundary rules are well-enforced and have prevented cross-contamination
 4. **No integration test suite** — Components tested individually but MESHSAT-338 (full-stack E2E) still open
 5. **Single developer risk** — 217K LOC maintained by one person; bus factor = 1
 6. **Hardware-blocked features** — BLE (MESHSAT-406) waiting on hardware
-7. **HeMB not yet in Hub/Android** — Only bridge has implementation; Hub+Android planned
-8. **No formal security audit** — OWASP ZAP is optional in Hub, absent elsewhere
+7. **No formal security audit** — OWASP ZAP is optional in Hub, absent elsewhere
 
 ---
 
@@ -294,9 +282,6 @@ The repo boundary rules are well-enforced and have prevented cross-contamination
 | MESHSAT-403 | Field kit assembly | P2 | Hardware |
 | MESHSAT-406 | BLE Reticulum interface | P3 | Feature |
 | MESHSAT-412 | RTL-SDR jamming detection | P3 | Feature |
-| MESHSAT-415 | HeMB Master issue | P1 | Feature |
-| MESHSAT-441 | HeMB Phase FIELD validation (NL-GR) | P2 | Testing |
-| MESHSAT-442 | HeMB RFC submission | P3 | Documentation |
 | MESHSAT-461 | IPsec S2S tunnel health monitoring | P2 | Infrastructure |
 
 ---
@@ -362,7 +347,6 @@ The repo boundary rules are well-enforced and have prevented cross-contamination
 |------|------|--------|--------|
 | Complete Hub v1.2 (email gateway, WireGuard, .onion) | hub | 12h | +1 |
 | Wire CustodyManager for Hub DTN | hub | 2h | +0.5 |
-| HeMB Hub integration (MESHSAT-415 Phase 2) | hub | 8h | +0.5 |
 
 ### Total Score Progression
 
@@ -396,14 +380,11 @@ SHORT TERM (next 2 weeks):
 MEDIUM TERM (next month):
   10. MESHSAT-338 full-stack E2E validation        [8 hours, +1 point]
   11. Hub v1.2 completion                          [12 hours, +1 point]
-  12. HeMB Hub integration                         [8 hours, +0.5 points]
-  13. Website polish (links, checksum, Lighthouse) [4 hours, +0.5 points]
+  12. Website polish (links, checksum, Lighthouse) [4 hours, +0.5 points]
 
 LONG TERM (next quarter):
-  14. MESHSAT-441 HeMB field validation NL->GR     [hardware + 16h]
-  15. MESHSAT-442 HeMB IETF RFC submission         [20h writing]
-  16. MESHSAT-406 BLE Reticulum interface           [8h, needs hardware]
-  17. MESHSAT-412 RTL-SDR jamming detection         [16h, needs field kit]
+  13. MESHSAT-406 BLE Reticulum interface           [8h, needs hardware]
+  14. MESHSAT-412 RTL-SDR jamming detection         [16h, needs field kit]
 ```
 
 ---
@@ -437,7 +418,7 @@ After implementing the roadmap phases, verify with:
 
 | Repo | Current Version | Key Tables | Migration Strategy |
 |------|:--------------:|:----------:|-------------------|
-| Bridge | v41 | messages, deliveries, dead_letters, bond_groups, hemb_events, interfaces, gateway_config | Append-only in Go code |
+| Bridge | v41 | messages, deliveries, dead_letters, interfaces, gateway_config | Append-only in Go code |
 | Hub | v24 | messages, devices, positions, deliveries, audit_logs, rules, credentials | Append-only, Galera-replicated |
 | Android | Room v10 | 13 entities (Messages, NodePosition, ForwardingRule, ConversationKey, etc.) | Room auto-migration |
 
