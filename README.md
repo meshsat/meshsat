@@ -226,6 +226,10 @@ Open an issue before a large change so we can agree the shape of it first.
 
 Supported by [SIDN fonds](https://www.sidnfonds.nl/projecten/meshsat-keeping-people-connected-when-the-network-is-not).
 
+## Mission and use policy
+
+MeshSat does not work with any organisation that develops, produces, integrates or operates weapon systems, and provides nothing for use in one. The licence below is unchanged: the policy covers whom we work with, not what you may do with the code. Read the [MeshSat Mission and Use Policy](https://meshsat.net/policy/).
+
 ## License
 
 Copyright 2026 Elli and Kyriakos. [GNU General Public License v3.0](LICENSE).
