@@ -2,13 +2,13 @@ package post
 
 import "strings"
 
-// The portal's words in Greek, Dutch and English. Plain language, short
+// The portal's words in Greek, Dutch, German and English. Plain language, short
 // lines: the page is read on a phone, under stress, often by somebody who
 // did not choose the language. A key missing from a language falls back to
 // English.
 
 // Languages the portal speaks, in the order the switch shows them.
-var Languages = []string{"el", "nl", "en"}
+var Languages = []string{"el", "nl", "de", "en"}
 
 // DefaultLanguage is used when nothing in the request chooses one.
 const DefaultLanguage = "en"
@@ -157,6 +157,78 @@ var strs = map[string]map[string]string{
 		"warn_test":      "TEST",
 		"warn_update":    "Update",
 		"warn_until":     "tot",
+	},
+	"de": {
+		"lang_name":      "Deutsch",
+		"title":          "Nachrichtenstelle",
+		"nav_write":      "Schreiben",
+		"nav_pickup":     "Abholen",
+		"nav_board":      "In Sicherheit",
+		"nav_about":      "Über diese Stelle",
+		"write_intro":    "Schreiben Sie eine kurze Nachricht an eine Telefonnummer oder eine E-Mail-Adresse. Sie geht über Satellit hinaus. Die Antwort kommt hierher zurück: Bewahren Sie Ihren Abholcode auf.",
+		"recipient":      "An (Telefonnummer mit Ländervorwahl, oder E-Mail)",
+		"recipient_hint": "+49 151 12345678 oder name@beispiel.de",
+		"name":           "Ihr Name (freiwillig)",
+		"message":        "Nachricht",
+		"chars_left":     "höchstens %d Zeichen, keine Links",
+		"emergency":      "Das ist ein Notfall",
+		"emergency_hint": "Ein Notfall geht vor und wird für die Person, die ihn erhält, als SOS markiert.",
+		"send":           "Senden",
+		"sent_title":     "Ihr Abholcode",
+		"sent_intro":     "Machen Sie ein Bildschirmfoto von diesem Code. Damit holen Sie die Antwort ab. Sonst wird nichts auf Ihrem Telefon gespeichert.",
+		"sent_pending":   "Das Team dieser Stelle prüft jede Nachricht, bevor sie hinausgeht. Kommen Sie später mit Ihrem Code wieder.",
+		"sent_queued":    "Ihre Nachricht ist unterwegs. Eine Satellitenverbindung kann Minuten bis Stunden dauern. Kommen Sie später mit Ihrem Code wieder.",
+		"sent_to":        "An",
+		"pickup_title":   "Antwort abholen",
+		"pickup_intro":   "Geben Sie den Code ein, den Sie erhalten haben.",
+		"code":           "Abholcode",
+		"lookup":         "Nachsehen",
+		"status":         "Status",
+		"status_pending": "wartet auf das Team",
+		"status_queued":  "verlässt die Stelle",
+		"status_sent":    "gesendet, noch keine Antwort",
+		"status_replied": "Antwort erhalten",
+		"status_refused": "nicht gesendet (vom Team abgelehnt)",
+		"status_failed":  "nicht gesendet (die Verbindung hat sie nicht angenommen)",
+		"replies":        "Antworten",
+		"no_replies":     "Noch keine Antwort. Sehen Sie später wieder nach.",
+		"unknown_code":   "Dieser Code ist hier nicht bekannt. Vergleichen Sie ihn mit Ihrem Bildschirmfoto.",
+		"your_posts":     "Ihre Nachrichten von diesem Telefon",
+		"board_title":    "In Sicherheit",
+		"board_intro":    "Eine Tafel, auf der man nach Namen suchen kann. Ob Sie Ihren Namen eintragen, entscheiden Sie selbst; der Eintrag bleibt %d Tage stehen und wird nirgendwohin gesendet.",
+		"board_name":     "Name",
+		"board_status":   "Status (zum Beispiel: in Sicherheit, in der Schule, suche nach)",
+		"board_place":    "Ort (freiwillig)",
+		"board_add":      "Mich eintragen",
+		"board_search":   "Nach Namen suchen",
+		"board_find":     "Suchen",
+		"board_empty":    "Niemand mit diesem Namen auf der Tafel.",
+		"board_added":    "Sie stehen auf der Tafel.",
+		"about_title":    "Über diese Stelle",
+		"about_operator": "Diese Stelle wird betrieben von",
+		"about_how":      "Eine Nachricht, die Sie hier schreiben, verlässt diese Stelle über eine Satellitenverbindung zum MeshSat Hub, der sie als SMS oder E-Mail vom Konto des Betreibers verschickt. Die Antwort kommt auf demselben Weg zurück und wartet hier unter Ihrem Abholcode.",
+		"about_cost":     "Jede Nachricht und jede Antwort kostet den Betreiber Satellitenguthaben. Fassen Sie sich kurz und senden Sie dieselbe Nachricht nicht zweimal.",
+		"data_title":     "Was gespeichert wird",
+		"data_notice":    "Gespeichert an dieser Stelle: Ihre Nachricht, die Adresse, an die Sie geschrieben haben, der Name, den Sie angegeben haben, die Antwort und ein Zähler pro Telefon, damit ein Telefon nicht alles aufbraucht. Gelöscht %d Tage, nachdem der Betreiber die Stelle schließt, oder früher durch den Betreiber; das Sendeprotokoll des Kits bewahrt den gesendeten Text nach seiner eigenen Frist auf. Weitergesendet: nur die Nachricht, Ihr Name und der Abholcode. Die Tafel In Sicherheit ist davon getrennt, enthält nur, was Sie selbst eintragen, und ein Eintrag bleibt %d Tage stehen. Kein Konto, keine App, kein Tracking. Rechtsgrundlage ist der Schutz lebenswichtiger Interessen von Ihnen oder einer anderen Person; verantwortlich für die Daten ist der oben genannte Betreiber.",
+		"done":           "Ich bin fertig",
+		"done_title":     "Fertig",
+		"done_text":      "Sie können diese Seite schließen. Um später eine Antwort zu lesen, verbinden Sie sich wieder mit diesem WLAN und öffnen Sie eine beliebige Webseite.",
+		"closed_title":   "Diese Stelle ist geschlossen",
+		"closed_text":    "Hier kann keine neue Nachricht mehr geschrieben werden. Eine Antwort können Sie mit Ihrem Code noch bis %s abholen; danach wird alles gelöscht.",
+		"err_recipient":  "Geben Sie eine Telefonnummer mit Ländervorwahl ein (zum Beispiel +49 151 12345678) oder eine E-Mail-Adresse.",
+		"err_empty":      "Schreiben Sie zuerst eine Nachricht.",
+		"err_too_long":   "Die Nachricht ist zu lang.",
+		"err_link":       "Links können von hier nicht gesendet werden. Schreiben Sie es in Worten.",
+		"err_control":    "Die Nachricht enthält ein Zeichen, das hier nicht gesendet werden kann.",
+		"err_name":       "Der Name ist zu lang oder enthält ein Zeichen, das hier nicht gesendet werden kann (kein Doppelpunkt, keine Klammern).",
+		"err_quota":      "Von diesem Telefon wurde vorerst genug gesendet. Versuchen Sie es später, oder fragen Sie das Team.",
+		"err_other":      "An dieser Stelle ist etwas schiefgegangen. Sagen Sie es dem Team.",
+		"language":       "Sprache",
+		"powered":        "MeshSat Nachrichtenstelle",
+		"warn_title":     "Öffentliche Warnung",
+		"warn_test":      "TEST",
+		"warn_update":    "Aktualisierung",
+		"warn_until":     "bis",
 	},
 	"el": {
 		"lang_name":      "Ελληνικά",

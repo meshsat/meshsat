@@ -22,7 +22,7 @@ operator keep the satellite credit for what matters.
 opens the portal (Android, iOS, Windows, Ubuntu, Firefox and RFC 8908 clients are all answered).
 The page asks for a recipient (a number with its country code, or an email address), an optional
 name, the message (at most 150 characters, no links), and a checkbox for an emergency. It is plain
-HTML in Greek, Dutch and English (from `Accept-Language`, switchable at the top of every page), no
+HTML in Greek, Dutch, German and English (from `Accept-Language`, switchable at the top of every page), no
 script, no outside asset, forms that POST.
 
 **Warnings.** A public warning the Hub relayed to this kit and still in force (`docs/warning-relay.md`,

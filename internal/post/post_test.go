@@ -362,7 +362,31 @@ func TestCaptiveDetectionBeforeAndAfterThePortalOpens(t *testing.T) {
 	}
 }
 
-func TestPagesSpeakThreeLanguagesAndCarryNoScript(t *testing.T) {
+func TestEveryLanguageHasEveryKeyWithTheSamePlaceholders(t *testing.T) {
+	verbs := regexp.MustCompile(`%[ds]`)
+	for _, lang := range Languages {
+		if !KnownLanguage(lang) {
+			t.Fatalf("%s is in the switch but has no words", lang)
+		}
+		for key, en := range strs[DefaultLanguage] {
+			v, ok := strs[lang][key]
+			if !ok {
+				t.Errorf("%s lacks %q", lang, key)
+				continue
+			}
+			if got, want := strings.Join(verbs.FindAllString(v, -1), ""), strings.Join(verbs.FindAllString(en, -1), ""); got != want {
+				t.Errorf("%s %q has placeholders %q, English has %q", lang, key, got, want)
+			}
+		}
+		for key := range strs[lang] {
+			if _, ok := strs[DefaultLanguage][key]; !ok {
+				t.Errorf("%s has %q, English does not", lang, key)
+			}
+		}
+	}
+}
+
+func TestPagesSpeakFourLanguagesAndCarryNoScript(t *testing.T) {
 	e := newEnv(t, Config{Operator: "Gemeente Leiden"})
 	c := e.client()
 	_, body := e.get(c, "/", "Accept-Language", "el-GR,el;q=0.9,en;q=0.8")
@@ -377,6 +401,14 @@ func TestPagesSpeakThreeLanguagesAndCarryNoScript(t *testing.T) {
 	_, body = e.get(c, "/about")
 	if !strings.Contains(body, `<html lang="nl">`) || !strings.Contains(body, "Gemeente Leiden") {
 		t.Fatal("the language cookie or the operator's name is missing on the about page")
+	}
+	_, body = e.get(c, "/", "Accept-Language", "de-DE,de;q=0.9")
+	if !strings.Contains(body, `<html lang="nl">`) {
+		t.Fatal("a cookie choice outranks Accept-Language")
+	}
+	_, body = e.get(e.client(), "/", "Accept-Language", "de-AT,de;q=0.9,en;q=0.8")
+	if !strings.Contains(body, `<html lang="de">`) || !strings.Contains(body, "Nachrichtenstelle") {
+		t.Fatal("German by Accept-Language")
 	}
 	_, body = e.get(c, "/?lang=en")
 	if !strings.Contains(body, `<html lang="en">`) || !strings.Contains(body, "Community Post") {
