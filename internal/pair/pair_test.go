@@ -45,8 +45,15 @@ func TestClaimHMAC_RoundTrip(t *testing.T) {
 	if err := VerifyClaimHMAC(secret, hex.EncodeToString(pub), h); err != nil {
 		t.Fatalf("valid HMAC rejected: %v", err)
 	}
-	// Tamper.
-	if err := VerifyClaimHMAC(secret, hex.EncodeToString(pub), "00"+h[2:]); err == nil {
+	// Tamper: change the first hex character, so the result always differs
+	// (replacing it with a fixed "00" matched the real HMAC 1 time in 256).
+	bad := []byte(h)
+	if bad[0] == '0' {
+		bad[0] = '1'
+	} else {
+		bad[0] = '0'
+	}
+	if err := VerifyClaimHMAC(secret, hex.EncodeToString(pub), string(bad)); err == nil {
 		t.Fatal("tampered HMAC accepted")
 	}
 }
