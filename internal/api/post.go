@@ -96,7 +96,7 @@ func (s *Server) handleGetPostConfig(w http.ResponseWriter, r *http.Request) {
 
 // handleClosePost closes the post.
 // @Summary Close the Community Post
-// @Description The portal takes no new post and no board line; replies can still be picked up. Everything the portal stored is purged purge_days after closing (MESHSAT_POST_PURGE_DAYS, 30), or sooner with POST /api/post/purge. Closing a closed post changes nothing.
+// @Description The portal takes no new post and no board line, and the posts still waiting for the satellite are stopped (they show as not sent; approving one sends it again); replies can still be picked up. Everything the portal stored is purged purge_days after closing (MESHSAT_POST_PURGE_DAYS, 30), or sooner with POST /api/post/purge. Closing a closed post changes nothing.
 // @Tags post
 // @Produce json
 // @Success 200 {object} postStateBody
@@ -297,7 +297,7 @@ func (s *Server) handleGetPost(w http.ResponseWriter, r *http.Request) {
 
 // handleApprovePost sends a waiting post.
 // @Summary Approve a Community Post message
-// @Description Queues the post on the kit's satellite link as one "@" lane text; approving twice queues nothing twice
+// @Description Queues the post on the kit's satellite link as one "@" lane text, tried until it leaves or the post is closed; approving twice queues nothing twice. A failed post approved again is sent again as a new delivery.
 // @Tags post
 // @Produce json
 // @Param code path string true "Pickup code"

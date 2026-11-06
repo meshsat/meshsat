@@ -68,6 +68,16 @@ The name is optional (`@+31612345678 water at the north gate [#K7QW2X]`). An eme
 Flash and Critical (first in the queue, never expires). The delivery is keyed by the code, so
 approving twice sends once.
 
+**Waiting for sky.** A post is tried until it leaves or the operator closes the post: there is no
+retry ceiling, the satellite link keeps its own pause between tries (3 minutes on an SBD modem), and
+the startup cleanup of runaway rows leaves the send a queued post waits on alone. Closing the post
+stops every post still waiting (its delivery ends `cancelled: the Community Post was closed before
+this message could leave`, the pickup page says not sent); a send already in a satellite session
+finishes. **Send again** under Recent on `/post` (`POST /api/post/<code>/approve` on a failed post)
+queues it again as a new delivery, keyed by the one it failed on, so pressing it twice sends once.
+Until 6 Nov 2026 a post gave up after 12 tries, about 35 minutes, and both kits' first posts failed
+that way under a roof (MESHSAT-1807).
+
 **Reply.** The Hub, with the kit's modem marked as a post device, keys the conversation by
 tenant, modem, address AND the code, so two people at one post writing to the same number never
 collide, and delivers the person's answer as:
@@ -97,11 +107,14 @@ expires after 30 days (`MESHSAT_POST_BOARD_DAYS`). Nothing on it is sent anywher
 
 **Close.** When the post is over, the operator closes it (`POST /api/post/close`, the button on
 `/post`): the portal takes no new message and no board line and says so, with the day everything is
-deleted; replies can still be picked up with a code until then. `MESHSAT_POST_PURGE_DAYS` (30) after
+deleted; the posts still waiting for the satellite stop (above); replies can still be picked up with
+a code until then. `MESHSAT_POST_PURGE_DAYS` (30) after
 closing, the service's own sweep (every 15 s, in its `Run` loop) purges every post, reply, board line
 and per-phone counter in one transaction, once per closing. `POST /api/post/purge` with
 `{"confirm": true}` purges now, open or closed; `POST /api/post/open` reopens a closed post and cancels
-the purge it scheduled. The board's own 30-day expiry per line is unchanged by any of this. What the
+the purge it scheduled. A purge stops a send still waiting before it deletes the post (counted as
+`stopped` in its answer), or the text would leave for a post that no longer exists. The board's own
+30-day expiry per line is unchanged by any of this. What the
 purge does NOT touch: the delivery ledger's rows for the sent texts (`message_deliveries`,
 `delivery_submissions`), which are the Bridge's own record and follow its retention
 (`MESHSAT_RETENTION_DAYS`, 30); the notice says so.
@@ -138,6 +151,8 @@ Three deliberate steps, each reversible.
    **First run on the kits, 6 Nov 2026 (MESHSAT-1803):** both kits armed on `127.0.0.1:8081`, every
    check in "Proving it on a kit" step 1 passed, one post each approved and queued on `iridium_0`
    (tesseract `Q6C6QQ` to parallax's SIM, parallax `SP2NXQ` to tesseract's SIM), waiting for sky.
+   Both failed about 35 minutes later after 12 tries indoors (`mo_status=32`, no network service),
+   which is how MESHSAT-1807 found the retry ceiling (gone since).
    The Hub knows both Mk2 modems as `post` devices (tesseract's was not registered until that day).
 2. **The host.** `sudo scripts/install-post.sh` places hostapd, dnsmasq, nftables and the four
    units `meshsat-post-{net,ap,dns,fw}` DISABLED (the units have no `[Install]` section, so they

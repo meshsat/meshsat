@@ -90,7 +90,7 @@ async function saveSettings() {
 // who wrote here, and a purge cannot be undone.
 async function closePost() {
   const days = config.value.purge_days || 30
-  if (!confirm(`Close the post? The portal takes no new message; replies can still be picked up. Everything it stored is deleted ${days} days from now.`)) return
+  if (!confirm(`Close the post? The portal takes no new message, and the messages still waiting for the satellite are stopped (Send again under Recent sends one anyway). Replies can still be picked up. Everything it stored is deleted ${days} days from now.`)) return
   await act('close', 'The post is closed.')
 }
 
@@ -108,7 +108,10 @@ async function act(action, done, body = null) {
   try {
     const res = await api.post(`/post/${action}`, body)
     const purged = res && res.purged
-    notice.value = purged ? `${done} ${purged.messages} messages, ${purged.replies} replies, ${purged.board} board lines, ${purged.sessions} phones.` : done
+    notice.value = purged
+      ? `${done} ${purged.messages} messages, ${purged.replies} replies, ${purged.board} board lines, ${purged.sessions} phones.` +
+        (purged.stopped ? ` ${purged.stopped} still waiting for the satellite never left.` : '')
+      : done
     error.value = ''
     await load()
   } catch (e) {
@@ -185,6 +188,8 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
           <span class="font-mono text-gray-300">{{ p.code }}</span>
           <span class="text-gray-400 truncate flex-1">{{ p.recipient }} &middot; {{ p.text }}</span>
           <span class="text-gray-500 whitespace-nowrap">{{ p.status.replace('_', ' ') }}</span>
+          <button v-if="p.status === 'failed'" class="px-3 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-100 font-semibold disabled:opacity-50"
+                  :disabled="busy === p.code" @click="decide(p.code, 'approve')">Send again</button>
         </div>
       </section>
 
@@ -192,7 +197,7 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
         <h2 class="text-sm font-medium text-gray-300 mb-2">The post</h2>
         <p class="text-[12px] text-gray-400 mb-3" data-testid="post-state">
           <template v-if="closed">Closed since {{ day(config.closed_at) }} {{ when(config.closed_at) }}. Everything it stored is deleted on {{ day(config.purge_at) }} ({{ config.purge_days }} days after closing), or now with the button.</template>
-          <template v-else>Open. Closing it stops new messages and board lines; what it stored is deleted {{ config.purge_days }} days later, or now with the button.</template>
+          <template v-else>Open. Closing it stops new messages and board lines, and the messages still waiting for the satellite; what it stored is deleted {{ config.purge_days }} days later, or now with the button.</template>
         </p>
         <div class="grid grid-cols-2 gap-2">
           <button v-if="!closed" class="py-3 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-100 font-semibold disabled:opacity-50"

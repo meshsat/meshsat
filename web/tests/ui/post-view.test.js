@@ -81,3 +81,27 @@ test('the_printer_line_says_when_no_service_reported', async () => {
   await flush()
   assert.match(document.querySelector('[data-testid="post-printer"]').textContent, /Slips: on, but no printer service has reported/)
 })
+
+// A post that did not go out (the post was closed before it left, or the Hub
+// could not send it) can be sent again from Recent; one that is on its way
+// cannot. [MESHSAT-1807]
+test('a_failed_post_can_be_sent_again_from_recent', async () => {
+  const calls = []
+  const recent = [
+    { code: 'K7QW2X', recipient: '+31612345678', text: 'water at the north gate', status: 'failed' },
+    { code: 'ABCDEF', recipient: '+31612345679', text: 'on my way', status: 'queued' }
+  ]
+  serve(async (url, opts) => {
+    const u = new URL(url, 'http://review.local')
+    if (opts?.method === 'POST') { calls.push(u.pathname); return json({}) }
+    if (u.pathname.endsWith('/post/config')) return json(open)
+    return json({ pending: [], recent, counts: { failed: 1, queued: 1 } })
+  })
+  mountRoot(PostView)
+  await flush()
+  const again = [...document.querySelectorAll('button')].filter(b => b.textContent.trim() === 'Send again')
+  assert.equal(again.length, 1, 'only the failed post offers Send again')
+  again[0].click()
+  await flush(); await flush()
+  assert.deepEqual(calls, ['/api/post/K7QW2X/approve'])
+})

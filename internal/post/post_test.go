@@ -44,8 +44,12 @@ func (f *fakeQueue) QueueDirectSendKeyed(source, key, fp, iface, text string, op
 	if id, ok := f.keys[key]; ok {
 		return id, "ref-" + key, true, nil
 	}
+	maxRetries := opts.MaxRetries
+	if opts.RetryForever {
+		maxRetries = 0
+	}
 	id, err := f.db.InsertDelivery(database.MessageDelivery{Channel: iface, Status: "queued", MsgRef: "ref-" + key,
-		TextPreview: text, Class: opts.Class, Precedence: opts.Precedence, MaxRetries: 3})
+		TextPreview: text, Class: opts.Class, Precedence: opts.Precedence, MaxRetries: maxRetries, Visited: "[]", QoSLevel: 1})
 	if err != nil {
 		return 0, "", false, err
 	}
@@ -1334,5 +1338,82 @@ func TestKeyboardPunctuationGoesOutPlain(t *testing.T) {
 	words := strings.Repeat("abc’ ", 30)
 	if _, err := CleanText(words, 150, 240); err != nil {
 		t.Errorf("a text of curly apostrophes inside the limits was refused: %v", err)
+	}
+}
+
+// A post waits for sky: its send is tried until it leaves (no retry
+// ceiling, and a restart's cleanup leaves it alone however many tries it
+// took), closing the post stops it and the page says not sent, and the
+// operator can send it again: a new send, once however often the button is
+// pressed. A purge stops a send still waiting. [MESHSAT-1807]
+func TestAPostWaitsForSkyUntilTheOperatorClosesThePost(t *testing.T) {
+	e := newEnv(t, Config{PurgeAfter: 30 * 24 * time.Hour})
+	c := e.client()
+	e.get(c, "/?lang=en")
+	code, _ := e.write(c, "+31612345678", "Maria", "water at the north gate", false)
+	if err := e.svc.Approve(code); err != nil {
+		t.Fatal(err)
+	}
+	if q := e.q.last(); !q.opts.RetryForever || q.opts.MaxRetries != 0 {
+		t.Fatalf("queued %+v, want it tried until it leaves", q.opts)
+	}
+	m, _, _ := e.svc.Status(code)
+	first := m.DeliveryID
+
+	// Forty tries without sky: still waiting, and a restart's cleanup keeps it.
+	if _, err := e.db.Exec(`UPDATE message_deliveries SET status = 'retry', retries = 40, last_error = 'SBDIX mo_status=32' WHERE id = ?`, first); err != nil {
+		t.Fatal(err)
+	}
+	e.svc.Tick()
+	if n, err := e.db.CancelRunawayDeliveries(15); err != nil || n != 0 {
+		t.Fatalf("the restart's cleanup cancelled %d, %v", n, err)
+	}
+	e.svc.Tick()
+	if m, _, _ := e.svc.Status(code); m.Status != database.PostStatusQueued {
+		t.Fatalf("after 40 tries: %s, want still waiting", m.Status)
+	}
+	if _, body := e.get(c, "/pickup?code="+code+"&lang=en"); !strings.Contains(body, "waiting for the satellite") {
+		t.Fatal("the pickup page must say it waits for the satellite")
+	}
+
+	// Closing the post stops it; the page says not sent.
+	if _, err := e.svc.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if d, _ := e.db.GetDelivery(first); d.Status != "dead" || d.LastError != database.PostSendStoppedClosed {
+		t.Fatalf("the send after close: %s %q", d.Status, d.LastError)
+	}
+	if m, _, _ := e.svc.Status(code); m.Status != database.PostStatusFailed {
+		t.Fatalf("after close: %s, want failed", m.Status)
+	}
+	if _, body := e.get(c, "/pickup?code="+code+"&lang=en"); !strings.Contains(body, "not sent") {
+		t.Fatal("the pickup page must say it was not sent")
+	}
+
+	// Sent again: a new send, and pressing the button twice sends once.
+	if _, err := e.svc.Open(); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.svc.Approve(code); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.svc.Approve(code); err != nil {
+		t.Fatal(err)
+	}
+	if len(e.q.rows) != 2 {
+		t.Fatalf("%d sends, want the first and one again", len(e.q.rows))
+	}
+	m, _, _ = e.svc.Status(code)
+	if m.Status != database.PostStatusQueued || m.DeliveryID == first || m.DeliveryID == 0 {
+		t.Fatalf("sent again: %+v", m)
+	}
+
+	// A purge stops a send still waiting.
+	pc, err := e.svc.Purge()
+	if err != nil || pc.Stopped != 1 {
+		t.Fatalf("purge = %+v, %v", pc, err)
+	}
+	if d, _ := e.db.GetDelivery(m.DeliveryID); d.Status != "dead" || d.LastError != database.PostSendStoppedPurged {
+		t.Fatalf("the send after the purge: %s %q", d.Status, d.LastError)
 	}
 }

@@ -664,6 +664,12 @@ func (db *DB) EvictLowestPriority(channel string) (int64, error) {
 // a restart silenced the SOS on that route. Its legs and, once cancelled,
 // its cancellation legs are "sos-<id>-..." (api/sos_legs.go); the legs of
 // an earlier SOS are cleaned up as before. [MESHSAT-1581]
+//
+// The same goes for a send a Community Post still waits on (the post
+// queued): a post is tried until it leaves or the operator closes the post,
+// so one that waited out 15 retries for sky is not a runaway either; its
+// earlier sends (a post sent again after it failed) are cleaned up as
+// before. [MESHSAT-1807]
 func (db *DB) CancelRunawayDeliveries(safetyLimit int) (int64, error) {
 	// The SOS kept and the earlier runs still owed their cancellation (C10-R4): their
 	// cancel frames are tried until they go, like the SOS's legs.
@@ -671,8 +677,9 @@ func (db *DB) CancelRunawayDeliveries(safetyLimit int) (int64, error) {
 		SET status = 'dead', last_error = 'cancelled: exceeded retry limit on startup cleanup', updated_at = datetime('now')
 		WHERE status IN ('queued', 'retry') AND intent_id IS NULL
 		  AND ((max_retries > 0 AND retries >= max_retries)
-		    OR (max_retries = 0 AND retries >= ?))`
-	args := []any{safetyLimit}
+		    OR (max_retries = 0 AND retries >= ?))
+		  AND id NOT IN (SELECT delivery_id FROM post_messages WHERE status = ? AND delivery_id > 0)`
+	args := []any{safetyLimit, PostStatusQueued}
 	for _, p := range db.sosRunRefPrefixes() {
 		q += ` AND substr(msg_ref, 1, length(?)) <> ?`
 		args = append(args, p, p)

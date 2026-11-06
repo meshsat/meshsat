@@ -354,15 +354,25 @@ type PostPurgeCounts struct {
 	Replies  int64 `json:"replies"`
 	Board    int64 `json:"board"`
 	Sessions int64 `json:"sessions"`
+	// Stopped counts the sends still waiting for the satellite that the
+	// purge ended (CancelWaitingPostSends).
+	Stopped int64 `json:"stopped"`
 }
 
 // PurgePost removes everything the portal stored, in one transaction: the
 // posts, their replies, the safe-and-well board and the per-phone counters
-// with the sign-in marks. The delivery ledger's rows are the Bridge's own
-// record and are left to its retention.
+// with the sign-in marks. A send still waiting for the satellite is stopped
+// first (CancelWaitingPostSends), or it would leave for a post that no
+// longer exists. The delivery ledger's rows are the Bridge's own record and
+// are left to its retention.
 func (db *DB) PurgePost() (PostPurgeCounts, error) {
 	var c PostPurgeCounts
 	err := db.withTx(func(tx *sqlx.Tx) error {
+		n, err := cancelWaitingPostSends(tx, PostSendStoppedPurged)
+		if err != nil {
+			return err
+		}
+		c.Stopped = n
 		for _, t := range []struct {
 			table string
 			n     *int64
@@ -376,6 +386,49 @@ func (db *DB) PurgePost() (PostPurgeCounts, error) {
 		return nil
 	})
 	return c, err
+}
+
+// The reasons a send the Community Post still waits on ends with when the
+// operator stops it (CancelWaitingPostSends).
+const (
+	PostSendStoppedClosed = "cancelled: the Community Post was closed before this message could leave"
+	PostSendStoppedPurged = "cancelled: the Community Post was purged before this message could leave"
+)
+
+// CancelWaitingPostSends ends the sends the Community Post's queued posts
+// still wait on (their delivery queued, retry or held; one in a satellite
+// session right now is left to finish) with reason, and marks those posts
+// failed, in one transaction. A post is tried until it leaves; closing or
+// purging the post is what stops it. It returns how many it stopped.
+// [MESHSAT-1807]
+func (db *DB) CancelWaitingPostSends(reason string) (int64, error) {
+	var n int64
+	err := db.withTx(func(tx *sqlx.Tx) error {
+		var err error
+		n, err = cancelWaitingPostSends(tx, reason)
+		return err
+	})
+	return n, err
+}
+
+func cancelWaitingPostSends(tx *sqlx.Tx, reason string) (int64, error) {
+	var ids []int64
+	if err := tx.Select(&ids, `SELECT d.id FROM message_deliveries d JOIN post_messages p ON p.delivery_id = d.id
+		WHERE p.status = ? AND d.status IN ('queued', 'retry', 'held')`, PostStatusQueued); err != nil {
+		return 0, fmt.Errorf("waiting post sends: %w", err)
+	}
+	now := postTime(time.Now())
+	for _, id := range ids {
+		if _, err := tx.Exec(`UPDATE message_deliveries SET status = 'dead', last_error = ?, held_at = NULL, updated_at = datetime('now')
+			WHERE id = ? AND status IN ('queued', 'retry', 'held')`, reason, id); err != nil {
+			return 0, fmt.Errorf("stop post send %d: %w", id, err)
+		}
+		if _, err := tx.Exec(`UPDATE post_messages SET status = ?, updated_at = ? WHERE delivery_id = ? AND status = ?`,
+			PostStatusFailed, now, id, PostStatusQueued); err != nil {
+			return 0, fmt.Errorf("fail post of send %d: %w", id, err)
+		}
+	}
+	return int64(len(ids)), nil
 }
 
 // CountPostMessages counts posts per status.

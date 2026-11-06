@@ -259,7 +259,8 @@ func (s *Service) Create(clientKey, lang string, in Submission) (*database.PostM
 }
 
 // Approve sends a pending post. Approving again is harmless: the delivery
-// is keyed by the code.
+// is keyed by the code. A failed post approved again is sent again, keyed
+// by the send it failed on, so approving it twice still sends it once.
 func (s *Service) Approve(code string) error {
 	m, err := s.deps.DB.GetPostMessage(code)
 	if err != nil {
@@ -272,6 +273,12 @@ func (s *Service) Approve(code string) error {
 	case database.PostStatusPending, database.PostStatusQueued, database.PostStatusFailed:
 	default:
 		return fmt.Errorf("post %s is %s", code, m.Status)
+	}
+	if m.Status == database.PostStatusQueued && m.DeliveryID > 0 {
+		// Already on its way. Its key may be a send-again key, so asking the
+		// queue by the code's own key would answer with the first send, the
+		// one that failed, and point the post back at it. [MESHSAT-1807]
+		return nil
 	}
 	if s.deps.Queue == nil {
 		return errors.New("no dispatcher")
@@ -287,16 +294,24 @@ func (s *Service) Approve(code string) error {
 	emergency := m.Class == database.PostClassEmergency
 	text := Compose(rcpt, m.Name, m.Text, m.Code, emergency)
 	sum := sha256.Sum256([]byte(text))
+	// A post is tried until it leaves or the operator closes the post: a
+	// kit under a roof or a heavy sky waits for its satellite. Twelve tries
+	// (about 35 minutes) failed both kits' first posts on 6 Nov 2026 while
+	// the people who wrote them were still told to wait. [MESHSAT-1807]
 	opts := engine.DirectSendOptions{
-		Precedence: string(types.PrecedencePriority),
-		Class:      database.DeliveryClassPlain,
-		MaxRetries: 12,
+		Precedence:   string(types.PrecedencePriority),
+		Class:        database.DeliveryClassPlain,
+		RetryForever: true,
 	}
 	if emergency {
 		opts.Precedence = string(types.PrecedenceFlash)
 		opts.Critical = true
 	}
-	id, ref, replayed, err := s.deps.Queue.QueueDirectSendKeyed(SendSource, "post:"+code, hex.EncodeToString(sum[:]), iface, text, opts)
+	key := "post:" + code
+	if m.Status == database.PostStatusFailed && m.DeliveryID > 0 {
+		key += ":after:" + strconv.FormatInt(m.DeliveryID, 10)
+	}
+	id, ref, replayed, err := s.deps.Queue.QueueDirectSendKeyed(SendSource, key, hex.EncodeToString(sum[:]), iface, text, opts)
 	if err != nil {
 		return err
 	}
@@ -345,7 +360,8 @@ func (s *Service) State() State {
 }
 
 // Close closes the post: the portal takes no new post and no board line,
-// replies can still be picked up, and everything the portal stored is
+// the posts still waiting for the satellite are stopped (they show as not
+// sent), replies can still be picked up, and everything the portal stored is
 // purged PurgeAfter later by the sweep in Run, or sooner by Purge. Closing
 // a closed post changes nothing.
 func (s *Service) Close() (State, error) {
@@ -358,6 +374,13 @@ func (s *Service) Close() (State, error) {
 	}
 	st = s.State()
 	log.Info().Time("purge_at", st.PurgeAt).Msg("post: closed by the operator")
+	// The posts still waiting for the satellite stop here and show as not
+	// sent; the operator can send one again. [MESHSAT-1807]
+	if n, err := s.deps.DB.CancelWaitingPostSends(database.PostSendStoppedClosed); err != nil {
+		log.Warn().Err(err).Msg("post: closed, but the posts still waiting for the satellite were not stopped")
+	} else if n > 0 {
+		log.Info().Int64("posts", n).Msg("post: closed; the posts still waiting for the satellite were stopped and show as not sent")
+	}
 	return st, nil
 }
 
@@ -384,7 +407,8 @@ func (s *Service) Purge() (database.PostPurgeCounts, error) {
 	if err := s.deps.DB.SetSystemConfig(settingPurgedAt, s.now().Format(time.RFC3339Nano)); err != nil {
 		log.Warn().Err(err).Msg("post: purge time not saved")
 	}
-	log.Info().Int64("messages", c.Messages).Int64("replies", c.Replies).Int64("board", c.Board).Int64("sessions", c.Sessions).Msg("post: purged")
+	log.Info().Int64("messages", c.Messages).Int64("replies", c.Replies).Int64("board", c.Board).Int64("sessions", c.Sessions).
+		Int64("stopped", c.Stopped).Msg("post: purged")
 	return c, nil
 }
 
