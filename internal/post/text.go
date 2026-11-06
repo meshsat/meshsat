@@ -47,10 +47,24 @@ var (
 	sentenceGlue = regexp.MustCompile(`([\p{L}\p{N}])\.(\p{Lu}\p{Ll})`)
 )
 
-// tidy is a text as it goes on the wire: one line, single spaces, and the
-// space after a full stop put back where a sentence was glued to the last.
+// plainPunct turns the punctuation a phone keyboard puts in by itself (curly
+// quotes and apostrophes, dashes, the ellipsis, a no-break space) into the
+// plain characters a person meant. Each of these is three bytes of a post's
+// byte budget against one, and an SMS carrying one of them is sent as UCS-2,
+// at fewer characters per part. Letters, accents, «» and emoji are left alone.
+var plainPunct = strings.NewReplacer(
+	"\u2018", "'", "\u2019", "'", "\u201A", "'", "\u201B", "'",
+	"\u201C", `"`, "\u201D", `"`, "\u201E", `"`, "\u201F", `"`,
+	"\u2013", "-", "\u2014", "-", "\u2212", "-",
+	"\u2026", "...",
+	"\u00A0", " ", "\u202F", " ",
+)
+
+// tidy is a text as it goes on the wire: one line, single spaces, plain
+// punctuation, and the space after a full stop put back where a sentence was
+// glued to the last.
 func tidy(s string) string {
-	s = strings.Join(strings.Fields(s), " ")
+	s = strings.Join(strings.Fields(plainPunct.Replace(s)), " ")
 	// A glue right after another ("a.Bc.De") overlaps the first match;
 	// the second pass takes it. Two passes always suffice.
 	for i := 0; i < 2; i++ {

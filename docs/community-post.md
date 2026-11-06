@@ -262,7 +262,7 @@ and the Rijksoverheid address residents), Greek the polite plural "εσείς". 
 checks the messages is the volunteer (Team, vrijwilliger, εθελοντής, the words safertogether.eu uses);
 the organisation that runs the post is the operator (Betreiber, beheerder, φορέας). The place is
 "Treffpunkt" in German, "punt" in Dutch (not "post": in Dutch that reads as the mail or a social-media
-post) and "σημείο" in Greek; the page titles are Community Post, Nachrichtenstelle, Berichtenpunt and
+post) and "σημείο" in Greek; the page titles are Community Post, Nachrichten am Treffpunkt, Berichtenpunt and
 Σημείο Μηνυμάτων. A count goes through `Plural` (`key_one`, `key_other`). Every key exists in all four
 languages with the same placeholders, and every event, severity and source the warnings package can
 name has a translation (both are tests).

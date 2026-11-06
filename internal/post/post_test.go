@@ -413,7 +413,7 @@ func TestPagesSpeakFourLanguagesAndCarryNoScript(t *testing.T) {
 		t.Fatal("a cookie choice outranks Accept-Language")
 	}
 	_, body = e.get(e.client(), "/", "Accept-Language", "de-AT,de;q=0.9,en;q=0.8")
-	if !strings.Contains(body, `<html lang="de">`) || !strings.Contains(body, "Nachrichtenstelle") {
+	if !strings.Contains(body, `<html lang="de">`) || !strings.Contains(body, "Nachrichten am Treffpunkt") {
 		t.Fatal("German by Accept-Language")
 	}
 	_, body = e.get(c, "/?lang=en")
@@ -1306,5 +1306,33 @@ func TestEveryWarningNameHasWordsInEveryLanguage(t *testing.T) {
 				t.Errorf("%s lacks %s", lang, key)
 			}
 		}
+	}
+}
+
+// A phone keyboard's own punctuation (curly quotes and apostrophes, dashes,
+// the ellipsis, no-break spaces) goes out plain, so it costs one byte of the
+// budget instead of three; letters, accents, «» and emoji are left as typed.
+func TestKeyboardPunctuationGoesOutPlain(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"We’re safe – at the school…", "We're safe - at the school..."},
+		{"„Wir sind in Sicherheit“", `"Wir sind in Sicherheit"`},
+		{"“We zijn veilig”, zegt ‘Oma’", `"We zijn veilig", zegt 'Oma'`},
+		{"«Είμαστε καλά»", "«Είμαστε καλά»"},
+		{"10 km north", "10 km north"},
+		{"Grüße, Oma ❤️", "Grüße, Oma ❤️"},
+	}
+	for _, c := range cases {
+		got, err := CleanText(c.in, 150, 240)
+		if err != nil {
+			t.Fatalf("CleanText(%q): %v", c.in, err)
+		}
+		if got != c.want {
+			t.Errorf("CleanText(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+	// 150 letters with a curly apostrophe after each word fit once plain.
+	words := strings.Repeat("abc’ ", 30)
+	if _, err := CleanText(words, 150, 240); err != nil {
+		t.Errorf("a text of curly apostrophes inside the limits was refused: %v", err)
 	}
 }

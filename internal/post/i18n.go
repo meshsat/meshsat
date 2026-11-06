@@ -242,7 +242,7 @@ var strs = map[string]map[string]string{
 	},
 	"de": {
 		"lang_name":      "Deutsch",
-		"title":          "Nachrichtenstelle",
+		"title":          "Nachrichten am Treffpunkt",
 		"nav_write":      "Schreiben",
 		"nav_pickup":     "Abholen",
 		"nav_board":      "Ich bin in Sicherheit",
@@ -306,7 +306,7 @@ var strs = map[string]map[string]string{
 		"err_quota":      "Von diesem Telefon können gerade keine weiteren Nachrichten gesendet werden. Versuchen Sie es später noch einmal oder fragen Sie das Team.",
 		"err_other":      "Hier ist etwas schiefgegangen. Bitte sagen Sie dem Team Bescheid.",
 		"language":       "Sprache",
-		"powered":        "MeshSat Nachrichtenstelle",
+		"powered":        "MeshSat Nachrichten am Treffpunkt",
 		"warn_title":     "Öffentliche Warnung",
 		"warn_test":      "TEST",
 		"warn_update":    "Aktualisierung",
