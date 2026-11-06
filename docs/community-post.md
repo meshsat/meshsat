@@ -221,7 +221,7 @@ vital interests; the operator named above is responsible for the data.
 
 **Deutsch.** Gespeichert wird hier: Ihre Nachricht, die Adresse, an die Sie geschrieben haben, der
 Name, den Sie angegeben haben, die Antwort und ein Zähler pro Telefon, damit ein einzelnes Telefon
-nicht alles aufbraucht. Gelöscht wird alles 30 Tage, nachdem der Betreiber die Stelle schließt, oder
+nicht alles aufbraucht. Gelöscht wird alles 30 Tage, nachdem der Betreiber den Treffpunkt schließt, oder
 früher durch den Betreiber; das Sendeprotokoll des Kits behält den gesendeten Text gemäß seiner
 eigenen Aufbewahrungsfrist. Weitergesendet werden nur die Adresse, die Nachricht, Ihr Name und der
 Abholcode. Die Liste „Ich bin in Sicherheit“ ist davon getrennt, enthält nur, was Sie selbst
@@ -259,9 +259,9 @@ that everything is deleted.
 
 Register and words are fixed in `internal/post/i18n.go`'s header: German "Sie", Dutch "je" (as NL-Alert
 and the Rijksoverheid address residents), Greek the polite plural "εσείς". The person at the kit who
-checks the messages is the volunteer (Team, medewerker, εθελοντής, the words safertogether.eu uses);
+checks the messages is the volunteer (Team, vrijwilliger, εθελοντής, the words safertogether.eu uses);
 the organisation that runs the post is the operator (Betreiber, beheerder, φορέας). The place is
-"Stelle" in German, "punt" in Dutch (not "post": in Dutch that reads as the mail or a social-media
+"Treffpunkt" in German, "punt" in Dutch (not "post": in Dutch that reads as the mail or a social-media
 post) and "σημείο" in Greek; the page titles are Community Post, Nachrichtenstelle, Berichtenpunt and
 Σημείο Μηνυμάτων. A count goes through `Plural` (`key_one`, `key_other`). Every key exists in all four
 languages with the same placeholders, and every event, severity and source the warnings package can

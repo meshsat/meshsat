@@ -1263,7 +1263,7 @@ func TestHubNoticeAndMissingOperatorSpeakThePagesLanguage(t *testing.T) {
 	for lang, wants := range map[string][]string{
 		"en": {"Not sent. Please tell the volunteer. Reason from the MeshSat Hub: this account has no SMS provider", "not sent (sending failed)"},
 		"de": {"Nicht gesendet. Bitte sagen Sie dem Team Bescheid. Grund vom MeshSat Hub (auf Englisch): this account has no SMS provider", "Übertragung fehlgeschlagen"},
-		"nl": {"Niet verstuurd. Zeg het tegen de medewerker. Reden van de MeshSat Hub (in het Engels): this account has no SMS provider", "versturen mislukt"},
+		"nl": {"Niet verstuurd. Zeg het tegen de vrijwilliger. Reden van de MeshSat Hub (in het Engels): this account has no SMS provider", "versturen mislukt"},
 		"el": {"Δεν στάλθηκε. Ενημερώστε τον εθελοντή. Αιτία από το MeshSat Hub (στα αγγλικά): this account has no SMS provider", "η αποστολή απέτυχε"},
 	} {
 		_, body := e.get(c, "/pickup?code="+code+"&lang="+lang)
