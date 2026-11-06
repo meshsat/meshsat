@@ -129,9 +129,16 @@ Three deliberate steps, each reversible.
    It changes only the portal; the rest of the Bridge keeps the process zone, so stored timestamps
    do not move. Unset, the portal uses the process zone, which is **UTC in a container without
    `TZ`**. The binary carries its own zone database (`time/tzdata`), so any IANA name works.
-   In BOTH kits' `/srv/meshsat/docker-compose.yml`, byte for byte: the new variables and a port
-   published on the host's loopback only, `127.0.0.1:8081:8081`. Recreate the container. The API's
-   `GET /api/post/config` answers 200 (503 before).
+   Both kits' `/srv/meshsat/docker-compose.yml` carry the four variables since 6 Nov 2026, byte for
+   byte, empty by default (`MESHSAT_POST_LISTEN=${MESHSAT_POST_LISTEN:-}`, `MESHSAT_POST_OPERATOR`,
+   `MESHSAT_POST_TZ`, `MESHSAT_POST_PRINT=${MESHSAT_POST_PRINT:-false}`); the kits run with
+   `network_mode: host`, so no port is published and a listener on `127.0.0.1:8081` is reachable from
+   the host only. The values go in each kit's `.env`; recreate the container (`docker compose up -d`).
+   The API's `GET /api/post/config` answers 200 (503 before).
+   **First run on the kits, 6 Nov 2026 (MESHSAT-1803):** both kits armed on `127.0.0.1:8081`, every
+   check in "Proving it on a kit" step 1 passed, one post each approved and queued on `iridium_0`
+   (tesseract `Q6C6QQ` to parallax's SIM, parallax `SP2NXQ` to tesseract's SIM), waiting for sky.
+   The Hub knows both Mk2 modems as `post` devices (tesseract's was not registered until that day).
 2. **The host.** `sudo scripts/install-post.sh` places hostapd, dnsmasq, nftables and the four
    units `meshsat-post-{net,ap,dns,fw}` DISABLED (the units have no `[Install]` section, so they
    cannot start at boot by accident) and writes `/etc/default/meshsat-post` once. It does not touch
@@ -301,8 +308,8 @@ name has a translation (both are tests).
    `curl -s http://127.0.0.1:6050/api/post/queue` lists it under `pending`.
 3. Approve it: `curl -s -X POST http://127.0.0.1:6050/api/post/<code>/approve`; the delivery queue
    (`GET /api/deliveries?status=queued`) shows one plain-class row on the satellite link with the
-   text above. **This is where the spend starts**: the row leaves at the next satellite session, the
-   Hub sends an SMS from the tenant's number, and the owner's go is needed before it.
+   text above. The row leaves at the next satellite session (the only gate is sky: a test send is
+   testing, not spend), and the Hub sends an SMS from the tenant's number.
 4. The reply: answer the SMS with `#<code> ok`; the Hub's MT reaches the kit;
    `curl -s http://127.0.0.1:6050/api/post/<code>` shows it under `replies`, and the pickup page shows
    it too.
