@@ -38,7 +38,102 @@ var (
 	// top-level domain. A post carries words; a link in one is refused, the
 	// plan's rule (phishing through a stranger's satellite account).
 	linkPattern = regexp.MustCompile(`(?i)(://|\bwww\.|\b[a-z0-9-]+\.(com|net|org|info|io|nl|gr|eu|de|be|uk|fr|it|es|co|me|xyz|top|link|site|online|app|gov|edu|ru|cn|tk|ml|ga)\b)`)
+	// sentenceGlue is a full stop typed with no space before the next
+	// sentence's capitalised word ("veilig.De kinderen", "gut.Es geht"), a
+	// common slip on a phone keyboard that read as a .de or .es domain. The
+	// space goes in before the link check; with it in, no phone or mail
+	// client turns the words into a link either. A lower-case "veilig.de"
+	// is a domain as far as any phone is concerned and stays refused.
+	sentenceGlue = regexp.MustCompile(`([\p{L}\p{N}])\.(\p{Lu}\p{Ll})`)
 )
+
+// tidy is a text as it goes on the wire: one line, single spaces, and the
+// space after a full stop put back where a sentence was glued to the last.
+func tidy(s string) string {
+	s = strings.Join(strings.Fields(s), " ")
+	// A glue right after another ("a.Bc.De") overlaps the first match;
+	// the second pass takes it. Two passes always suffice.
+	for i := 0; i < 2; i++ {
+		s = sentenceGlue.ReplaceAllString(s, "$1. $2")
+	}
+	return s
+}
+
+// LetterBytes is what one letter of lang's alphabet costs in UTF-8: two for
+// Greek, one for the Latin alphabet (an accent or an umlaut is the odd
+// extra byte, not the rule).
+func LetterBytes(lang string) int {
+	if lang == "el" {
+		return 2
+	}
+	return 1
+}
+
+// MaxCharsFor is the character limit the portal shows in lang: the
+// character ceiling, or fewer where that many of the language's letters
+// would not fit the byte budget (240 bytes hold 120 Greek letters, not
+// 150). A message of that many letters is never refused as too long.
+func MaxCharsFor(lang string, maxChars, maxBytes int) int {
+	n := maxChars
+	if maxBytes > 0 {
+		if b := maxBytes / LetterBytes(lang); n <= 0 || b < n {
+			n = b
+		}
+	}
+	return n
+}
+
+// CharsLeft is the room a typed text has, measured on the text as it would
+// be sent (tidy) against the same two limits CleanText enforces. Positive
+// or zero: how many more characters fit, counting each as wide as the
+// letters already typed take on average (at least as wide as lang's
+// letters). Negative: how many characters must come off the end before
+// CleanText takes it.
+func CharsLeft(text, lang string, maxChars, maxBytes int) int {
+	if maxChars <= 0 && maxBytes <= 0 {
+		return 1 << 30
+	}
+	s := tidy(text)
+	r := []rune(s)
+	over, n, b := 0, len(r), len(s)
+	for (maxChars > 0 && n > maxChars) || (maxBytes > 0 && b > maxBytes) {
+		n--
+		b -= utf8.RuneLen(r[n])
+		over++
+	}
+	if over > 0 {
+		return -over
+	}
+	left := 1 << 30
+	if maxChars > 0 {
+		left = maxChars - len(r)
+	}
+	if maxBytes > 0 {
+		unit := LetterBytes(lang)
+		if len(r) > 0 {
+			if avg := (len(s) + len(r) - 1) / len(r); avg > unit {
+				unit = avg
+			}
+		}
+		if byBytes := (maxBytes - len(s)) / unit; byBytes < left {
+			left = byBytes
+		}
+	}
+	return left
+}
+
+// utf16Len is a text's length as a browser's maxlength counts it.
+func utf16Len(s string) int {
+	n := 0
+	for _, r := range s {
+		if r >= 0x10000 {
+			n += 2
+		} else {
+			n++
+		}
+	}
+	return n
+}
 
 // Recipient is a parsed "@" address: an E.164 number or an email address.
 type Recipient struct {
@@ -91,15 +186,16 @@ func ParseRecipient(s string) (Recipient, error) {
 }
 
 // CleanText checks and tidies a post's words: line breaks become spaces, runs
-// of whitespace one space, control characters are refused, so is a link, and
-// the result must fit maxChars characters and maxBytes bytes.
+// of whitespace one space, a sentence glued to the last gets its space back,
+// control characters are refused, so is a link, and the result must fit
+// maxChars characters and maxBytes bytes.
 func CleanText(s string, maxChars, maxBytes int) (string, error) {
 	for _, r := range s {
 		if r != '\n' && r != '\r' && r != '\t' && unicode.IsControl(r) {
 			return "", ErrControl
 		}
 	}
-	s = strings.Join(strings.Fields(s), " ")
+	s = tidy(s)
 	if s == "" {
 		return "", ErrEmpty
 	}
@@ -137,7 +233,7 @@ func CleanName(s string) (string, error) {
 // CleanBoardField tidies a board field (name, status, place): one line, no
 // control characters, at most MaxBoardChars.
 func CleanBoardField(s string) (string, error) {
-	s = strings.Join(strings.Fields(s), " ")
+	s = tidy(s)
 	for _, r := range s {
 		if unicode.IsControl(r) {
 			return "", ErrControl

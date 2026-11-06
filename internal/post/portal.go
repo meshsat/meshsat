@@ -11,6 +11,10 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	// The kits' image is debian-slim, which carries no zone database: with
+	// this, TZ=Europe/Amsterdam in the compose file is honoured all the
+	// same, so the portal's times are the kit's local time.
+	_ "time/tzdata"
 
 	"github.com/rs/zerolog/log"
 
@@ -188,42 +192,107 @@ type page struct {
 	Status    string
 	Emergency bool
 	Closed    bool   // the operator closed the post
-	PurgeDate string // the day everything is deleted, while closed
+	PurgeDate string // the day everything is deleted, while closed, as the language writes it
 	PurgeDays int
+	// BoardDaysText and PurgeDaysText are the day counts in words ("30 days",
+	// "1 Tag"), what board_intro and data_notice take.
+	BoardDaysText string
+	PurgeDaysText string
+	// TextMax is the message box's maxlength and CharsHint the line under
+	// it: the limit before anything is typed, the real room left (or how
+	// much is too much) once the form comes back with a text in it.
+	TextMax   int
+	CharsHint string
 	// Warnings are the public warnings in force at this kit (the Hub's
 	// last-mile relay, MESHSAT-1734), shown at the top of every page.
 	Warnings []warningBanner
+	// loc is the zone the page shows times in (Config.Zone).
+	loc *time.Location
+}
+
+// When is a moment as this page's reader reads it: the kit's local time,
+// the date in the language's order.
+func (p *page) When(t time.Time) string { return FormatDateTime(p.Lang, t.In(p.loc)) }
+
+// replyCard is one reply as the pickup page shows it.
+type replyCard struct{ From, When, Text string }
+
+// ReplyCards are the replies in the page's language: the Hub's own "not
+// sent" notice gets the language's words around the Hub's (English)
+// reason; a person's reply is shown as it came.
+func (p *page) ReplyCards() []replyCard {
+	out := make([]replyCard, 0, len(p.Replies))
+	for _, r := range p.Replies {
+		c := replyCard{From: r.From, When: p.When(r.ReceivedAt), Text: r.Text}
+		if r.From == HubNoticeFrom && strings.HasPrefix(r.Text, HubNoticePrefix) {
+			c.Text = fmt.Sprintf(p.S["reply_hub_not_sent"], strings.TrimPrefix(r.Text, HubNoticePrefix))
+		}
+		out = append(out, c)
+	}
+	return out
 }
 
 type langLink struct{ Code, Name, Href string }
 
-// warningBanner is one relayed warning as the banner shows it: the event
-// and severity as the digest names them (English, as on the mesh), the
-// words, until when, and the label line the mesh carries. A test is marked;
-// a cancelled, replaced or expired warning is not shown at all.
+// warningBanner is one relayed warning as the banner shows it, in the
+// page's language: the event and severity, until when, the words as the
+// warning carries them, and the line that says it is a relay and not an
+// official NL-Alert. A test is marked; a cancelled, replaced or expired
+// warning is not shown at all. The mesh, the event stream and the digest
+// keep their own English label (warnings.LabelFor); only the portal
+// translates.
 type warningBanner struct {
 	Test     bool
 	Update   bool
-	Event    string
-	Severity string
-	Until    string // "HH:MM UTC", "" when the warning names no expiry
+	Event    string // translated where the digest's fixed set names it
+	Severity string // likewise
+	Headline string // event and severity, as warn_headline puts them
+	Until    string // local time, the date too when it is not today; "" when the warning names no expiry
 	Text     string
 	Label    string
 }
 
-// bannerWarnings reads the warnings in force through the warnings package.
-func (s *Service) bannerWarnings() []warningBanner {
-	list, err := warnings.InForce(s.deps.DB, s.now())
+// warnKey is a fixed name from the warnings package as a key suffix:
+// "Snow/ice" -> "snow_ice", "meteoalarm-nl" -> "meteoalarm_nl".
+func warnKey(name string) string {
+	return strings.NewReplacer("/", "_", "-", "_", " ", "_").Replace(strings.ToLower(name))
+}
+
+// warnWord is a name from the digest's fixed set in the page's words; a
+// name outside the set is shown as it came.
+func warnWord(S map[string]string, prefix, name string) string {
+	if v, ok := S[prefix+warnKey(name)]; ok {
+		return v
+	}
+	return name
+}
+
+// bannerWarnings reads the warnings in force through the warnings package
+// and puts them in lang's words and the kit's local time.
+func (s *Service) bannerWarnings(lang string, S map[string]string, loc *time.Location) []warningBanner {
+	now := s.now()
+	list, err := warnings.InForce(s.deps.DB, now)
 	if err != nil {
 		log.Warn().Err(err).Msg("post: warnings in force unreadable, no banner")
 		return nil
 	}
 	var out []warningBanner
 	for _, w := range list {
-		b := warningBanner{Test: w.Test, Update: w.MsgType == "Update", Event: w.Event, Severity: w.Severity, Text: w.Text,
-			Label: warnings.LabelFor(w.Source, w.Sent)}
+		b := warningBanner{Test: w.Test, Update: w.MsgType == "Update", Text: w.Text,
+			Event: warnWord(S, "warn_event_", w.Event), Severity: warnWord(S, "warn_sev_", w.Severity)}
+		b.Headline = fmt.Sprintf(S["warn_headline"], b.Event, b.Severity)
+		source, ok := S["warn_src_"+warnKey(w.Source)]
+		if !ok {
+			source = S["warn_src_unknown"]
+		}
+		b.Label = fmt.Sprintf(S["warn_label"], source, FormatDateTime(lang, w.Sent.In(loc)))
 		if !w.Expires.IsZero() {
-			b.Until = w.Expires.UTC().Format("15:04") + " UTC"
+			until, today := w.Expires.In(loc), now.In(loc)
+			if until.Year() == today.Year() && until.YearDay() == today.YearDay() {
+				b.Until = FormatClock(until)
+			} else {
+				b.Until = FormatDateTime(lang, until)
+			}
 		}
 		out = append(out, b)
 	}
@@ -235,14 +304,19 @@ func (s *Service) newPage(w http.ResponseWriter, r *http.Request, path string) *
 	st := s.Settings()
 	p := &page{Lang: lang, Q: "?lang=" + lang, S: merged(lang), Path: path, Form: map[string]string{},
 		Operator: st.Operator, MaxChars: s.cfg.MaxTextChars, BoardDays: int(s.cfg.BoardRetention.Hours() / 24),
-		PurgeDays: int(s.cfg.PurgeAfter.Hours() / 24)}
+		PurgeDays: int(s.cfg.PurgeAfter.Hours() / 24), loc: s.cfg.Zone}
+	if p.loc == nil {
+		p.loc = time.Local
+	}
+	p.BoardDaysText, p.PurgeDaysText = Plural(lang, "days", p.BoardDays), Plural(lang, "days", p.PurgeDays)
 	if p.Operator == "" {
-		p.Operator = "(not set)"
+		p.Operator = p.S["operator_not_set"]
 	}
 	if state := s.State(); state.Closed {
-		p.Closed, p.PurgeDate = true, state.PurgeAt.UTC().Format("2006-01-02")
+		p.Closed, p.PurgeDate = true, FormatDate(lang, state.PurgeAt.In(p.loc))
 	}
-	p.Warnings = s.bannerWarnings()
+	s.textBudget(p, "")
+	p.Warnings = s.bannerWarnings(lang, p.S, p.loc)
 	for _, l := range Languages {
 		p.Langs = append(p.Langs, langLink{Code: l, Name: T(l, "lang_name"), Href: path + "?lang=" + l})
 	}
@@ -259,6 +333,25 @@ func merged(lang string) map[string]string {
 		out[k] = v
 	}
 	return out
+}
+
+// textBudget sets the message box's limit and the line under it. With no
+// text: the most characters the language's letters may take (MaxCharsFor).
+// With the text the form came back with: the room left, or how many
+// characters are too many, from the same limits CleanText enforces; the
+// box's maxlength then stops at exactly that.
+func (s *Service) textBudget(p *page, text string) {
+	limit := MaxCharsFor(p.Lang, s.cfg.MaxTextChars, s.cfg.MaxBytes)
+	p.TextMax, p.CharsHint = limit, fmt.Sprintf(p.S["chars_left"], limit)
+	if strings.TrimSpace(text) == "" {
+		return
+	}
+	left, typed := CharsLeft(text, p.Lang, s.cfg.MaxTextChars, s.cfg.MaxBytes), utf16Len(text)
+	if left >= 0 {
+		p.TextMax, p.CharsHint = typed+left, Plural(p.Lang, "chars_remaining", left)
+		return
+	}
+	p.TextMax, p.CharsHint = max(typed+left, 0), Plural(p.Lang, "err_too_long_by", -left)
 }
 
 func (s *Service) render(w http.ResponseWriter, name string, p *page) {
@@ -309,6 +402,10 @@ func (s *Service) send(w http.ResponseWriter, r *http.Request) {
 		p.Err = errorText(p.S, err)
 		if p.Err == p.S["err_other"] {
 			log.Error().Err(err).Msg("post: create failed")
+		}
+		s.textBudget(p, in.Text)
+		if left := CharsLeft(in.Text, p.Lang, s.cfg.MaxTextChars, s.cfg.MaxBytes); errors.Is(err, ErrTooLong) && left < 0 {
+			p.Err = Plural(p.Lang, "err_too_long_by", -left)
 		}
 		s.render(w, "write", p)
 		return
@@ -437,7 +534,6 @@ func errorText(s map[string]string, err error) string {
 }
 
 var templates = template.Must(template.New("post").Funcs(template.FuncMap{
-	"when":   func(t time.Time) string { return t.UTC().Format("2006-01-02 15:04") + " UTC" },
 	"printf": fmt.Sprintf,
 }).Parse(portalTemplates))
 
@@ -487,7 +583,7 @@ a{color:#8fd3c9}
 <a href="/board{{.Q}}"{{if eq .Path "/board"}} class="on"{{end}}>{{.S.nav_board}}</a>
 <a href="/about{{.Q}}"{{if eq .Path "/about"}} class="on"{{end}}>{{.S.nav_about}}</a>
 </nav>
-{{range .Warnings}}<div class="warn" role="alert"><div class="meta"><span class="tag">{{$.S.warn_title}}</span>{{if .Test}} &middot; <span class="tag">{{$.S.warn_test}}</span>{{end}}{{if .Update}} &middot; {{$.S.warn_update}}{{end}}</div><div><strong>{{.Event}} {{.Severity}}</strong>{{if .Until}} &middot; {{$.S.warn_until}} {{.Until}}{{end}}</div>{{if .Text}}<div>{{.Text}}</div>{{end}}<div class="meta">{{.Label}}</div></div>
+{{range .Warnings}}<div class="warn" role="alert"><div class="meta"><span class="tag">{{$.S.warn_title}}</span>{{if .Test}} &middot; <span class="tag">{{$.S.warn_test}}</span>{{end}}{{if .Update}} &middot; {{$.S.warn_update}}{{end}}</div><div><strong>{{.Headline}}</strong>{{if .Until}} &middot; {{$.S.warn_until}} {{.Until}}{{end}}</div>{{if .Text}}<div>{{.Text}}</div>{{end}}<div class="meta">{{.Label}}</div></div>
 {{end}}{{if .Err}}<div class="err">{{.Err}}</div>{{end}}
 {{end}}
 
@@ -501,8 +597,8 @@ a{color:#8fd3c9}
 <label for="name">{{.S.name}}</label>
 <input id="name" name="name" value="{{index .Form "name"}}" maxlength="40" autocomplete="name">
 <label for="text">{{.S.message}}</label>
-<textarea id="text" name="text" maxlength="{{.MaxChars}}" required>{{index .Form "text"}}</textarea>
-<p class="hint">{{printf .S.chars_left .MaxChars}}</p>
+<textarea id="text" name="text" maxlength="{{.TextMax}}" required>{{index .Form "text"}}</textarea>
+<p class="hint">{{.CharsHint}}</p>
 <div class="chk"><input type="checkbox" id="emergency" name="emergency" value="1"{{if .Emergency}} checked{{end}}><label for="emergency">{{.S.emergency}}</label></div>
 <p class="hint">{{.S.emergency_hint}}</p>
 <button type="submit">{{.S.send}}</button>
@@ -527,15 +623,15 @@ a{color:#8fd3c9}
 </form>
 {{if .Post}}
 <div class="code">{{.Post.Code}}</div>
-<div class="card"><div class="meta">{{.S.sent_to}}: {{.Post.Recipient}} &middot; {{when .Post.CreatedAt}}</div>{{if .Post.Name}}<div>{{.Post.Name}}:</div>{{end}}<div>{{.Post.Text}}</div><div class="meta">{{.S.status}}: {{.Status}}</div></div>
+<div class="card"><div class="meta">{{.S.sent_to}}: {{.Post.Recipient}} &middot; {{.When .Post.CreatedAt}}</div>{{if .Post.Name}}<div>{{.Post.Name}}:</div>{{end}}<div>{{.Post.Text}}</div><div class="meta">{{.S.status}}: {{.Status}}</div></div>
 <h2>{{.S.replies}}</h2>
-{{if .Replies}}{{range .Replies}}<div class="card"><div class="meta">{{.From}} &middot; {{when .ReceivedAt}}</div><div>{{.Text}}</div></div>{{end}}{{else}}<p>{{$.S.no_replies}}</p>{{end}}
+{{if .Replies}}{{range .ReplyCards}}<div class="card"><div class="meta">{{.From}} &middot; {{.When}}</div><div>{{.Text}}</div></div>{{end}}{{else}}<p>{{$.S.no_replies}}</p>{{end}}
 {{end}}
-{{if .Mine}}<h2>{{.S.your_posts}}</h2>{{range .Mine}}<div class="card"><a href="/pickup?code={{.Code}}&amp;lang={{$.Lang}}"><strong>{{.Code}}</strong></a> &middot; <span class="meta">{{.Recipient}} &middot; {{when .CreatedAt}}</span></div>{{end}}{{end}}
+{{if .Mine}}<h2>{{.S.your_posts}}</h2>{{range .Mine}}<div class="card"><a href="/pickup?code={{.Code}}&amp;lang={{$.Lang}}"><strong>{{.Code}}</strong></a> &middot; <span class="meta">{{.Recipient}} &middot; {{$.When .CreatedAt}}</span></div>{{end}}{{end}}
 {{template "foot" .}}{{end}}
 
 {{define "board"}}{{template "head" .}}
-<p>{{printf .S.board_intro .BoardDays}}</p>
+<p>{{printf .S.board_intro .BoardDaysText}}</p>
 {{if .Added}}<div class="ok">{{.S.board_added}}</div>{{end}}
 <form method="get" action="/board">
 <input type="hidden" name="lang" value="{{.Lang}}">
@@ -543,7 +639,7 @@ a{color:#8fd3c9}
 <input id="q" name="q" value="{{.Query}}" maxlength="60" autocomplete="off">
 <button type="submit">{{.S.board_find}}</button>
 </form>
-{{if .Query}}{{if .Board}}{{range .Board}}<div class="card"><strong>{{.Name}}</strong> &middot; {{.Status}}{{if .Place}} &middot; {{.Place}}{{end}}<div class="meta">{{when .CreatedAt}}</div></div>{{end}}{{else}}<p>{{.S.board_empty}}</p>{{end}}{{end}}
+{{if .Query}}{{if .Board}}{{range .Board}}<div class="card"><strong>{{.Name}}</strong> &middot; {{.Status}}{{if .Place}} &middot; {{.Place}}{{end}}<div class="meta">{{$.When .CreatedAt}}</div></div>{{end}}{{else}}<p>{{.S.board_empty}}</p>{{end}}{{end}}
 {{if .Closed}}<h2>{{.S.closed_title}}</h2><p>{{printf .S.closed_text .PurgeDate}}</p>{{else}}
 <h2>{{.S.board_add}}</h2>
 <form method="post" action="/board{{.Q}}">
@@ -563,7 +659,7 @@ a{color:#8fd3c9}
 <p>{{.S.about_how}}</p>
 <p>{{.S.about_cost}}</p>
 <h2>{{.S.data_title}}</h2>
-<p>{{printf .S.data_notice .PurgeDays .BoardDays}}</p>
+<p>{{printf .S.data_notice .PurgeDaysText .BoardDaysText}}</p>
 {{if .Closed}}<h2>{{.S.closed_title}}</h2><p>{{printf .S.closed_text .PurgeDate}}</p>{{end}}
 {{template "foot" .}}{{end}}
 

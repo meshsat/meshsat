@@ -34,6 +34,9 @@ type Config struct {
 	AutoApprove    bool          // the approval queue off: a post leaves at once
 	PurgeAfter     time.Duration // how long after the post is closed everything it stored is purged
 	Print          bool          // slips go to the kit's receipt printer (Deps.Printer)
+	// Zone is the zone the portal shows times in: nil = the process's local
+	// zone (time.Local, from TZ; UTC in a container without TZ).
+	Zone *time.Location
 }
 
 // Defaults are the plan's: a busy post stays affordable, and a stranger
@@ -62,6 +65,9 @@ func (c *Config) defaults() {
 	}
 	if c.PurgeAfter <= 0 {
 		c.PurgeAfter = 30 * 24 * time.Hour
+	}
+	if c.Zone == nil {
+		c.Zone = time.Local
 	}
 }
 
@@ -564,6 +570,15 @@ func (s *Service) HandleInbound(ifaceID, from, text string) {
 	s.printSlip(m, reply)
 }
 
+// The Hub's "not sent" notice is kept as a reply from HubNoticeFrom with
+// the text HubNoticePrefix + the Hub's reason (the slip prints it so, in
+// English); the portal shows it in the page's language. A person's reply
+// can never come from HubNoticeFrom: the reply form's address has no space.
+const (
+	HubNoticeFrom   = "MeshSat Hub"
+	HubNoticePrefix = "not sent: "
+)
+
 func (s *Service) failLatest(address, reason string) {
 	m, err := s.deps.DB.LatestOpenPostTo(strings.ToLower(address))
 	if err != nil || m == nil {
@@ -572,7 +587,7 @@ func (s *Service) failLatest(address, reason string) {
 	if err := s.deps.DB.SetPostStatus(m.Code, database.PostStatusFailed, "", 0); err != nil {
 		return
 	}
-	reply := &database.PostReply{Code: m.Code, From: "MeshSat Hub", Text: "not sent: " + reason, ReceivedAt: s.now()}
+	reply := &database.PostReply{Code: m.Code, From: HubNoticeFrom, Text: HubNoticePrefix + reason, ReceivedAt: s.now()}
 	if err := s.deps.DB.InsertPostReply(reply); err == nil {
 		s.printSlip(m, reply)
 	}

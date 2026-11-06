@@ -2510,11 +2510,21 @@ func main() {
 		if cfg.PostPrint {
 			postPrinter = post.EventPrinter{Emit: proc.Emit}
 		}
+		// MESHSAT_POST_TZ sets only the zone the portal shows times in; the rest of the
+		// Bridge keeps the process zone, so stored timestamps do not change.
+		var postZone *time.Location
+		if cfg.PostTZ != "" {
+			if z, err := time.LoadLocation(cfg.PostTZ); err != nil {
+				log.Warn().Err(err).Str("zone", cfg.PostTZ).Msg("post: MESHSAT_POST_TZ is not a known time zone, the portal shows the process zone")
+			} else {
+				postZone = z
+			}
+		}
 		postSvc = post.New(post.Config{
 			Listen: cfg.PostListen, PortalURL: cfg.PostURL, Operator: cfg.PostOperator, Bearer: cfg.PostBearer,
 			PostsPerHour: cfg.PostPerHour, PostsPerDay: cfg.PostPerDay, MaxTextChars: cfg.PostMaxChars, MaxBytes: cfg.PostMaxBytes,
 			BoardRetention: time.Duration(cfg.PostBoardDays) * 24 * time.Hour, AutoApprove: cfg.PostAutoApprove,
-			PurgeAfter: time.Duration(cfg.PostPurgeDays) * 24 * time.Hour, Print: cfg.PostPrint,
+			PurgeAfter: time.Duration(cfg.PostPurgeDays) * 24 * time.Hour, Print: cfg.PostPrint, Zone: postZone,
 		}, post.Deps{
 			DB:      db,
 			Queue:   dispatcher,

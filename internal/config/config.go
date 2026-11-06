@@ -257,6 +257,7 @@ type Config struct {
 	PostAutoApprove bool   // the approval queue off: a post leaves at once
 	PostPurgeDays   int    // days after the operator closes the post before everything it stored is purged
 	PostPrint       bool   // an approved post and a reply go to the kit's receipt printer as "post_slip" events
+	PostTZ          string // IANA zone the portal shows times in ("Europe/Amsterdam"); "" = the process's zone, UTC in a container without TZ
 
 	// Hub WebSocket relay: serve this bridge's API to the tenant's other
 	// bridges (phones) through the Hub when no direct path exists [MESHSAT-613]
@@ -410,6 +411,7 @@ func Load() *Config {
 		PostAutoApprove: envBool("MESHSAT_POST_AUTO_APPROVE", false),
 		PostPurgeDays:   envInt("MESHSAT_POST_PURGE_DAYS", 30),
 		PostPrint:       envBool("MESHSAT_POST_PRINT", false),
+		PostTZ:          envStr("MESHSAT_POST_TZ", ""),
 	}
 }
 

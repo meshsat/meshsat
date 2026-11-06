@@ -21,18 +21,34 @@ operator keep the satellite credit for what matters.
 **Write.** The phone joins the SSID (`MeshSat Post`, open). The phone's own captive-portal check
 opens the portal (Android, iOS, Windows, Ubuntu, Firefox and RFC 8908 clients are all answered).
 The page asks for a recipient (a number with its country code, or an email address), an optional
-name, the message (at most 150 characters, no links), and a checkbox for an emergency. It is plain
-HTML in Greek, Dutch, German and English (from `Accept-Language`, switchable at the top of every page), no
-script, no outside asset, forms that POST.
+name, the message (at most 150 characters and 240 bytes, no links), and a checkbox for an emergency
+(its hint says it does not call 112). It is plain HTML in Greek, Dutch, German and English (from
+`Accept-Language`, switchable at the top of every page), no script, no outside asset, forms that POST.
+
+The limit the page shows is the one the language's letters can reach: 150 in English, German and
+Dutch, 120 in Greek (Greek letters are two bytes each, and 240 bytes hold 120 of them). The message
+box's `maxlength` is the same number, so nobody inside the number shown is told "too long". With no
+script the page cannot count while a person types; when the form comes back (a wrong number, a text
+too long), the line under the box says how many characters are left, or how many must go, measured
+on the text as it would be sent, and the box stops at exactly that.
+
+A full stop typed without the space after it before a capitalised word ("veilig.De kinderen",
+"gut.Es geht") is a slip on a phone keyboard, not a `.de` or `.es` link: the space goes back in and the
+message is taken. Real links stay refused: `http(s)://`, `www.`, and a bare domain such as
+`example.com` or `example.de` (a lower-case `veilig.de` is a domain to every phone, so it stays
+refused too).
 
 **Warnings.** A public warning the Hub relayed to this kit and still in force (`docs/warning-relay.md`,
-MESHSAT-1734) stands at the top of every page, above the page's own content: "Public warning"
-in the page's language, `TEST` for a test, the event and severity, until when, the words, and
-the line that says it is a relay via MeshSat and not an official NL-Alert. A cancelled, replaced
-or expired warning is not shown; a closed post still shows the banner. Nothing to configure.
+MESHSAT-1734) stands at the top of every page, above the page's own content, all of it in the
+page's language: "Public warning", `TEST` for a test, the event and severity (from the digest's fixed
+set), until when (the kit's local time, with the date when it is not today), the words as the
+warning carries them, and the line that says it is a relay via MeshSat and not an official NL-Alert.
+Only the portal translates: the mesh text, the event stream and the digest keep the English label of
+`warnings.LabelFor`. A cancelled, replaced or expired warning is not shown; a closed post still shows
+the banner. Nothing to configure.
 
 **Code.** The confirmation page shows the pickup code large, with the instruction to screenshot it.
-With the approval queue on (the default) it also says the operator checks every message first.
+With the approval queue on (the default) it also says a volunteer checks every message first.
 
 **Approve.** The operator sees the queue on the kit's own screen (`/post` in the Bridge UI, also in
 the kiosk shell) and approves or refuses each post. `auto_approve` in the settings turns the queue
@@ -64,10 +80,14 @@ The Bridge parses that form (the parser MESHSAT-1692 said was missing) off the s
 stores the reply under the code, and the pickup page shows it. A reply that names no code goes to
 the latest open post to that address. A reply for a code the kit never gave out is dropped without
 a word. The Hub's own notice, `[MeshSat Hub] not sent to <address>: <reason>`, marks the latest post
-to that address failed and shows the reason on the pickup page.
+to that address failed and shows the reason on the pickup page, with the page's words around it ("Not
+sent. Please tell the volunteer. Reason from the MeshSat Hub: ..."; the Hub's reason itself is English,
+and the stored reply and the slip keep `not sent: <reason>`).
 
 **Pick up.** The person comes back to the WiFi, opens any page, enters the code (case and spaces
-do not matter) and reads the status and the replies. A phone whose browser kept the session cookie
+do not matter) and reads the status and the replies. Every time on the portal is the kit's local
+time, the date as the language writes it (6 Dec 2026, 6.12.2026, 6-12-2026, 6/12/2026), never UTC
+(see `MESHSAT_POST_TZ` below). A phone whose browser kept the session cookie
 also sees its own posts listed; iOS's captive assistant keeps none, so the code is the real state.
 
 **Safe and well.** A separate, opt-in board: name, status, place; searchable by name; every line
@@ -104,7 +124,11 @@ the image: a kit prints post slips only after `install-receipt-printer.sh` has p
 Three deliberate steps, each reversible.
 
 1. **The Bridge.** In the kit's `.env`: `MESHSAT_POST_LISTEN=0.0.0.0:8081` (the portal listener
-   inside the container; it serves only the portal, never the API) and `MESHSAT_POST_OPERATOR="..."`.
+   inside the container; it serves only the portal, never the API), `MESHSAT_POST_OPERATOR="..."` and
+   `MESHSAT_POST_TZ=Europe/Amsterdam` (or the kit's own zone): the zone the portal shows times in.
+   It changes only the portal; the rest of the Bridge keeps the process zone, so stored timestamps
+   do not move. Unset, the portal uses the process zone, which is **UTC in a container without
+   `TZ`**. The binary carries its own zone database (`time/tzdata`), so any IANA name works.
    In BOTH kits' `/srv/meshsat/docker-compose.yml`, byte for byte: the new variables and a port
    published on the host's loopback only, `127.0.0.1:8081:8081`. Recreate the container. The API's
    `GET /api/post/config` answers 200 (503 before).
@@ -144,6 +168,7 @@ from a phone should show 53 and 80 only.
 | `MESHSAT_POST_AUTO_APPROVE` | `false` | The approval queue off (also through the API) |
 | `MESHSAT_POST_PURGE_DAYS` | `30` | Days after the operator closes the post before everything it stored is purged |
 | `MESHSAT_POST_PRINT` | `false` | An approved post and a reply go to the kit's receipt printer as `post_slip` events |
+| `MESHSAT_POST_TZ` | unset | IANA zone the portal shows every time in (`Europe/Amsterdam`); unset = the process zone, UTC in a container without `TZ`; an unknown name is logged and ignored |
 
 Host side, `/etc/default/meshsat-post`: `MESHSAT_POST_IFACE` (empty = first `wlx*`; never
 `wlan0`), `MESHSAT_POST_ADDR` (`10.44.0.1/24`), `MESHSAT_POST_SSID`, `MESHSAT_POST_CHANNEL`,
@@ -179,38 +204,68 @@ reply budget per conversation.
 
 ## Data notice (as shown on the portal)
 
-The two numbers are `MESHSAT_POST_PURGE_DAYS` and `MESHSAT_POST_BOARD_DAYS` (both 30); a closed post
-adds the day everything is deleted.
+The two day counts are `MESHSAT_POST_PURGE_DAYS` and `MESHSAT_POST_BOARD_DAYS` (both 30), put in as
+words with the language's singular and plural ("1 day", "30 days"; "1 Tag", "30 Tage"; "1 dag",
+"30 dagen"; "1 ημέρα", "30 ημέρες"); a closed post adds the day everything is deleted, in the kit's
+local time and the language's date order. The two cookie lifetimes are the code's (the language
+cookie 30 days, the session cookie one day).
 
 **English.** Kept on this post: your message, the address you wrote to, the name you gave, the
 reply, and a counter per phone so one phone cannot use everything. Deleted 30 days after the operator
 closes the post, or sooner by the operator; the kit's send log keeps the sent text under its own
-retention. Sent onward: only the message, your name and the pickup code. The safe-and-well board is
-separate, holds only what you put on it yourself, and a line stays 30 days. No account, no app, no
-tracking. The legal ground is the protection of your or another person's vital interests; the
-operator named above is responsible for the data.
+retention. Sent onward: only the address you wrote to, the message, your name and the pickup code.
+The safe-and-well board is separate, holds only what you put on it yourself, and a line stays 30
+days. On your phone: two cookies, your language for 30 days and which messages are yours for one
+day. No account, no app, no tracking. The legal ground is the protection of your or another person's
+vital interests; the operator named above is responsible for the data.
 
-**Nederlands.** Bewaard op deze post: je bericht, het adres waar je naartoe schreef, de naam die
-je opgaf, het antwoord, en een teller per telefoon zodat een telefoon niet alles kan opmaken. Gewist
-30 dagen nadat de beheerder de post sluit, of eerder door de beheerder; het verzendlogboek van de kit
-bewaart de verzonden tekst volgens zijn eigen termijn. Doorgestuurd: alleen het bericht, je naam en
-de ophaalcode. Het bord Veilig en wel staat los hiervan, bevat alleen wat je er zelf op zet, en een
-regel blijft 30 dagen staan. Geen account, geen app, geen tracking. De grondslag is de bescherming
-van jouw vitale belangen of die van een ander; de hierboven genoemde beheerder is verantwoordelijk
-voor de gegevens.
+**Deutsch.** Gespeichert wird hier: Ihre Nachricht, die Adresse, an die Sie geschrieben haben, der
+Name, den Sie angegeben haben, die Antwort und ein Zähler pro Telefon, damit ein einzelnes Telefon
+nicht alles aufbraucht. Gelöscht wird alles 30 Tage, nachdem der Betreiber die Stelle schließt, oder
+früher durch den Betreiber; das Sendeprotokoll des Kits behält den gesendeten Text gemäß seiner
+eigenen Aufbewahrungsfrist. Weitergesendet werden nur die Adresse, die Nachricht, Ihr Name und der
+Abholcode. Die Liste „Ich bin in Sicherheit“ ist davon getrennt, enthält nur, was Sie selbst
+eintragen, und ein Eintrag bleibt 30 Tage stehen. Auf Ihrem Telefon: zwei Cookies, Ihre Sprache für
+30 Tage und für einen Tag, welche Nachrichten von Ihnen sind. Kein Konto, keine App, kein Tracking.
+Rechtsgrundlage ist der Schutz lebenswichtiger Interessen von Ihnen oder einer anderen Person;
+verantwortlich für die Daten ist der oben genannte Betreiber.
 
-**Ελληνικά.** Φυλάσσονται σε αυτό το σημείο: το μήνυμά σου, η διεύθυνση στην οποία έγραψες, το
-όνομα που έδωσες, η απάντηση, και ένας μετρητής ανά τηλέφωνο ώστε να μην εξαντλεί ένα τηλέφωνο τα
-πάντα. Διαγράφονται 30 ημέρες αφού ο διαχειριστής κλείσει το σημείο, ή νωρίτερα από τον διαχειριστή·
-το αρχείο αποστολών της συσκευής κρατά το σταλμένο κείμενο για τον δικό του χρόνο. Προωθούνται: μόνο
-το μήνυμα, το όνομά σου και ο κωδικός παραλαβής. Ο πίνακας Είμαι καλά είναι ξεχωριστός, περιέχει μόνο
-ό,τι βάζεις εσύ, και κάθε γραμμή μένει 30 ημέρες. Χωρίς λογαριασμό, χωρίς εφαρμογή, χωρίς
-παρακολούθηση. Η νομική βάση είναι η προστασία ζωτικών συμφερόντων, δικών σου ή άλλου· υπεύθυνος για
-τα δεδομένα είναι ο διαχειριστής που αναφέρεται παραπάνω.
+**Nederlands.** Bewaard op dit punt: je bericht, het adres waar je naartoe schreef, de naam die je
+opgaf, het antwoord, en een teller per telefoon zodat één telefoon niet alles kan opmaken. Gewist 30
+dagen nadat de beheerder het punt sluit, of eerder door de beheerder; het verzendlogboek van de kit
+bewaart de verzonden tekst volgens zijn eigen termijn. Doorgestuurd: alleen het adres, het bericht,
+je naam en de ophaalcode. De lijst ‘Ik ben veilig’ staat los hiervan, bevat alleen wat je er zelf
+op zet, en een regel blijft 30 dagen staan. Op je telefoon: twee cookies, je taal voor 30 dagen en
+voor één dag welke berichten van jou zijn. Geen account, geen app, geen tracking. De grondslag is de
+bescherming van jouw vitale belangen of die van een ander; de hierboven genoemde beheerder is
+verantwoordelijk voor de gegevens.
+
+**Ελληνικά.** Αποθηκεύονται σε αυτό το σημείο: το μήνυμά σας, η διεύθυνση στην οποία γράψατε, το
+όνομα που δώσατε, η απάντηση, και ένας μετρητής ανά τηλέφωνο ώστε να μην εξαντλεί ένα τηλέφωνο τα
+πάντα. Διαγράφονται 30 ημέρες αφού ο φορέας κλείσει το σημείο, ή νωρίτερα από τον φορέα· το αρχείο
+αποστολών της συσκευής κρατά το σταλμένο κείμενο σύμφωνα με τη δική του προθεσμία. Προωθούνται μόνο:
+η διεύθυνση, το μήνυμα, το όνομά σας και ο κωδικός παραλαβής. Ο πίνακας «Είμαι καλά» είναι
+ξεχωριστός, περιέχει μόνο ό,τι βάζετε εσείς, και κάθε γραμμή μένει 30 ημέρες. Στο τηλέφωνό σας: δύο
+cookies, η γλώσσα σας για 30 ημέρες και για μία ημέρα ποια μηνύματα είναι δικά σας. Χωρίς
+λογαριασμό, χωρίς εφαρμογή, χωρίς παρακολούθηση. Η νομική βάση είναι η προστασία ζωτικών
+συμφερόντων, δικών σας ή άλλου προσώπου· υπεύθυνος για τα δεδομένα είναι ο φορέας που αναφέρεται
+παραπάνω.
 
 **Closed (shown on the write page, the board and the About page).** This post is closed. No new
 message can be written here. A reply can still be picked up with your code until `<day>`; after
 that everything is deleted.
+
+## The four languages
+
+Register and words are fixed in `internal/post/i18n.go`'s header: German "Sie", Dutch "je" (as NL-Alert
+and the Rijksoverheid address residents), Greek the polite plural "εσείς". The person at the kit who
+checks the messages is the volunteer (Team, medewerker, εθελοντής, the words safertogether.eu uses);
+the organisation that runs the post is the operator (Betreiber, beheerder, φορέας). The place is
+"Stelle" in German, "punt" in Dutch (not "post": in Dutch that reads as the mail or a social-media
+post) and "σημείο" in Greek; the page titles are Community Post, Nachrichtenstelle, Berichtenpunt and
+Σημείο Μηνυμάτων. A count goes through `Plural` (`key_one`, `key_other`). Every key exists in all four
+languages with the same placeholders, and every event, severity and source the warnings package can
+name has a translation (both are tests).
 
 ## Open items (from the plan; not claims)
 
@@ -240,7 +295,7 @@ that everything is deleted.
 1. With the Bridge recreated as above: `curl -s http://127.0.0.1:8081/.well-known/captive-portal`
    on the kit answers `{"captive":true,"user-portal-url":"http://10.44.0.1/",...}`;
    `curl -si http://127.0.0.1:8081/generate_204 | head -1` answers `302`; `curl -s http://127.0.0.1:8081/ | grep -c '<form'`
-   answers `1`; `curl -s 'http://127.0.0.1:8081/?lang=el' | grep -c 'Κοινοτικό'` answers `1`.
+   answers `1`; `curl -s 'http://127.0.0.1:8081/?lang=el' | grep -c 'Σημείο Μηνυμάτων'` answers `1`.
 2. Write a post from the kit itself:
    `curl -s -c /tmp/msp -b /tmp/msp -d 'to=%2B31612345678&name=Test&text=hello+from+the+post' 'http://127.0.0.1:8081/send?lang=en' | grep -o 'class="code">[A-Z2-9]*'`;
    `curl -s http://127.0.0.1:6050/api/post/queue` lists it under `pending`.

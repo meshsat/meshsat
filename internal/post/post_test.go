@@ -15,6 +15,7 @@ import (
 	"meshsat/internal/database"
 	"meshsat/internal/engine"
 	"meshsat/internal/transport"
+	"meshsat/internal/warnings"
 )
 
 // ---- fakes ----
@@ -84,6 +85,11 @@ func newEnv(t *testing.T, cfg Config) *env {
 	}
 	if cfg.PortalURL == "" {
 		cfg.PortalURL = "http://10.44.0.1/"
+	}
+	if cfg.Zone == nil {
+		// The kit's zone in winter, fixed so the tests read the same
+		// anywhere: the portal shows local time, never UTC.
+		cfg.Zone = time.FixedZone("CET", 3600)
 	}
 	e.svc = New(cfg, Deps{DB: db, Queue: e.q, Bearer: func() (string, bool) { return "iridium_0", true },
 		Now: func() time.Time { return e.clock }})
@@ -390,11 +396,11 @@ func TestPagesSpeakFourLanguagesAndCarryNoScript(t *testing.T) {
 	e := newEnv(t, Config{Operator: "Gemeente Leiden"})
 	c := e.client()
 	_, body := e.get(c, "/", "Accept-Language", "el-GR,el;q=0.9,en;q=0.8")
-	if !strings.Contains(body, `<html lang="el">`) || !strings.Contains(body, "Κοινοτικό Ταχυδρομείο") {
+	if !strings.Contains(body, `<html lang="el">`) || !strings.Contains(body, "Σημείο Μηνυμάτων") {
 		t.Fatalf("Greek by Accept-Language: %s", body[:200])
 	}
 	_, body = e.get(c, "/?lang=nl")
-	if !strings.Contains(body, `<html lang="nl">`) || !strings.Contains(body, "Berichtenpost") {
+	if !strings.Contains(body, `<html lang="nl">`) || !strings.Contains(body, "Berichtenpunt") {
 		t.Fatal("Dutch by ?lang")
 	}
 	// The choice sticks in the cookie for the next page without ?lang.
@@ -439,8 +445,8 @@ func TestWriteApproveSendAndPickUpTheReply(t *testing.T) {
 	if code == "" {
 		t.Fatalf("no code on the confirmation page: %s", body)
 	}
-	if !strings.Contains(body, "Take a screenshot") || !strings.Contains(body, "An operator at this post checks") {
-		t.Fatal("the confirmation must say to screenshot the code and that the operator checks it")
+	if !strings.Contains(body, "Take a screenshot") || !strings.Contains(body, "A volunteer at this post checks") {
+		t.Fatal("the confirmation must say to screenshot the code and that a volunteer checks it")
 	}
 	if e.q.last().text != "" {
 		t.Fatal("nothing leaves before the operator approves")
@@ -548,7 +554,7 @@ func TestEmergencyAutoApproveAndRefuse(t *testing.T) {
 	if len(e.q.rows) != 1 {
 		t.Fatal("a refused post left the kit")
 	}
-	if _, body := e.get(c, "/pickup?code="+code2+"&lang=en"); !strings.Contains(body, "refused by the operator") {
+	if _, body := e.get(c, "/pickup?code="+code2+"&lang=en"); !strings.Contains(body, "refused by the volunteer") {
 		t.Fatal("the pickup page must say it was refused")
 	}
 }
@@ -781,7 +787,7 @@ func TestCloseThenPurgeAfterTheDays(t *testing.T) {
 		t.Fatal("closing twice moved the purge")
 	}
 	// The portal takes no new post and no board line; a reply is still picked up.
-	if _, body := e.get(c, "/?lang=en"); !strings.Contains(body, "This post is closed") || !strings.Contains(body, "2026-11-27") || strings.Contains(body, "<form") {
+	if _, body := e.get(c, "/?lang=en"); !strings.Contains(body, "This post is closed") || !strings.Contains(body, "27 Nov 2026") || strings.Contains(body, "<form") {
 		t.Fatalf("write page while closed: %s", body)
 	}
 	if code2, body := e.write(c, "+31612345678", "", "late", false); code2 != "" || !strings.Contains(body, "This post is closed") {
@@ -911,26 +917,32 @@ func TestWarningsInForceStandAtTheTopOfEveryPage(t *testing.T) {
 			Text: "voorbij", Via: "hub", ReceivedAt: sent},
 		{ID: "0303030303030303", MsgType: "Alert", Source: "dwd", Sent: sent, Expires: e.clock.Add(time.Hour), Severity: "Minor", Event: "Fog",
 			Text: "ingetrokken", Via: "hub", ReceivedAt: sent, Cancelled: true},
+		// Ends later today: the banner gives the time of day alone.
+		{ID: "0404040404040404", MsgType: "Alert", Source: "dwd", Sent: sent.Add(-time.Minute), Expires: e.clock.Add(2 * time.Hour), Severity: "Severe",
+			Event: "Heat", Text: "Hitzewarnung", Via: "hub", ReceivedAt: sent},
 	}
 	for _, w := range rows {
 		if err := e.db.InsertWarning(w); err != nil {
 			t.Fatal(err)
 		}
 	}
-	label := "Relay of KNMI via MeteoAlarm warning, issued 28 Oct 10:00 UTC via MeshSat, not an official NL-Alert"
+	// The kit's local time (CET in these tests), never UTC: sent 10:00 UTC
+	// reads 11:00; the wind warning ends tomorrow, so its date is given.
+	label := "Relay of KNMI via MeteoAlarm warning, issued 28 Oct 2026 11:00 via MeshSat, not an official NL-Alert"
 	for _, path := range []string{"/", "/pickup", "/board", "/about", "/done"} {
 		res, body := e.get(c, path+"?lang=en")
 		if res.StatusCode != http.StatusOK {
 			t.Fatalf("%s: %d", path, res.StatusCode)
 		}
-		for _, want := range []string{`class="warn" role="alert"`, "Public warning", "<strong>Wind Moderate</strong>", "until 10:00 UTC",
+		for _, want := range []string{`class="warn" role="alert"`, "Public warning", "<strong>Wind Moderate</strong>", "until 29 Oct 2026 11:00",
+			"<strong>Heat Severe</strong> &middot; until 15:00<",
 			"Kans op windstoten tot 90 km/u", label, "TEST", "Update", "<strong>Flood Extreme</strong>", "Oefening, geen echte waarschuwing",
 			"Relay of MeshSat test warning"} {
 			if !strings.Contains(body, want) {
 				t.Fatalf("%s lacks %q:\n%s", path, want, body)
 			}
 		}
-		for _, no := range []string{"voorbij", "ingetrokken", "Rain Severe", "Fog Minor"} {
+		for _, no := range []string{"voorbij", "ingetrokken", "Rain Severe", "Fog Minor", "UTC"} {
 			if strings.Contains(body, no) {
 				t.Fatalf("%s shows a warning no longer in force (%q)", path, no)
 			}
@@ -947,12 +959,31 @@ func TestWarningsInForceStandAtTheTopOfEveryPage(t *testing.T) {
 			t.Fatalf("%s carries a script or an outside reference", path)
 		}
 	}
-	// The three languages.
-	if _, body := e.get(c, "/?lang=nl"); !strings.Contains(body, "Publieke waarschuwing") || !strings.Contains(body, "tot 10:00 UTC") || !strings.Contains(body, label) {
-		t.Fatal("Dutch banner")
-	}
-	if _, body := e.get(c, "/?lang=el"); !strings.Contains(body, "Δημόσια προειδοποίηση") || !strings.Contains(body, "ΔΟΚΙΜΗ") || !strings.Contains(body, "έως 10:00 UTC") {
-		t.Fatal("Greek banner")
+	// The three languages: their own words for the banner, the event and
+	// severity, the date and the relay line, including that it is not an
+	// official NL-Alert.
+	for lang, wants := range map[string][]string{
+		"nl": {"Publieke waarschuwing", "<strong>Wind (matig gevaar)</strong>", "tot 29-10-2026 11:00", "<strong>Overstroming (extreem gevaar)</strong>",
+			"Doorgestuurde waarschuwing (KNMI via MeteoAlarm), uitgegeven 28-10-2026 11:00, via MeshSat. Geen officiële NL-Alert.",
+			"Doorgestuurde waarschuwing (MeshSat-test)", "tot 15:00<"},
+		"de": {"Öffentliche Warnung", "<strong>Wind (mäßige Gefahr)</strong>", "bis 29.10.2026 11:00", "<strong>Hitze (große Gefahr)</strong>",
+			"Weitergeleitete Warnung (KNMI über MeteoAlarm), ausgegeben 28.10.2026 11:00, über MeshSat. Keine offizielle NL-Alert-Meldung.",
+			"Weitergeleitete Warnung (DWD), ausgegeben 28.10.2026 10:59", "Aktualisierung"},
+		"el": {"Δημόσια προειδοποίηση", "ΔΟΚΙΜΗ", "<strong>Άνεμος (μέτριος κίνδυνος)</strong>", "έως 29/10/2026 11:00",
+			"Αναμετάδοση προειδοποίησης (KNMI μέσω MeteoAlarm), εκδόθηκε 28/10/2026 11:00, μέσω MeshSat. Δεν είναι επίσημο μήνυμα NL-Alert.",
+			"<strong>Πλημμύρα (ακραίος κίνδυνος)</strong>", "Αναμετάδοση προειδοποίησης (δοκιμή MeshSat)"},
+	} {
+		_, body := e.get(c, "/?lang="+lang)
+		for _, want := range wants {
+			if !strings.Contains(body, want) {
+				t.Fatalf("%s banner lacks %q:\n%s", lang, want, body)
+			}
+		}
+		for _, no := range []string{"UTC", "Relay of", "not an official", "Wind Moderate"} {
+			if strings.Contains(body, no) {
+				t.Fatalf("%s banner still shows %q", lang, no)
+			}
+		}
 	}
 	// A closed post still shows it.
 	if _, err := e.svc.Close(); err != nil {
@@ -966,5 +997,314 @@ func TestWarningsInForceStandAtTheTopOfEveryPage(t *testing.T) {
 	e.clock = e.clock.Add(23 * time.Hour)
 	if _, body := e.get(c, "/?lang=en"); strings.Contains(body, `class="warn"`) {
 		t.Fatal("an expired warning is still on the banner")
+	}
+}
+
+// ---- MESHSAT-1803: the portal's words and numbers in four languages ----
+
+// The limit the page shows and the box enforces agrees with the byte cap:
+// 240 bytes hold 120 Greek letters, not 150. Nobody who stays inside the
+// number shown is told "too long", and the room left after a text comes
+// back is real: that many more letters of the same kind fit, one more
+// does not.
+func TestCharacterBudgetAgreesWithTheByteCap(t *testing.T) {
+	for lang, want := range map[string]int{"el": 120, "nl": 150, "de": 150, "en": 150} {
+		if got := MaxCharsFor(lang, 150, 240); got != want {
+			t.Errorf("MaxCharsFor(%s) = %d, want %d", lang, got, want)
+		}
+		if got := CharsLeft("", lang, 150, 240); got != want {
+			t.Errorf("CharsLeft(empty, %s) = %d, want %d", lang, got, want)
+		}
+	}
+	if MaxCharsFor("en", 150, 100) != 100 || MaxCharsFor("el", 0, 240) != 120 || MaxCharsFor("en", 150, 0) != 150 {
+		t.Error("MaxCharsFor must take the tighter of the two limits, and either alone")
+	}
+	// The screenshots' own messages, repeated up to the limit shown.
+	samples := map[string]string{
+		"el": "Είμαστε καλά στο σχολείο στην οδό Εκκλησίας. Η γιαγιά είναι μαζί μας. ",
+		"nl": "We zijn veilig in de school aan de Kerkstraat. Oma is bij ons. ",
+		"de": "Wir sind sicher in der Schule in der Lindenstraße. Oma ist bei uns. ",
+		"en": "We are safe at the school on Church Street. Grandma is with us. ",
+	}
+	for lang, sample := range samples {
+		limit := MaxCharsFor(lang, 150, 240)
+		text := string([]rune(strings.Repeat(sample, 5))[:limit])
+		if _, err := CleanText(text, 150, 240); err != nil {
+			t.Errorf("%s: %d characters, the limit shown, refused: %v", lang, limit, err)
+		}
+	}
+	if _, err := CleanText(strings.Repeat("ω", 120), 150, 240); err != nil {
+		t.Errorf("120 Greek letters must fit: %v", err)
+	}
+	if _, err := CleanText(strings.Repeat("ω", 121), 150, 240); !errors.Is(err, ErrTooLong) {
+		t.Errorf("121 Greek letters are 242 bytes: %v", err)
+	}
+	for _, tc := range []struct {
+		text, more, lang string
+		left             int
+	}{
+		{"", "ω", "el", 120},
+		{strings.Repeat("ω", 100), "ω", "el", 20},
+		{strings.Repeat("ω", 100), "ω", "en", 20}, // Greek typed on a phone set to English
+		{strings.Repeat("a", 140), "a", "en", 10},
+		{strings.Repeat("a", 100), "a", "el", 50}, // Latin letters on the Greek page: the character ceiling binds
+		{strings.Repeat("a", 149), "a", "de", 1},
+	} {
+		left := CharsLeft(tc.text, tc.lang, 150, 240)
+		if left != tc.left {
+			t.Errorf("CharsLeft(%d runes, %s) = %d, want %d", len([]rune(tc.text)), tc.lang, left, tc.left)
+			continue
+		}
+		if _, err := CleanText(tc.text+strings.Repeat(tc.more, left), 150, 240); err != nil {
+			t.Errorf("%d more must fit, as the counter said: %v", left, err)
+		}
+		if _, err := CleanText(tc.text+strings.Repeat(tc.more, left+1), 150, 240); !errors.Is(err, ErrTooLong) {
+			t.Errorf("%d more must not fit: %v", left+1, err)
+		}
+	}
+	// Too long: the count is how many characters must go, and taking
+	// exactly that many off the end makes it fit.
+	for _, tc := range []struct {
+		text string
+		over int
+	}{
+		{strings.Repeat("ω", 130), 10},
+		{strings.Repeat("a", 151), 1},
+		{strings.Repeat("a", 145) + strings.Repeat("ω", 10), 5},
+		{strings.Repeat("a", 100) + strings.Repeat("ω", 75), 25},
+	} {
+		if left := CharsLeft(tc.text, "en", 150, 240); left != -tc.over {
+			t.Errorf("CharsLeft = %d, want %d", left, -tc.over)
+			continue
+		}
+		r := []rune(tc.text)
+		if _, err := CleanText(string(r[:len(r)-tc.over]), 150, 240); err != nil {
+			t.Errorf("%d off the end must fit: %v", tc.over, err)
+		}
+		if _, err := CleanText(string(r[:len(r)-tc.over+1]), 150, 240); !errors.Is(err, ErrTooLong) {
+			t.Errorf("%d off the end must not be enough: %v", tc.over-1, err)
+		}
+	}
+	// The text is measured as it goes out: the space the glue repair puts in counts.
+	if left := CharsLeft("a.Bc", "en", 5, 240); left != 0 {
+		t.Errorf(`"a.Bc" goes out as "a. Bc", 5 characters; left = %d`, left)
+	}
+}
+
+// The page says the same: the Greek limit is 120 and the box stops there;
+// a text that comes back tells how much room is left, or how much is too
+// much, in the language's own singular and plural.
+func TestTheCounterOnThePageAgreesWithTheLimit(t *testing.T) {
+	e := newEnv(t, Config{})
+	c := e.client()
+	if _, body := e.get(c, "/?lang=el"); !strings.Contains(body, `maxlength="120"`) || !strings.Contains(body, "έως 120 χαρακτήρες") {
+		t.Fatalf("the Greek page must promise 120 and stop there:\n%s", body)
+	}
+	if _, body := e.get(c, "/?lang=nl"); !strings.Contains(body, `maxlength="150"`) || !strings.Contains(body, "hoogstens 150 tekens") {
+		t.Fatal("the Dutch page promises 150")
+	}
+	_, body := e.post(c, "/send?lang=el", url.Values{"to": {"+306912345678"}, "text": {strings.Repeat("ω", 130)}})
+	if !strings.Contains(body, "Το μήνυμα είναι μεγαλύτερο κατά 10 χαρακτήρες.") || !strings.Contains(body, `maxlength="120"`) || codeInPage.MatchString(body) {
+		t.Fatalf("130 Greek letters: the page must say 10 too many:\n%s", body)
+	}
+	_, body = e.post(c, "/send?lang=el", url.Values{"to": {"0612"}, "text": {strings.Repeat("ω", 119)}})
+	if !strings.Contains(body, "απομένει 1 χαρακτήρας") || !strings.Contains(body, `maxlength="120"`) {
+		t.Fatalf("119 letters and a bad number: one left, in the singular:\n%s", body)
+	}
+	_, body = e.post(c, "/send?lang=en", url.Values{"to": {"0612"}, "text": {strings.Repeat("a", 140)}})
+	if !strings.Contains(body, "10 characters left, no links") || !strings.Contains(body, `maxlength="150"`) {
+		t.Fatalf("140 typed: 10 left:\n%s", body)
+	}
+	_, body = e.post(c, "/send?lang=de", url.Values{"to": {"+4915112345678"}, "text": {strings.Repeat("a", 152)}})
+	if !strings.Contains(body, "Die Nachricht ist 2 Zeichen zu lang.") {
+		t.Fatalf("German: 2 too many:\n%s", body)
+	}
+	if _, body := e.post(c, "/send?lang=el", url.Values{"to": {"+306912345678"}, "text": {strings.Repeat("ω", 120)}}); !codeInPage.MatchString(body) {
+		t.Fatalf("120 Greek letters, the limit shown, must be taken:\n%s", body)
+	}
+}
+
+// A full stop typed without the space after it is not a link: the space
+// goes back in and the message is taken. Real links stay refused.
+func TestLinkFilterTellsAGluedSentenceFromALink(t *testing.T) {
+	for in, want := range map[string]string{
+		"We zijn veilig.De kinderen ook":   "We zijn veilig. De kinderen ook",
+		"Uns geht es gut.Es geht weiter":   "Uns geht es gut. Es geht weiter",
+		"At the school.It is warm here":    "At the school. It is warm here",
+		"Bus om 10.De rest volgt":          "Bus om 10. De rest volgt",
+		"Dr.Meyer weiß Bescheid":           "Dr. Meyer weiß Bescheid",
+		"a.Bc.De.Fg":                       "a. Bc. De. Fg",
+		"Είμαστε στο σχολείο.Όλοι καλά":    "Είμαστε στο σχολείο. Όλοι καλά",
+		"ok. kom naar de school":           "ok. kom naar de school",
+		"bel 06 12345678 a.u.b.":           "bel 06 12345678 a.u.b.",
+		"z.B. Wasser und Brot":             "z.B. Wasser und Brot",
+		"om 9.30 bij de kerk":              "om 9.30 bij de kerk",
+		"Wir sind in der Schule.Oma auch.": "Wir sind in der Schule. Oma auch.",
+	} {
+		if got, err := CleanText(in, 150, 240); err != nil || got != want {
+			t.Errorf("CleanText(%q) = %q, %v; want %q", in, got, err, want)
+		}
+	}
+	for _, in := range []string{
+		"see http://example.org/x", "https://example.org", "HTTPS://EXAMPLE.ORG", "http://Veilig.De",
+		"go to www.example.org", "WWW.EXAMPLE.ORG", "kijk op www.Veilig.De",
+		"example.com", "example.de", "Example.de", "mail me at evil.com/login", "the site example.nl please",
+		"info at meshsat.net/x", "veilig.de kinderen", "gut.es geht", "veilig.DE kinderen",
+	} {
+		if _, err := CleanText(in, 150, 240); !errors.Is(err, ErrLink) {
+			t.Errorf("CleanText(%q) = %v, want a link refusal", in, err)
+		}
+	}
+	if got, err := CleanBoardField("in de school.De rest ook"); err != nil || got != "in de school. De rest ook" {
+		t.Errorf("board field: %q, %v", got, err)
+	}
+	if _, err := CleanBoardField("www.example.org"); !errors.Is(err, ErrLink) {
+		t.Error("a link on the board must be refused")
+	}
+}
+
+// One day is one day: the day counts take the singular in all four
+// languages, on the board and in the data notice.
+func TestDayCountsAreSingularForOne(t *testing.T) {
+	for _, tc := range []struct{ lang, one, many string }{
+		{"en", "1 day", "30 days"}, {"de", "1 Tag", "30 Tage"}, {"nl", "1 dag", "30 dagen"}, {"el", "1 ημέρα", "30 ημέρες"},
+	} {
+		if got := Plural(tc.lang, "days", 1); got != tc.one {
+			t.Errorf("%s one: %q", tc.lang, got)
+		}
+		if got := Plural(tc.lang, "days", 30); got != tc.many {
+			t.Errorf("%s many: %q", tc.lang, got)
+		}
+	}
+	// Every count has both forms in every language.
+	for _, lang := range Languages {
+		for key := range strs[DefaultLanguage] {
+			if base, ok := strings.CutSuffix(key, "_one"); ok {
+				if _, ok := strs[lang][base+"_other"]; !ok {
+					t.Errorf("%s has %s but no %s_other", lang, key, base)
+				}
+			}
+		}
+	}
+	e := newEnv(t, Config{BoardRetention: 24 * time.Hour, PurgeAfter: 24 * time.Hour})
+	c := e.client()
+	for path, want := range map[string]string{
+		"/board?lang=de": "der Eintrag bleibt 1 Tag stehen",
+		"/board?lang=en": "it stays 1 day and",
+		"/about?lang=en": "Deleted 1 day after",
+		"/about?lang=nl": "Gewist 1 dag nadat",
+		"/about?lang=el": "Διαγράφονται 1 ημέρα αφού",
+	} {
+		if _, body := e.get(c, path); !strings.Contains(body, want) {
+			t.Errorf("%s lacks %q", path, want)
+		}
+	}
+	if _, body := e.get(c, "/about?lang=en"); !strings.Contains(body, "a line stays 1 day.") || strings.Contains(body, "1 days") {
+		t.Error("the English notice must say 1 day")
+	}
+}
+
+// Times on the portal are the kit's local time, written the language's
+// way; never UTC.
+func TestTimesAreLocalAndWrittenTheLanguagesWay(t *testing.T) {
+	d := time.Date(2026, 12, 6, 14, 2, 0, 0, time.UTC)
+	for lang, want := range map[string]string{"en": "6 Dec 2026", "de": "6.12.2026", "nl": "6-12-2026", "el": "6/12/2026", "xx": "6 Dec 2026"} {
+		if got := FormatDate(lang, d); got != want {
+			t.Errorf("FormatDate(%s) = %q, want %q", lang, got, want)
+		}
+	}
+	if got := FormatDateTime("de", d); got != "6.12.2026 14:02" {
+		t.Errorf("FormatDateTime = %q", got)
+	}
+	// Greece in winter, UTC+2; the clock just before midnight UTC, so the
+	// kit's date is already the next day.
+	e := newEnv(t, Config{Zone: time.FixedZone("EET", 2*3600)})
+	e.clock = time.Date(2026, 10, 28, 23, 30, 0, 0, time.UTC)
+	c := e.client()
+	e.get(c, "/?lang=en")
+	code, _ := e.write(c, "+31612345678", "", "water", false)
+	if err := e.svc.Approve(code); err != nil {
+		t.Fatal(err)
+	}
+	e.svc.HandleInbound("iridium_0", "rock7", "[from +31612345678] #"+code+" on my way")
+	e.post(c, "/board?lang=en", url.Values{"name": {"Maria"}, "status": {"safe"}})
+	if _, body := e.get(c, "/board?lang=nl&q=maria"); !strings.Contains(body, "29-10-2026 01:30") {
+		t.Fatalf("board line time:\n%s", body)
+	}
+	for lang, want := range map[string]string{"en": "29 Oct 2026 01:30", "de": "29.10.2026 01:30", "nl": "29-10-2026 01:30", "el": "29/10/2026 01:30"} {
+		_, body := e.get(c, "/pickup?code="+code+"&lang="+lang)
+		if strings.Count(body, want) < 3 || strings.Contains(body, "UTC") {
+			t.Fatalf("%s pickup page: the post, the reply and the list in local time, no UTC:\n%s", lang, body)
+		}
+	}
+	// The day everything is deleted is the kit's day too: 30 days on is
+	// 27 Nov 23:30 UTC, 28 Nov on the kit.
+	if _, err := e.svc.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for lang, want := range map[string]string{"en": "28 Nov 2026", "de": "28.11.2026", "nl": "28-11-2026", "el": "28/11/2026"} {
+		if _, body := e.get(c, "/?lang="+lang); !strings.Contains(body, want) {
+			t.Errorf("%s closed page lacks %q", lang, want)
+		}
+	}
+}
+
+// The Hub's "not sent" notice and a post with no operator name speak the
+// page's language; the stored reply and the slip stay as they were.
+func TestHubNoticeAndMissingOperatorSpeakThePagesLanguage(t *testing.T) {
+	e := newEnv(t, Config{})
+	c := e.client()
+	e.get(c, "/?lang=en")
+	code, _ := e.write(c, "+31612345678", "", "water", false)
+	if err := e.svc.Approve(code); err != nil {
+		t.Fatal(err)
+	}
+	e.svc.HandleInbound("iridium_0", "rock7", "[MeshSat Hub] not sent to +31612345678: this account has no SMS provider")
+	for lang, wants := range map[string][]string{
+		"en": {"Not sent. Please tell the volunteer. Reason from the MeshSat Hub: this account has no SMS provider", "not sent (sending failed)"},
+		"de": {"Nicht gesendet. Bitte sagen Sie dem Team Bescheid. Grund vom MeshSat Hub (auf Englisch): this account has no SMS provider", "Übertragung fehlgeschlagen"},
+		"nl": {"Niet verstuurd. Zeg het tegen de medewerker. Reden van de MeshSat Hub (in het Engels): this account has no SMS provider", "versturen mislukt"},
+		"el": {"Δεν στάλθηκε. Ενημερώστε τον εθελοντή. Αιτία από το MeshSat Hub (στα αγγλικά): this account has no SMS provider", "η αποστολή απέτυχε"},
+	} {
+		_, body := e.get(c, "/pickup?code="+code+"&lang="+lang)
+		for _, want := range wants {
+			if !strings.Contains(body, want) {
+				t.Errorf("%s pickup lacks %q", lang, want)
+			}
+		}
+		if strings.Contains(body, ">not sent: ") {
+			t.Errorf("%s pickup shows the raw English notice", lang)
+		}
+	}
+	if _, replies, _ := e.svc.Status(code); len(replies) != 1 || replies[0].From != HubNoticeFrom || replies[0].Text != "not sent: this account has no SMS provider" {
+		t.Fatalf("the stored notice changed: %+v", replies)
+	}
+	for lang, want := range map[string]string{"en": "(not set)", "de": "(nicht angegeben)", "nl": "(niet opgegeven)", "el": "(δεν έχει δηλωθεί)"} {
+		if _, body := e.get(c, "/about?lang="+lang); !strings.Contains(body, want) {
+			t.Errorf("%s about page lacks %q", lang, want)
+		}
+	}
+}
+
+// Every name the warnings package can put on a banner has words in every
+// language, and English keeps the digest's own names.
+func TestEveryWarningNameHasWordsInEveryLanguage(t *testing.T) {
+	keys := map[string]string{}
+	for c := 0; c < 64; c++ {
+		keys["warn_event_"+warnKey(warnings.EventName(c))] = warnings.EventName(c)
+		keys["warn_sev_"+warnKey(warnings.SeverityName(c))] = warnings.SeverityName(c)
+	}
+	for _, id := range []int{warnings.SourceDWD, warnings.SourceMeteoAlarmNL, warnings.SourceTest, 0} {
+		keys["warn_src_"+warnKey(warnings.SourceName(id))] = warnings.SourceLabel(id)
+	}
+	for key, en := range keys {
+		if strs[DefaultLanguage][key] != en {
+			t.Errorf("English %s = %q, the warnings package says %q", key, strs[DefaultLanguage][key], en)
+		}
+		for _, lang := range Languages {
+			if _, ok := strs[lang][key]; !ok {
+				t.Errorf("%s lacks %s", lang, key)
+			}
+		}
 	}
 }
