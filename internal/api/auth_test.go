@@ -411,3 +411,83 @@ func TestAuthBadStoredHashStaysOpen(t *testing.T) {
 	}
 	wantStatus(t, call(h, http.MethodGet, "/api/presets", lanAddr), http.StatusOK, "bad hash: open")
 }
+
+// MESHSAT_API_TOKEN_REQUIRED with no token set [MESHSAT-1813]: the API is
+// closed, not open. The LAN is refused; the kit itself, the Hub relay and
+// the Bridge's own calls get in; the operator sets the token from the kit
+// and the LAN gets in with it; nobody can clear it to reopen the API.
+func TestAuthRequiredWithoutTokenIsClosed(t *testing.T) {
+	s, h := newAuthServer(t)
+	// A fresh database has no hash row: ConfigureAuth reports that, and the
+	// state is still set (the requirement is applied before the read).
+	_ = s.ConfigureAuth(AuthConfig{TrustLoopback: true, Required: true})
+	if !s.AuthRequired() || s.AuthSource() != "unset" {
+		t.Fatalf("required %v source %q", s.AuthRequired(), s.AuthSource())
+	}
+
+	wantStatus(t, call(h, http.MethodGet, "/api/presets", lanAddr), http.StatusUnauthorized, "LAN, closed")
+	wantStatus(t, call(h, http.MethodGet, "/api/presets", lanAddr, bearer("any-token-at-all-0123456789")), http.StatusUnauthorized, "LAN with a made-up token")
+	wantStatus(t, call(h, http.MethodGet, "/api/presets", loopAddr), http.StatusOK, "the kiosk (loopback)")
+	wantStatus(t, call(s.RelayRouter(), http.MethodGet, "/api/presets", "pipe"), http.StatusOK, "the Hub relay")
+	wantStatus(t, call(h, http.MethodGet, "/api/presets", lanAddr, bearer(s.LocalAPIToken())), http.StatusOK, "the Bridge's own call")
+	wantStatus(t, call(h, http.MethodGet, "/health", lanAddr), http.StatusOK, "/health stays open")
+
+	// CORS narrows as with a token.
+	rec := call(h, http.MethodGet, "/api/presets", loopAddr, origin("http://evil.example"))
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Fatalf("closed API answered a foreign origin with ACAO %q", got)
+	}
+
+	// Status says closed and why.
+	rec = call(h, http.MethodGet, "/api/auth/status", lanAddr)
+	wantStatus(t, rec, http.StatusOK, "status")
+	var st authStatus
+	_ = json.Unmarshal(rec.Body.Bytes(), &st)
+	if !st.Required || st.Authenticated || st.Source != "unset" {
+		t.Fatalf("closed status %+v", st)
+	}
+
+	// Login cannot succeed before a token exists.
+	wantStatus(t, call(h, http.MethodPost, "/api/auth/login", lanAddr, jsonBody(map[string]string{"token": "any-token-at-all-0123456789"})), http.StatusUnauthorized, "login before a token")
+
+	// The first token: refused from the LAN, taken from the kit itself.
+	wantStatus(t, call(h, http.MethodPut, "/api/auth/token", lanAddr), http.StatusUnauthorized, "PUT from the LAN")
+	rec = call(h, http.MethodPut, "/api/auth/token", loopAddr)
+	wantStatus(t, rec, http.StatusOK, "PUT from the kit")
+	var reply authTokenReply
+	_ = json.Unmarshal(rec.Body.Bytes(), &reply)
+	if len(reply.Token) != 43 || reply.Source != "config" || s.AuthSource() != "config" {
+		t.Fatalf("token reply %+v, source %q", reply, s.AuthSource())
+	}
+	wantStatus(t, call(h, http.MethodGet, "/api/presets", lanAddr, bearer(reply.Token)), http.StatusOK, "LAN with the new token")
+	wantStatus(t, call(h, http.MethodGet, "/api/presets", lanAddr), http.StatusUnauthorized, "LAN still needs it")
+
+	// Clearing would reopen the API: refused, from the kit and with the token.
+	wantStatus(t, call(h, http.MethodDelete, "/api/auth/token", loopAddr), http.StatusConflict, "DELETE from the kit")
+	wantStatus(t, call(h, http.MethodDelete, "/api/auth/token", lanAddr, bearer(reply.Token)), http.StatusConflict, "DELETE with the token")
+	if !s.AuthRequired() {
+		t.Fatal("the API reopened")
+	}
+	// Rotating is still allowed.
+	rec = call(h, http.MethodPut, "/api/auth/token", lanAddr, bearer(reply.Token))
+	wantStatus(t, rec, http.StatusOK, "rotate with the token")
+
+	// A restart with the stored hash keeps the token (source config).
+	if err := s.ConfigureAuth(AuthConfig{TrustLoopback: true, Required: true}); err != nil {
+		t.Fatal(err)
+	}
+	if s.AuthSource() != "config" {
+		t.Fatalf("after restart source %q", s.AuthSource())
+	}
+}
+
+// A bad stored hash with the requirement on stays closed, not open.
+func TestAuthRequiredBadStoredHashStaysClosed(t *testing.T) {
+	s, h := newAuthServer(t)
+	_ = s.db.SetSystemConfig(authHashRow, "not-hex")
+	if err := s.ConfigureAuth(AuthConfig{TrustLoopback: true, Required: true}); err != nil {
+		t.Fatal(err)
+	}
+	wantStatus(t, call(h, http.MethodGet, "/api/presets", lanAddr), http.StatusUnauthorized, "bad hash, required: closed")
+	wantStatus(t, call(h, http.MethodGet, "/api/presets", loopAddr), http.StatusOK, "bad hash, required: the kit gets in")
+}

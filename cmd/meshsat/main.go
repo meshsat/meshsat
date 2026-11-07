@@ -1955,10 +1955,18 @@ func main() {
 	// it, except from the kit itself (loopback, trusted by default) and
 	// through the Hub relay. The Bridge's own calls to its API carry a
 	// process-local token so they get in with the loopback trust off.
-	if err := srv.ConfigureAuth(api.AuthConfig{Token: cfg.APIToken, TrustLoopback: cfg.APITrustLoopback}); err != nil {
-		log.Warn().Err(err).Msg("api token: could not read system_config; the API is open")
+	// MESHSAT_API_TOKEN_REQUIRED [MESHSAT-1813] keeps the API closed, not
+	// open, until a token is set (municipal setups).
+	if err := srv.ConfigureAuth(api.AuthConfig{Token: cfg.APIToken, TrustLoopback: cfg.APITrustLoopback, Required: cfg.APITokenRequired}); err != nil {
+		if cfg.APITokenRequired {
+			log.Warn().Err(err).Msg("api token: could not read system_config; the API stays closed until a token is set")
+		} else {
+			log.Warn().Err(err).Msg("api token: could not read system_config; the API is open")
+		}
 	}
-	if srv.AuthRequired() {
+	if srv.AuthSource() == "unset" {
+		log.Warn().Bool("trust_loopback", cfg.APITrustLoopback).Msg("api closed: MESHSAT_API_TOKEN_REQUIRED is on and no token is set; set one on the kit with PUT http://localhost:6050/api/auth/token")
+	} else if srv.AuthRequired() {
 		log.Info().Str("source", srv.AuthSource()).Bool("trust_loopback", cfg.APITrustLoopback).Msg("api token required on /api")
 	}
 	hubreporter.SetLocalAPIAuth(srv.LocalAPIToken)

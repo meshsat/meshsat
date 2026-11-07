@@ -31,6 +31,15 @@ package api
 // operator chose MESHSAT_API_TOKEN, and nothing writes it to a log. A
 // presented token is hashed and compared in constant time, so the
 // comparison takes the same time whatever the first wrong byte is.
+//
+// MESHSAT_API_TOKEN_REQUIRED [MESHSAT-1813] is for kits that go to other
+// people's networks (a municipal emergency point): with it on and no token
+// set yet, the API is CLOSED instead of open. The LAN gets 401; the kit
+// itself, the Hub relay and the Bridge's own calls still get in, so the
+// operator sets the token from the kit (PUT /api/auth/token from loopback)
+// and the kiosk keeps working. Clearing the token is refused while it is
+// on, so nobody can reopen the API by deleting it. Off by default: a kit
+// without it behaves exactly as before.
 
 import (
 	"context"
@@ -69,14 +78,18 @@ type AuthConfig struct {
 	Token string
 	// TrustLoopback lets a request from 127.0.0.1 or ::1 in without a token.
 	TrustLoopback bool
+	// Required is MESHSAT_API_TOKEN_REQUIRED: with no token set, the API
+	// is closed (not open) until one is set from the kit itself.
+	Required bool
 }
 
 // apiAuth is the server's token state. Its zero value is "no token": a
 // Server a test builds as &Server{} is open.
 type apiAuth struct {
 	mu            sync.RWMutex
-	hash          []byte // sha256 of the token; nil = off
+	hash          []byte // sha256 of the token; nil = no token set
 	source        string // "env" or "config" while set
+	required      bool   // closed even with no token set (MESHSAT_API_TOKEN_REQUIRED)
 	trustLoopback bool
 	self          string // the process-local token, made on first use
 	refused       atomic.Int64
@@ -131,6 +144,7 @@ func (s *Server) ConfigureAuth(cfg AuthConfig) error {
 	s.auth.mu.Lock()
 	defer s.auth.mu.Unlock()
 	s.auth.trustLoopback = cfg.TrustLoopback
+	s.auth.required = cfg.Required
 	if cfg.Token != "" {
 		h := sha256.Sum256([]byte(cfg.Token))
 		s.auth.hash = h[:]
@@ -150,7 +164,11 @@ func (s *Server) ConfigureAuth(cfg AuthConfig) error {
 	}
 	h, err := hex.DecodeString(stored)
 	if err != nil || len(h) != sha256.Size {
-		log.Warn().Msg("api token: the stored hash is not a sha256; the API stays open until it is set again")
+		if cfg.Required {
+			log.Warn().Msg("api token: the stored hash is not a sha256; the API stays closed until a token is set again")
+		} else {
+			log.Warn().Msg("api token: the stored hash is not a sha256; the API stays open until it is set again")
+		}
 		return nil
 	}
 	s.auth.hash = h
@@ -158,18 +176,31 @@ func (s *Server) ConfigureAuth(cfg AuthConfig) error {
 	return nil
 }
 
-// AuthRequired is whether a token is set.
+// AuthRequired is whether the API demands a token: one is set, or
+// MESHSAT_API_TOKEN_REQUIRED keeps the API closed until one is.
 func (s *Server) AuthRequired() bool {
 	s.auth.mu.RLock()
 	defer s.auth.mu.RUnlock()
-	return s.auth.hash != nil
+	return s.auth.hash != nil || s.auth.required
 }
 
-// AuthSource is where the token came from: "env", "config" or "".
+// AuthSource is where the token came from: "env" or "config"; "unset"
+// while MESHSAT_API_TOKEN_REQUIRED keeps the API closed with no token yet;
+// "" while the API is open.
 func (s *Server) AuthSource() string {
 	s.auth.mu.RLock()
 	defer s.auth.mu.RUnlock()
+	if s.auth.hash == nil && s.auth.required {
+		return "unset"
+	}
 	return s.auth.source
+}
+
+// tokenRequiredByEnv is whether MESHSAT_API_TOKEN_REQUIRED is on.
+func (s *Server) tokenRequiredByEnv() bool {
+	s.auth.mu.RLock()
+	defer s.auth.mu.RUnlock()
+	return s.auth.required
 }
 
 // TrustsLoopback is whether a request from the kit itself gets in alone.
@@ -203,7 +234,9 @@ func newToken() string {
 // tokenMatches compares a presented token with the one set, in constant
 // time: both sides are SHA-256 digests, so the length is fixed and the
 // comparison never stops at the first wrong byte. The empty string never
-// matches, whatever is set.
+// matches, whatever is set. The process-local token matches even before a
+// token is set, so the Bridge's own calls get through a closed API
+// (MESHSAT_API_TOKEN_REQUIRED with no token yet).
 func (s *Server) tokenMatches(presented string) bool {
 	if presented == "" {
 		return false
@@ -211,11 +244,11 @@ func (s *Server) tokenMatches(presented string) bool {
 	s.auth.mu.RLock()
 	hash, self := s.auth.hash, s.auth.self
 	s.auth.mu.RUnlock()
-	if hash == nil {
+	if hash == nil && self == "" {
 		return false
 	}
 	got := sha256.Sum256([]byte(presented))
-	if subtle.ConstantTimeCompare(got[:], hash) == 1 {
+	if hash != nil && subtle.ConstantTimeCompare(got[:], hash) == 1 {
 		return true
 	}
 	if self != "" {
@@ -369,8 +402,8 @@ func sameOrigin(origin, host string) bool {
 
 // authStatus is GET /api/auth/status.
 type authStatus struct {
-	Required        bool   `json:"required"`                // a token is set
-	Source          string `json:"source,omitempty"`        // env or config
+	Required        bool   `json:"required"`                // a token is needed (set, or MESHSAT_API_TOKEN_REQUIRED)
+	Source          string `json:"source,omitempty"`        // env, config, or unset (required, no token yet)
 	LoopbackTrusted bool   `json:"loopback_trusted"`        // the kit's own requests get in alone
 	Authenticated   bool   `json:"authenticated"`           // this request would reach a protected route
 	Via             string `json:"via,omitempty"`           // how: bearer, cookie, loopback, relay, self, open
@@ -381,7 +414,7 @@ type authStatus struct {
 // request in hand has one. Reachable without a token: it tells a client
 // no more than a 401 would.
 // @Summary API token status
-// @Description Whether a token is required (and where it came from: env or config), whether loopback callers are trusted, and whether this request is authenticated and how. Open to any caller; it reveals nothing a 401 would not. [MESHSAT-1738]
+// @Description Whether a token is required (and where it came from: env or config; unset while MESHSAT_API_TOKEN_REQUIRED keeps the API closed before a token is set), whether loopback callers are trusted, and whether this request is authenticated and how. Open to any caller; it reveals nothing a 401 would not. [MESHSAT-1738] [MESHSAT-1813]
 // @Tags auth
 // @Produce json
 // @Success 200 {object} authStatus
@@ -552,7 +585,7 @@ func (s *Server) handleSetAuthToken(w http.ResponseWriter, r *http.Request) {
 
 // handleClearAuthToken removes the token: the API is open again.
 // @Summary Clear the API token
-// @Description Deletes the stored token; the API is open again from the next request on. Refused with 409 while MESHSAT_API_TOKEN sets the token. Written to the audit log as api_token_cleared. [MESHSAT-1738]
+// @Description Deletes the stored token; the API is open again from the next request on. Refused with 409 while MESHSAT_API_TOKEN sets the token, and while MESHSAT_API_TOKEN_REQUIRED is on (rotate with PUT instead). Written to the audit log as api_token_cleared. [MESHSAT-1738] [MESHSAT-1813]
 // @Tags auth
 // @Success 204 "cleared"
 // @Failure 403 {object} map[string]string
@@ -565,6 +598,10 @@ func (s *Server) handleClearAuthToken(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.AuthSource() == "env" {
 		writeError(w, http.StatusConflict, "the token is set by MESHSAT_API_TOKEN; remove it there")
+		return
+	}
+	if s.tokenRequiredByEnv() {
+		writeError(w, http.StatusConflict, "MESHSAT_API_TOKEN_REQUIRED is on: the API cannot be opened; rotate the token with PUT /api/auth/token")
 		return
 	}
 	if s.db != nil {

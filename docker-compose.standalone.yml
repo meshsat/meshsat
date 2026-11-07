@@ -15,6 +15,10 @@ services:
       # itself (loopback, trusted by default) and through the Hub relay.
       - MESHSAT_API_TOKEN=${MESHSAT_API_TOKEN:-}
       - MESHSAT_API_TRUST_LOOPBACK=${MESHSAT_API_TRUST_LOOPBACK:-true}
+      # true on a kit for other people's networks (a municipal emergency point,
+      # MESHSAT-1813): with no token set the API is closed, not open, until one
+      # is set from the kit itself (PUT http://localhost:6050/api/auth/token).
+      - MESHSAT_API_TOKEN_REQUIRED=${MESHSAT_API_TOKEN_REQUIRED:-false}
       # 9603 GPIO pins (MESHSAT-666/667/668). Default 0 = disabled.
       # On tesseract set MESHSAT_IRIDIUM_NETAV_PIN=22, _RI_PIN=23.
       # OnOff stays 0 until the MESHSAT-669 MOSFET buffer is installed.

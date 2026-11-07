@@ -39,6 +39,11 @@ type Config struct {
 	// the Hub relay). An empty env falls back to the hash in system_config.
 	APIToken         string
 	APITrustLoopback bool // default true: the kiosk, host services and the operator's shell need no token
+	// APITokenRequired is MESHSAT_API_TOKEN_REQUIRED [MESHSAT-1813]: on a
+	// kit for other people's networks (a municipal emergency point) the API
+	// is closed, not open, until a token is set from the kit itself.
+	// Default false: today's kits are unchanged.
+	APITokenRequired bool
 
 	// Serial health watchdog: minutes of silence before forcing serial reconnect (0 = disabled)
 	MeshWatchdogMin int
@@ -289,6 +294,7 @@ func Load() *Config {
 		APIRateLimit:                 envInt("MESHSAT_API_RATE_LIMIT", 600),
 		APIToken:                     envStr("MESHSAT_API_TOKEN", ""),
 		APITrustLoopback:             envBool("MESHSAT_API_TRUST_LOOPBACK", true),
+		APITokenRequired:             envBool("MESHSAT_API_TOKEN_REQUIRED", false),
 		MeshWatchdogMin:              envInt("MESHSAT_MESH_WATCHDOG_MIN", 0),
 		APRSRxWatchdogMin:            envInt("MESHSAT_APRS_RX_WATCHDOG_MIN", 5),
 		APRSRxHeardWithinMin:         envInt("MESHSAT_APRS_RX_HEARD_WITHIN_MIN", 120),

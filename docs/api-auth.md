@@ -72,6 +72,7 @@ byte, as every `MESHSAT_*` variable):
 |---|---|---|
 | `MESHSAT_API_TOKEN` | `""` (off) | The token. Empty = the API is open; the Bridge then also reads `system_config`. |
 | `MESHSAT_API_TRUST_LOOPBACK` | `true` | Requests from `127.0.0.1` / `::1` need no token. Only read while a token is set. |
+| `MESHSAT_API_TOKEN_REQUIRED` | `false` | `true` = with no token set, the API is **closed**, not open, until one is set from the kit itself. For kits on other people's networks; see "Municipal setups" below. |
 
 While the environment sets the token, `PUT` and `DELETE /api/auth/token` answer `409`: change the
 environment and recreate the container.
@@ -106,6 +107,25 @@ caller got in; never the token).
 | `POST /api/auth/logout` | Clears the cookie. The token stays. |
 | `PUT /api/auth/token` | Set or rotate. Body `{"token":"..."}` or empty to generate. The new token is in this response and nowhere else. |
 | `DELETE /api/auth/token` | Clear. |
+
+## Municipal setups: closed until a token is set
+
+A kit that goes to a network other people are on, such as a municipal emergency meeting point,
+should never start with an open API, not even for the minutes before someone sets a token. Set
+`MESHSAT_API_TOKEN_REQUIRED=true` in its environment (and pass it through the compose file):
+
+- With no token set yet, every request under `/api/` from the LAN gets `401`. The kiosk on the
+  panel (loopback, while `MESHSAT_API_TRUST_LOOPBACK` is on), the Hub relay and the Bridge's own
+  calls still get in, so the kit works and can be set up.
+- `GET /api/auth/status` answers `required: true` and `source: "unset"` until a token exists.
+- Set the token on the kit itself: `curl -s -X PUT http://localhost:6050/api/auth/token` (returned
+  once), or through the Hub relay. From then on it works as described above.
+- `DELETE /api/auth/token` answers `409` while the variable is on: clearing the token cannot reopen
+  the API. Rotate with `PUT` instead.
+- The Community Post's portal is unaffected: it is its own listener.
+- A stored hash that is not a SHA-256 leaves the API closed (without the variable it leaves it open).
+
+Without the variable nothing changes: the field kits run without it.
 
 ## Who calls the API, and what the token means for each
 

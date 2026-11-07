@@ -33,6 +33,12 @@ services:
       # The variable was missing from this list, so setting it in .env did
       # nothing: compose only passes through the variables it names.
       - MESHSAT_API_RATE_LIMIT=${MESHSAT_API_RATE_LIMIT:-600}
+      # The API token (MESHSAT-1738, docs/api-auth.md). MESHSAT_API_TOKEN_REQUIRED
+      # =true keeps the API closed until a token is set from the kit itself
+      # (municipal setups, MESHSAT-1813); false = open until a token is set.
+      - MESHSAT_API_TOKEN=${MESHSAT_API_TOKEN:-}
+      - MESHSAT_API_TRUST_LOOPBACK=${MESHSAT_API_TRUST_LOOPBACK:-true}
+      - MESHSAT_API_TOKEN_REQUIRED=${MESHSAT_API_TOKEN_REQUIRED:-false}
       # Dynamic Reticulum interfaces (MESHSAT-1349/1350): first-boot seeds only.
       - MESHSAT_RNODE_PORT=${MESHSAT_RNODE_PORT:-}
       - MESHSAT_RNODE_PRESET=${MESHSAT_RNODE_PRESET:-eu-868}
