@@ -51,6 +51,17 @@ func prune(db *database.DB, days int) {
 		log.Info().Int64("deleted", n).Msg("delivery intents pruned")
 	}
 
+	// The delivery ledger's personal data: rows that ended past the
+	// retention keep time, channel and status and lose payload, text,
+	// destination and error text. The rows stay, so the stats, the SOS
+	// legs and the audit chain still resolve them. After the intent prune,
+	// which archives an intent's facts from its rows first. [MESHSAT-1814]
+	if n, err := db.ScrubEndedDeliveries(days); err != nil {
+		log.Error().Err(err).Msg("delivery ledger scrub failed")
+	} else if n > 0 {
+		log.Info().Int64("scrubbed", n).Int("retention_days", days).Msg("delivery ledger rows scrubbed")
+	}
+
 	// LXMF message ids past their own horizon, whatever the retention days. [MESHSAT-1641]
 	if n, err := db.PruneLXMFMids(time.Now()); err != nil {
 		log.Error().Err(err).Msg("lxmf mid prune failed")

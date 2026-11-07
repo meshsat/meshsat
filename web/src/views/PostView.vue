@@ -3,6 +3,8 @@
 // for approval, big buttons to send or refuse each, the recent ones, the
 // three settings, the post's state (open, closed and when what it stored is
 // purged, purge now) and the receipt printer as it last reported itself.
+// The "Safe and well" board's lines, each with Remove [MESHSAT-1814]: the
+// operator sees the whole board, residents only look a name up.
 // Polls every 5 s; works under ?kiosk=1 (tap targets).
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import api from '@/api/client'
@@ -10,6 +12,7 @@ import api from '@/api/client'
 const config = ref(null)
 const pending = ref([])
 const recent = ref([])
+const board = ref([])
 const counts = ref({})
 const error = ref('')
 const busy = ref('')
@@ -50,6 +53,8 @@ async function load() {
     pending.value = q.pending || []
     recent.value = (q.recent || []).filter(p => p.status !== 'pending_approval')
     counts.value = q.counts || {}
+    const lines = await api.get('/post/board')
+    board.value = Array.isArray(lines) ? lines : []
     error.value = ''
   } catch (e) {
     error.value = e.status === 503 ? 'The Community Post is not configured on this Bridge (MESHSAT_POST_LISTEN).' : (e.message || 'failed')
@@ -60,6 +65,22 @@ async function decide(code, action) {
   busy.value = code
   try {
     await api.post(`/post/${code}/${action}`)
+    await load()
+  } catch (e) {
+    error.value = e.message || 'failed'
+  } finally {
+    busy.value = ''
+  }
+}
+
+// removeLine takes one line off the "Safe and well" board, after asking:
+// the resident may still be counting on being found. [MESHSAT-1814]
+async function removeLine(line) {
+  if (!confirm(`Take "${line.name}" off the board? People looking for them will no longer find the line.`)) return
+  busy.value = `board-${line.id}`
+  try {
+    await api.del(`/post/board/${line.id}`)
+    notice.value = `"${line.name}" is off the board.`
     await load()
   } catch (e) {
     error.value = e.message || 'failed'
@@ -190,6 +211,19 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
           <span class="text-gray-500 whitespace-nowrap">{{ p.status.replace('_', ' ') }}</span>
           <button v-if="p.status === 'failed'" class="px-3 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-100 font-semibold disabled:opacity-50"
                   :disabled="busy === p.code" @click="decide(p.code, 'approve')">Send again</button>
+        </div>
+      </section>
+
+      <section class="bg-gray-800/40 rounded-lg border border-gray-700/50 p-4" data-testid="post-board">
+        <h2 class="text-sm font-medium text-gray-300 mb-2">Safe and well <span class="text-gray-500 font-normal">({{ board.length }})</span></h2>
+        <p class="text-[12px] text-gray-500 mb-2">Residents find a line by a full first or last name and can take their own line off with the code they got. Each line goes {{ config.board_days }} days after it was put up.</p>
+        <p v-if="board.length === 0" class="text-[12px] text-gray-500">Nobody on the board.</p>
+        <div v-for="b in board" :key="b.id" class="flex items-baseline justify-between gap-2 text-[12px] py-1 border-b border-gray-800/60 last:border-0">
+          <span class="text-gray-200 font-semibold">{{ b.name }}</span>
+          <span class="text-gray-400 truncate flex-1">{{ b.status }}<span v-if="b.place"> &middot; {{ b.place }}</span></span>
+          <span class="text-gray-500 whitespace-nowrap">{{ day(b.created_at) }} {{ when(b.created_at) }}</span>
+          <button class="px-3 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-100 font-semibold disabled:opacity-50"
+                  :disabled="busy === `board-${b.id}`" @click="removeLine(b)">Remove</button>
         </div>
       </section>
 

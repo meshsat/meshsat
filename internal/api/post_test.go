@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -51,6 +52,8 @@ func newPostAPIEnv(t *testing.T, configured bool) (*chi.Mux, *cpost.Service, *po
 	mux.Get("/api/post/config", s.handleGetPostConfig)
 	mux.Put("/api/post/config", s.handleSetPostConfig)
 	mux.Get("/api/post/queue", s.handleGetPostQueue)
+	mux.Get("/api/post/board", s.handleGetPostBoard)
+	mux.Delete("/api/post/board/{id}", s.handleDeletePostBoardLine)
 	mux.Get("/api/post/{code}", s.handleGetPost)
 	mux.Post("/api/post/{code}/approve", s.handleApprovePost)
 	mux.Post("/api/post/{code}/refuse", s.handleRefusePost)
@@ -190,5 +193,50 @@ func TestPostAPICloseOpenPurgeAndPrinter(t *testing.T) {
 	}
 	if code, _ := postAPI(t, mux, "PUT", "/api/post/printer", `not json`); code != http.StatusBadRequest {
 		t.Fatalf("bad report = %d, want 400", code)
+	}
+}
+
+// The operator sees the whole "Safe and well" board and takes a line off;
+// residents never see the whole board. [MESHSAT-1814]
+func TestPostAPIBoardListAndRemove(t *testing.T) {
+	mux, svc, _ := newPostAPIEnv(t, true)
+	if _, _, err := svc.AddBoard("Maria Papadaki", "safe", "the school"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.AddBoard("Nikos Georgiou", "looking for Maria", ""); err != nil {
+		t.Fatal(err)
+	}
+	list := func() []map[string]any {
+		req := httptest.NewRequest(http.MethodGet, "/api/post/board", nil)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("list: %d %s", rec.Code, rec.Body.String())
+		}
+		var out []map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatalf("list body: %v", err)
+		}
+		if strings.Contains(rec.Body.String(), "remove_hash") || strings.Contains(rec.Body.String(), "RemoveHash") {
+			t.Fatal("the list leaks the removal code's hash")
+		}
+		return out
+	}
+	lines := list()
+	if len(lines) != 2 || lines[0]["has_remove_code"] != true {
+		t.Fatalf("lines %+v", lines)
+	}
+	id := int64(lines[1]["id"].(float64))
+	if code, _ := postAPI(t, mux, http.MethodDelete, "/api/post/board/"+strconv.FormatInt(id, 10), ""); code != http.StatusOK {
+		t.Fatalf("delete: %d", code)
+	}
+	if got := list(); len(got) != 1 || got[0]["name"] != "Nikos Georgiou" {
+		t.Fatalf("after delete %+v", got)
+	}
+	if code, _ := postAPI(t, mux, http.MethodDelete, "/api/post/board/"+strconv.FormatInt(id, 10), ""); code != http.StatusNotFound {
+		t.Fatalf("second delete: %d", code)
+	}
+	if code, _ := postAPI(t, mux, http.MethodDelete, "/api/post/board/abc", ""); code != http.StatusBadRequest {
+		t.Fatalf("bad id: %d", code)
 	}
 }

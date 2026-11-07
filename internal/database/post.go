@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -63,6 +64,13 @@ type PostBoardEntry struct {
 	Place     string    `json:"place"`
 	CreatedAt time.Time `json:"created_at"`
 	ExpiresAt time.Time `json:"expires_at"`
+	// RemoveHash is the SHA-256 (hex) of the line's removal code; empty for
+	// lines from before v89, which only the operator removes. Never sent
+	// out. [MESHSAT-1814]
+	RemoveHash string `json:"-"`
+	// HasRemoveCode says whether the resident who wrote the line can take
+	// it off with a code (for the operator's list). [MESHSAT-1814]
+	HasRemoveCode bool `json:"has_remove_code"`
 }
 
 // PostSession is one phone's counters.
@@ -239,25 +247,38 @@ func (db *DB) InsertPostBoardEntry(e *PostBoardEntry, nameKey string) error {
 	if e.CreatedAt.IsZero() {
 		e.CreatedAt = time.Now().UTC()
 	}
-	res, err := db.Exec(`INSERT INTO post_board (name, name_key, status, place, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)`,
-		e.Name, nameKey, e.Status, e.Place, postTime(e.CreatedAt), postTime(e.ExpiresAt))
+	res, err := db.Exec(`INSERT INTO post_board (name, name_key, status, place, created_at, expires_at, remove_hash) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		e.Name, nameKey, e.Status, e.Place, postTime(e.CreatedAt), postTime(e.ExpiresAt), e.RemoveHash)
 	if err != nil {
 		return fmt.Errorf("insert board entry: %w", err)
 	}
 	e.ID, _ = res.LastInsertId()
+	e.HasRemoveCode = e.RemoveHash != ""
 	_, _ = db.Exec(`DELETE FROM post_board WHERE expires_at < ?`, postTime(e.CreatedAt))
 	return nil
 }
 
-// SearchPostBoard lists unexpired board lines whose name key contains q
-// (every line when q is empty), newest first, at most limit.
-func (db *DB) SearchPostBoard(q string, now time.Time, limit int) ([]PostBoardEntry, error) {
-	if limit <= 0 {
-		limit = 50
+// SearchPostBoard lists unexpired board lines whose name holds every word
+// of words as a whole word (words are NameKey'd), newest first, at most
+// limit. No words, no lines: the board is looked up by name, never browsed.
+// SQL narrows by the longest word as a substring; the whole-word test is
+// done here, so "mar" never finds "Maria". [MESHSAT-1814]
+func (db *DB) SearchPostBoard(words []string, now time.Time, limit int) ([]PostBoardEntry, error) {
+	if len(words) == 0 {
+		return nil, nil
 	}
-	rows, err := db.Query(`SELECT id, name, status, place, created_at, expires_at FROM post_board
-		WHERE expires_at >= ? AND (? = '' OR instr(name_key, ?) > 0) ORDER BY created_at DESC LIMIT ?`,
-		postTime(now), q, q, limit)
+	if limit <= 0 {
+		limit = 20
+	}
+	longest := words[0]
+	for _, w := range words[1:] {
+		if len(w) > len(longest) {
+			longest = w
+		}
+	}
+	rows, err := db.Query(`SELECT id, name, name_key, status, place, created_at, expires_at, remove_hash FROM post_board
+		WHERE expires_at >= ? AND instr(name_key, ?) > 0 ORDER BY created_at DESC`,
+		postTime(now), longest)
 	if err != nil {
 		return nil, fmt.Errorf("search board: %w", err)
 	}
@@ -265,23 +286,93 @@ func (db *DB) SearchPostBoard(q string, now time.Time, limit int) ([]PostBoardEn
 	var out []PostBoardEntry
 	for rows.Next() {
 		var e PostBoardEntry
-		var created, expires string
-		if err := rows.Scan(&e.ID, &e.Name, &e.Status, &e.Place, &created, &expires); err != nil {
+		var key, created, expires string
+		if err := rows.Scan(&e.ID, &e.Name, &key, &e.Status, &e.Place, &created, &expires, &e.RemoveHash); err != nil {
 			return nil, fmt.Errorf("search board: %w", err)
 		}
+		if !hasEveryWord(key, words) {
+			continue
+		}
 		e.CreatedAt, e.ExpiresAt = parsePostTime(created), parsePostTime(expires)
+		e.HasRemoveCode = e.RemoveHash != ""
+		out = append(out, e)
+		if len(out) == limit {
+			break
+		}
+	}
+	return out, rows.Err()
+}
+
+// hasEveryWord is whether every one of words is a whole word of key.
+func hasEveryWord(key string, words []string) bool {
+	have := map[string]bool{}
+	for _, w := range strings.Fields(key) {
+		have[w] = true
+	}
+	for _, w := range words {
+		if !have[w] {
+			return false
+		}
+	}
+	return true
+}
+
+// ListPostBoard is every unexpired line, newest first: the operator's view,
+// never the residents'. [MESHSAT-1814]
+func (db *DB) ListPostBoard(now time.Time) ([]PostBoardEntry, error) {
+	rows, err := db.Query(`SELECT id, name, status, place, created_at, expires_at, remove_hash FROM post_board
+		WHERE expires_at >= ? ORDER BY created_at DESC`, postTime(now))
+	if err != nil {
+		return nil, fmt.Errorf("list board: %w", err)
+	}
+	defer rows.Close()
+	out := []PostBoardEntry{}
+	for rows.Next() {
+		var e PostBoardEntry
+		var created, expires string
+		if err := rows.Scan(&e.ID, &e.Name, &e.Status, &e.Place, &created, &expires, &e.RemoveHash); err != nil {
+			return nil, fmt.Errorf("list board: %w", err)
+		}
+		e.CreatedAt, e.ExpiresAt = parsePostTime(created), parsePostTime(expires)
+		e.HasRemoveCode = e.RemoveHash != ""
 		out = append(out, e)
 	}
 	return out, rows.Err()
 }
 
-// DeletePostBoardEntry removes one line (an operator's request, or the
-// person's own).
-func (db *DB) DeletePostBoardEntry(id int64) error {
-	if _, err := db.Exec(`DELETE FROM post_board WHERE id = ?`, id); err != nil {
-		return fmt.Errorf("delete board entry: %w", err)
+// DeletePostBoardEntry removes one line on the operator's request; false
+// when there was no such line.
+func (db *DB) DeletePostBoardEntry(id int64) (bool, error) {
+	res, err := db.Exec(`DELETE FROM post_board WHERE id = ?`, id)
+	if err != nil {
+		return false, fmt.Errorf("delete board entry: %w", err)
 	}
-	return nil
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// DeletePostBoardByCode removes the line whose removal code hashes to
+// removeHash (the resident's own request); false when no line has it. An
+// empty hash never matches. [MESHSAT-1814]
+func (db *DB) DeletePostBoardByCode(removeHash string) (bool, error) {
+	if removeHash == "" {
+		return false, nil
+	}
+	res, err := db.Exec(`DELETE FROM post_board WHERE remove_hash = ?`, removeHash)
+	if err != nil {
+		return false, fmt.Errorf("delete board entry by code: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// PrunePostBoard deletes the lines that expired before now. [MESHSAT-1814]
+func (db *DB) PrunePostBoard(now time.Time) (int64, error) {
+	res, err := db.Exec(`DELETE FROM post_board WHERE expires_at < ?`, postTime(now))
+	if err != nil {
+		return 0, fmt.Errorf("prune board: %w", err)
+	}
+	return res.RowsAffected()
 }
 
 // GetPostSession reads a phone's counters; nil, nil when unknown.

@@ -2001,6 +2001,20 @@ var migrations = []string{
 	DROP TABLE IF EXISTS bond_members;
 	DROP TABLE IF EXISTS bond_groups;
 	DROP TABLE IF EXISTS hemb_events;`,
+
+	// v88: the ledger's personal data leaves with the retention. A row
+	// that ended more than MESHSAT_RETENTION_DAYS ago keeps its time,
+	// channel, status and ids (the delivery stats, the SOS legs and the
+	// audit chain still resolve it) and loses its payload, text preview,
+	// destination and error text; scrubbed_at says when
+	// (ScrubEndedDeliveries). [MESHSAT-1814]
+	`ALTER TABLE message_deliveries ADD COLUMN scrubbed_at TEXT;`,
+
+	// v89: a "Safe and well" line's removal code, kept only as its
+	// SHA-256, so the resident who wrote the line can take it off the
+	// board; lines from before have none and only the operator removes
+	// them. [MESHSAT-1814]
+	`ALTER TABLE post_board ADD COLUMN remove_hash TEXT NOT NULL DEFAULT '';`,
 }
 
 // postMigration is what a migration needs to know that its SQL cannot see:

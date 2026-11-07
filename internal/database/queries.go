@@ -348,9 +348,13 @@ func (db *DB) PurgeMessages(before string) (int64, error) {
 	return result.RowsAffected()
 }
 
-// PruneOlderThan deletes records older than the given number of days.
+// PruneOlderThan deletes records older than the given number of days. The
+// cutoff is written as CURRENT_TIMESTAMP writes created_at ("YYYY-MM-DD
+// HH:MM:SS", UTC): an RFC 3339 cutoff ("...T...Z") compared as text put
+// every row of the cutoff's own day before it, so rows went up to a day
+// early. [MESHSAT-1814]
 func (db *DB) PruneOlderThan(days int) (int64, error) {
-	cutoff := time.Now().AddDate(0, 0, -days).Format(time.RFC3339)
+	cutoff := time.Now().UTC().AddDate(0, 0, -days).Format("2006-01-02 15:04:05")
 
 	var total int64
 	for _, table := range []string{"messages", "telemetry", "positions"} {

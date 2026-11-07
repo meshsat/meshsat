@@ -105,3 +105,33 @@ test('a_failed_post_can_be_sent_again_from_recent', async () => {
   await flush(); await flush()
   assert.deepEqual(calls, ['/api/post/K7QW2X/approve'])
 })
+
+// The "Safe and well" board: the operator sees every line and takes one off
+// after a confirm; the screen asks the Bridge with DELETE. [MESHSAT-1814]
+test('the_board_lists_every_line_and_remove_deletes_one', async () => {
+  const calls = []
+  const lines = [
+    { id: 7, name: 'Maria Papadaki', status: 'safe', place: 'the school', created_at: '2026-11-07T12:00:00Z', has_remove_code: true },
+    { id: 5, name: 'Nikos Georgiou', status: 'looking for Maria', place: '', created_at: '2026-11-07T11:00:00Z', has_remove_code: false }
+  ]
+  serve(async (url, opts) => {
+    const u = new URL(url, 'http://review.local')
+    if (opts?.method === 'DELETE') { calls.push(u.pathname); return json({ status: 'removed' }) }
+    if (u.pathname.endsWith('/post/config')) return json(open)
+    if (u.pathname.endsWith('/post/board')) return json(lines)
+    return json(queue)
+  })
+  mountRoot(PostView)
+  await flush(); await flush(); await flush()
+  const board = document.querySelector('[data-testid="post-board"]').textContent.replace(/\s+/g, ' ')
+  assert.match(board, /Safe and well \(2\)/)
+  assert.match(board, /Maria Papadaki/)
+  assert.match(board, /the school/)
+  assert.match(board, /Nikos Georgiou/)
+  const remove = [...document.querySelectorAll('[data-testid="post-board"] button')].filter(b => b.textContent.trim() === 'Remove')
+  assert.equal(remove.length, 2)
+  remove[1].click()
+  await flush(); await flush()
+  assert.deepEqual(calls, ['/api/post/board/5'])
+  assert.match(bodyText(), /"Nikos Georgiou" is off the board\./)
+})

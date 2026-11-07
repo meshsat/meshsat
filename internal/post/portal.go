@@ -172,28 +172,34 @@ func (s *Service) capport(w http.ResponseWriter, r *http.Request) {
 
 // page is what every template sees.
 type page struct {
-	Lang      string
-	Q         string // "?lang=xx", carried on every link and form
-	Langs     []langLink
-	S         map[string]string
-	Path      string
-	Title     string
-	Err       string
-	Form      map[string]string
-	Post      *database.PostMessage
-	Replies   []database.PostReply
-	Mine      []database.PostMessage
-	Board     []database.PostBoardEntry
-	Query     string
-	Added     bool
-	Operator  string
-	MaxChars  int
-	BoardDays int
-	Status    string
-	Emergency bool
-	Closed    bool   // the operator closed the post
-	PurgeDate string // the day everything is deleted, while closed, as the language writes it
-	PurgeDays int
+	Lang    string
+	Q       string // "?lang=xx", carried on every link and form
+	Langs   []langLink
+	S       map[string]string
+	Path    string
+	Title   string
+	Err     string
+	Form    map[string]string
+	Post    *database.PostMessage
+	Replies []database.PostReply
+	Mine    []database.PostMessage
+	Board   []database.PostBoardEntry
+	Query   string
+	Added   bool
+	// RemoveCode is the code a resident takes their board line off with,
+	// shown once after the add; Removed says a line came off; QueryShort
+	// says the search was too short to look up a name. [MESHSAT-1814]
+	RemoveCode string
+	Removed    bool
+	QueryShort bool
+	Operator   string
+	MaxChars   int
+	BoardDays  int
+	Status     string
+	Emergency  bool
+	Closed     bool   // the operator closed the post
+	PurgeDate  string // the day everything is deleted, while closed, as the language writes it
+	PurgeDays  int
 	// BoardDaysText and PurgeDaysText are the day counts in words ("30 days",
 	// "1 Tag"), what board_intro and data_notice take.
 	BoardDaysText string
@@ -457,9 +463,23 @@ func (s *Service) board(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodPost {
 		if err := r.ParseForm(); err != nil {
 			p.Err = p.S["err_other"]
+		} else if r.PostForm.Get("do") == "remove" {
+			// The phone's address, not its cookie, counts the wrong codes:
+			// a fresh cookie must not reset them. [MESHSAT-1814]
+			switch err := s.RemoveBoard(ipKey(r), r.PostForm.Get("code")); {
+			case err == nil:
+				p.Removed = true
+			case errors.Is(err, ErrBadRemoveCode):
+				p.Err = p.S["board_remove_bad"]
+			case errors.Is(err, ErrRemoveTries):
+				p.Err = p.S["board_remove_wait"]
+			default:
+				p.Err = p.S["err_other"]
+				log.Error().Err(err).Msg("post: board removal failed")
+			}
 		} else {
 			p.Form = map[string]string{"name": r.PostForm.Get("name"), "status": r.PostForm.Get("status"), "place": r.PostForm.Get("place")}
-			if _, err := s.AddBoard(p.Form["name"], p.Form["status"], p.Form["place"]); errors.Is(err, ErrClosed) {
+			if _, code, err := s.AddBoard(p.Form["name"], p.Form["status"], p.Form["place"]); errors.Is(err, ErrClosed) {
 				p.Err = fmt.Sprintf(p.S["closed_text"], p.PurgeDate)
 			} else if err != nil {
 				p.Err = errorText(p.S, err)
@@ -468,13 +488,21 @@ func (s *Service) board(w http.ResponseWriter, r *http.Request) {
 				}
 			} else {
 				p.Added = true
+				p.RemoveCode = code
 				p.Form = map[string]string{}
 			}
 		}
 	}
+	// The board is looked up by a name, never listed: nothing is shown
+	// without a query, and a query too short to be a name shows nothing
+	// either. [MESHSAT-1814]
 	p.Query = strings.TrimSpace(r.URL.Query().Get("q"))
-	if p.Query != "" || p.Added {
-		if entries, err := s.SearchBoard(p.Query); err == nil {
+	if p.Query != "" {
+		entries, err := s.SearchBoard(p.Query)
+		switch {
+		case errors.Is(err, ErrQueryShort):
+			p.QueryShort = true
+		case err == nil:
 			p.Board = entries
 		}
 	}
@@ -632,14 +660,15 @@ a{color:#8fd3c9}
 
 {{define "board"}}{{template "head" .}}
 <p>{{printf .S.board_intro .BoardDaysText}}</p>
-{{if .Added}}<div class="ok">{{.S.board_added}}</div>{{end}}
+{{if .Added}}<div class="ok">{{.S.board_added}}</div><p>{{.S.board_code}}</p><div class="code">{{.RemoveCode}}</div>{{end}}
+{{if .Removed}}<div class="ok">{{.S.board_removed}}</div>{{end}}
 <form method="get" action="/board">
 <input type="hidden" name="lang" value="{{.Lang}}">
 <label for="q">{{.S.board_search}}</label>
 <input id="q" name="q" value="{{.Query}}" maxlength="60" autocomplete="off">
 <button type="submit">{{.S.board_find}}</button>
 </form>
-{{if .Query}}{{if .Board}}{{range .Board}}<div class="card"><strong>{{.Name}}</strong> &middot; {{.Status}}{{if .Place}} &middot; {{.Place}}{{end}}<div class="meta">{{$.When .CreatedAt}}</div></div>{{end}}{{else}}<p>{{.S.board_empty}}</p>{{end}}{{end}}
+{{if .QueryShort}}<p>{{.S.board_query_short}}</p>{{else if .Query}}{{if .Board}}{{range .Board}}<div class="card"><strong>{{.Name}}</strong> &middot; {{.Status}}{{if .Place}} &middot; {{.Place}}{{end}}<div class="meta">{{$.When .CreatedAt}}</div></div>{{end}}{{else}}<p>{{.S.board_empty}}</p>{{end}}{{end}}
 {{if .Closed}}<h2>{{.S.closed_title}}</h2><p>{{printf .S.closed_text .PurgeDate}}</p>{{else}}
 <h2>{{.S.board_add}}</h2>
 <form method="post" action="/board{{.Q}}">
@@ -652,6 +681,13 @@ a{color:#8fd3c9}
 <button type="submit">{{.S.board_add}}</button>
 </form>
 {{end}}
+<h2>{{.S.board_remove}}</h2>
+<form method="post" action="/board{{.Q}}">
+<input type="hidden" name="do" value="remove">
+<label for="rcode">{{.S.board_remove_code}}</label>
+<input id="rcode" name="code" maxlength="10" autocomplete="off" autocapitalize="characters" required>
+<button type="submit">{{.S.board_remove}}</button>
+</form>
 {{template "foot" .}}{{end}}
 
 {{define "about"}}{{template "head" .}}

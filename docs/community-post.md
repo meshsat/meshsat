@@ -100,8 +100,17 @@ time, the date as the language writes it (6 Dec 2026, 6.12.2026, 6-12-2026, 6/12
 (see `MESHSAT_POST_TZ` below). A phone whose browser kept the session cookie
 also sees its own posts listed; iOS's captive assistant keeps none, so the code is the real state.
 
-**Safe and well.** A separate, opt-in board: name, status, place; searchable by name; every line
-expires after 30 days (`MESHSAT_POST_BOARD_DAYS`). Nothing on it is sent anywhere.
+**Safe and well.** A separate, opt-in board: name, status, place; every line expires after 30 days
+(`MESHSAT_POST_BOARD_DAYS`) and the service's 15 s tick deletes it then. Nothing on it is sent
+anywhere. It is looked up, never browsed (MESHSAT-1814): a line matches when every word of the
+search is a whole word of the name ("papadaki" finds "Maria Papadaki", "mar" finds nobody), a search
+needs 3 letters at least, shows 20 lines at most, and the page lists no line after an add. The
+writer gets a removal code (the pickup code's alphabet, kept only as a SHA-256 in
+`post_board.remove_hash`, v89) and takes the line off with it on `/board`, even on a closed post;
+five wrong codes from one phone address (not its cookie) within the hour make it wait. The operator
+sees the whole board on `/post` and removes a line there (`GET /api/post/board`,
+`DELETE /api/post/board/{id}`, audited as `post_board_removed` with the id only). Lines from before
+v89 have no code: only the operator removes them.
 
 **About.** The operator's name and the data notice (below).
 
@@ -117,7 +126,11 @@ the purge it scheduled. A purge stops a send still waiting before it deletes the
 30-day expiry per line is unchanged by any of this. What the
 purge does NOT touch: the delivery ledger's rows for the sent texts (`message_deliveries`,
 `delivery_submissions`), which are the Bridge's own record and follow its retention
-(`MESHSAT_RETENTION_DAYS`, 30); the notice says so.
+(`MESHSAT_RETENTION_DAYS`, 30); the notice says so. Since MESHSAT-1814 that retention is real: the
+daily retention worker scrubs a ledger row that ended more than the retention ago (payload, text
+preview, destination and error text emptied, `scrubbed_at` set, v88); the row's time, channel and
+status stay, so the delivery stats, the SOS legs and the audit chain still resolve it, and a scrubbed
+row cannot be retried (409).
 
 **Slips.** With `MESHSAT_POST_PRINT=true` and the booth's receipt printer service on the kit
 (`scripts/install-receipt-printer.sh`, `deploy/printer/meshsat-receipt-printer`, the only ESC/POS
@@ -307,8 +320,10 @@ name has a translation (both are tests).
   Python side is checked against a fake printer, the Bridge side against a recording printer, and the
   two meet only through the `post_slip` event's fields. The first real slip is a kit test.
 - **The delivery ledger** keeps the sent text of a post (the composed "@" line) under the Bridge's
-  retention, not the post's: the purge removes the `post_*` rows only. Honest in the notice; a ledger
-  purge by source would be a change to the ledger's own history rules.
+  retention, not the post's: the purge removes the `post_*` rows only, and the retention worker
+  scrubs the text from the ledger `MESHSAT_RETENTION_DAYS` after the send ended (MESHSAT-1814).
+  Honest in the notice; a ledger purge by source would be a change to the ledger's own history
+  rules.
 - **One satellite link per post.** A post leaves on the kit's satellite link only; there is no SMS
   leg, because the Hub's lane takes satellite MOs alone (its provenance rule).
 

@@ -821,7 +821,7 @@ func TestCloseThenPurgeAfterTheDays(t *testing.T) {
 	if m, replies, _ := e.svc.Status(code); m != nil || len(replies) != 0 {
 		t.Fatalf("not purged: %+v %+v", m, replies)
 	}
-	if entries, _ := e.svc.SearchBoard(""); len(entries) != 0 {
+	if entries, _ := e.svc.BoardLines(); len(entries) != 0 {
 		t.Fatalf("the board survived the purge: %+v", entries)
 	}
 	if sess, _ := e.db.GetPostSession("ip:127.0.0.1"); sess != nil {
@@ -1194,7 +1194,7 @@ func TestDayCountsAreSingularForOne(t *testing.T) {
 	c := e.client()
 	for path, want := range map[string]string{
 		"/board?lang=de": "der Eintrag bleibt 1 Tag stehen",
-		"/board?lang=en": "it stays 1 day and",
+		"/board?lang=en": "it stays 1 day, is not sent anywhere",
 		"/about?lang=en": "Deleted 1 day after",
 		"/about?lang=nl": "Gewist 1 dag nadat",
 		"/about?lang=el": "Διαγράφονται 1 ημέρα αφού",
@@ -1415,5 +1415,138 @@ func TestAPostWaitsForSkyUntilTheOperatorClosesThePost(t *testing.T) {
 	}
 	if d, _ := e.db.GetDelivery(m.DeliveryID); d.Status != "dead" || d.LastError != database.PostSendStoppedPurged {
 		t.Fatalf("the send after the purge: %s %q", d.Status, d.LastError)
+	}
+}
+
+// The board is looked up by a whole first or last name, never browsed: one
+// letter or a part of a name finds nobody, and the page shows no other
+// lines after an add. [MESHSAT-1814]
+func TestSafeAndWellBoardIsLookedUpNotBrowsed(t *testing.T) {
+	e := newEnv(t, Config{})
+	c := e.client()
+	for _, n := range []string{"Maria Papadaki", "Nikos Georgiou", "Marianna"} {
+		if _, body := e.post(c, "/board?lang=en", url.Values{"name": {n}, "status": {"safe"}}); !strings.Contains(body, "You are on the board") {
+			t.Fatalf("add %s: %s", n, body)
+		}
+	}
+	// After an add, no other line is on the page.
+	_, body := e.post(c, "/board?lang=en", url.Values{"name": {"Eleni"}, "status": {"at the school"}})
+	for _, other := range []string{"Maria Papadaki", "Nikos", "Marianna"} {
+		if strings.Contains(body, other) {
+			t.Fatalf("the page after an add shows %q", other)
+		}
+	}
+	for q, want := range map[string]string{
+		"m":   "Type a full first or last name",
+		"ma":  "Type a full first or last name",
+		"mar": "Nobody by that name",
+		"":    "",
+	} {
+		_, body := e.get(c, "/board?lang=en&q="+url.QueryEscape(q))
+		if want != "" && !strings.Contains(body, want) {
+			t.Fatalf("q=%q: want %q", q, want)
+		}
+		for _, n := range []string{"Maria Papadaki", "Nikos Georgiou", "Marianna"} {
+			if strings.Contains(body, n) {
+				t.Fatalf("q=%q lists %s", q, n)
+			}
+		}
+	}
+	_, body = e.get(c, "/board?lang=en&q=maria")
+	if !strings.Contains(body, "Maria Papadaki") || strings.Contains(body, "Marianna") || strings.Contains(body, "Nikos") {
+		t.Fatalf("q=maria: %s", body)
+	}
+	if _, body := e.get(c, "/board?lang=en&q="+url.QueryEscape("PAPADAKI  Maria")); !strings.Contains(body, "Maria Papadaki") {
+		t.Fatal("both names, any order and case")
+	}
+	if _, body := e.get(c, "/board?lang=en&q="+url.QueryEscape("maria georgiou")); strings.Contains(body, "Maria Papadaki") || strings.Contains(body, "Nikos") {
+		t.Fatal("every word must match one line")
+	}
+}
+
+// codeAfter is the removal code the board page shows after an add.
+func codeAfter(t *testing.T, body string) string {
+	t.Helper()
+	i := strings.Index(body, `<div class="code">`)
+	if i < 0 {
+		t.Fatalf("no removal code on the page: %s", body)
+	}
+	rest := body[i+len(`<div class="code">`):]
+	code := rest[:strings.Index(rest, "<")]
+	if !ValidCode(code) {
+		t.Fatalf("not a code: %q", code)
+	}
+	return code
+}
+
+// A resident takes their own line off with the code they got; wrong codes
+// are limited per phone; the operator's removal and the expiry prune work
+// too. [MESHSAT-1814]
+func TestSafeAndWellBoardLineComesOffWithItsCode(t *testing.T) {
+	e := newEnv(t, Config{BoardRetention: 48 * time.Hour})
+	c := e.client()
+	_, body := e.post(c, "/board?lang=en", url.Values{"name": {"Maria Papadaki"}, "status": {"safe"}})
+	code := codeAfter(t, body)
+	_, body = e.post(c, "/board?lang=en", url.Values{"name": {"Nikos Georgiou"}, "status": {"safe"}})
+	nikosCode := codeAfter(t, body)
+	if nikosCode == code {
+		t.Fatal("two lines got the same code")
+	}
+
+	// Five wrong codes, then even the right one waits an hour.
+	for i := 0; i < 5; i++ {
+		if _, body := e.post(c, "/board?lang=en", url.Values{"do": {"remove"}, "code": {"ZZZZZZ"}}); !strings.Contains(body, "No line on the board has that code") {
+			t.Fatalf("wrong code %d: %s", i, body)
+		}
+	}
+	if _, body := e.post(c, "/board?lang=en", url.Values{"do": {"remove"}, "code": {code}}); !strings.Contains(body, "Too many wrong codes") {
+		t.Fatalf("sixth try: %s", body)
+	}
+	if _, body := e.get(c, "/board?lang=en&q=maria"); !strings.Contains(body, "Maria Papadaki") {
+		t.Fatal("the line went while the phone was waiting")
+	}
+	e.clock = e.clock.Add(61 * time.Minute)
+	// The code as a person types it: lower case, with a space.
+	typed := strings.ToLower(code[:3]) + " " + code[3:]
+	if _, body := e.post(c, "/board?lang=en", url.Values{"do": {"remove"}, "code": {typed}}); !strings.Contains(body, "Your line is off the board") {
+		t.Fatalf("right code: %s", body)
+	}
+	if _, body := e.get(c, "/board?lang=en&q=maria"); strings.Contains(body, "Maria Papadaki") {
+		t.Fatal("the line is still on the board")
+	}
+	if _, body := e.post(c, "/board?lang=en", url.Values{"do": {"remove"}, "code": {code}}); !strings.Contains(body, "No line on the board has that code") {
+		t.Fatal("a used code removed something")
+	}
+
+	// Taking a name off is never refused, not even on a closed post.
+	if _, err := e.svc.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, body := e.post(c, "/board?lang=en", url.Values{"do": {"remove"}, "code": {nikosCode}}); !strings.Contains(body, "Your line is off the board") {
+		t.Fatalf("removal on a closed post: %s", body)
+	}
+	if _, err := e.svc.Open(); err != nil {
+		t.Fatal(err)
+	}
+
+	// The operator's removal, and the expiry prune at the next tick.
+	e2, _, err := e.svc.AddBoard("Eleni Ioannou", "safe", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := e.svc.RemoveBoardLine(e2.ID); err != nil || !ok {
+		t.Fatalf("operator removal: %v %v", ok, err)
+	}
+	if _, _, err := e.svc.AddBoard("Kostas", "safe", ""); err != nil {
+		t.Fatal(err)
+	}
+	e.clock = e.clock.Add(49 * time.Hour)
+	e.svc.Tick()
+	var left int
+	if err := e.db.Get(&left, `SELECT COUNT(*) FROM post_board`); err != nil {
+		t.Fatal(err)
+	}
+	if left != 0 {
+		t.Fatalf("%d expired lines left after the tick", left)
 	}
 }

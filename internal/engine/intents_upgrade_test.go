@@ -242,8 +242,9 @@ func TestUpgradeV63DatabaseIsRepaired(t *testing.T) {
 	// A v63 database has none of the later schema (v65 B5, v66 A-13, v68
 	// B10-R4, v69-v70 the Hub command log, v71-v72 hub_msg, v75 the Hub
 	// directory's origins, v81 a ledger row's LXMF mid, v86 how a chat
-	// came): undo it, or
-	// reopening would add it twice. [MESHSAT-1584, MESHSAT-1641]
+	// came, v88 a ledger row's scrub time, v89 a board line's removal
+	// code): undo it, or
+	// reopening would add it twice. [MESHSAT-1584, MESHSAT-1641, MESHSAT-1814]
 	for _, q := range []string{
 		`DROP TABLE dispatch_work`,
 		`DROP INDEX idx_delivery_evidence_dedup`,
@@ -269,6 +270,8 @@ func TestUpgradeV63DatabaseIsRepaired(t *testing.T) {
 		`ALTER TABLE tak_chat_threads DROP COLUMN bearer`,
 		`ALTER TABLE tak_chat_threads DROP COLUMN message_id`,
 		`ALTER TABLE tak_chat_threads DROP COLUMN reply_here`,
+		`ALTER TABLE message_deliveries DROP COLUMN scrubbed_at`,
+		`ALTER TABLE post_board DROP COLUMN remove_hash`,
 	} {
 		if _, err := db.Exec(q); err != nil {
 			t.Fatal(err)

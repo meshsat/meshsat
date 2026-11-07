@@ -124,13 +124,13 @@ func (s *Server) handleCancelDelivery(w http.ResponseWriter, r *http.Request) {
 
 // POST /api/deliveries/{id}/retry — retry a failed/dead delivery
 // @Summary Retry delivery
-// @Description Re-queues a failed or dead-lettered delivery for another attempt. The SOS's frame to the Hub (class hub_uplink at priority 0) is refused with 409: it would pass the SBD credit budget and raise the SOS at the Hub again with its old time; a new SOS sends a new frame (MESHSAT-1431).
+// @Description Re-queues a failed or dead-lettered delivery for another attempt. The SOS's frame to the Hub (class hub_uplink at priority 0) is refused with 409: it would pass the SBD credit budget and raise the SOS at the Hub again with its old time; a new SOS sends a new frame (MESHSAT-1431). A row whose text the retention removed (scrubbed after MESHSAT_RETENTION_DAYS) is refused with 409 too: nothing is left to send (MESHSAT-1814).
 // @Tags deliveries
 // @Produce json
 // @Param id path integer true "Delivery ID"
 // @Success 200 {object} map[string]string
 // @Failure 400 {object} map[string]string
-// @Failure 409 {object} map[string]string "the SOS frame to the Hub, never sent again"
+// @Failure 409 {object} map[string]string "the SOS frame to the Hub, never sent again; or a row the retention scrubbed"
 // @Failure 500 {object} map[string]string
 // @Router /api/deliveries/{id}/retry [post]
 func (s *Server) handleRetryDelivery(w http.ResponseWriter, r *http.Request) {
@@ -141,7 +141,7 @@ func (s *Server) handleRetryDelivery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.db.RetryDelivery(id); err != nil {
-		if errors.Is(err, database.ErrSOSFrameNotRetried) {
+		if errors.Is(err, database.ErrSOSFrameNotRetried) || errors.Is(err, database.ErrDeliveryScrubbed) {
 			writeError(w, http.StatusConflict, err.Error())
 			return
 		}

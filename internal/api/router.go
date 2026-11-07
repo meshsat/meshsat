@@ -501,6 +501,9 @@ func (s *Server) Router() http.Handler {
 		r.Get("/post/config", s.handleGetPostConfig)
 		r.Put("/post/config", s.handleSetPostConfig)
 		r.Get("/post/queue", s.handleGetPostQueue)
+		// The "Safe and well" board, the operator's view. [MESHSAT-1814]
+		r.Get("/post/board", s.handleGetPostBoard)
+		r.Delete("/post/board/{id}", s.handleDeletePostBoardLine)
 		r.Get("/post/{code}", s.handleGetPost)
 		r.Post("/post/{code}/approve", s.handleApprovePost)
 		r.Post("/post/{code}/refuse", s.handleRefusePost)

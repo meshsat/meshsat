@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -354,4 +355,65 @@ func (s *Server) postDecision(w http.ResponseWriter, r *http.Request, approve bo
 	}
 	m, _, _ := p.Status(code)
 	writeJSON(w, http.StatusOK, map[string]any{"post": m})
+}
+
+// handleGetPostBoard lists the "Safe and well" board for the operator.
+// @Summary List the Safe and well board
+// @Description Every current line on the Community Post's "Safe and well" board (name, status, place, when it was put up and when it expires, and whether its writer got a removal code), newest first. The operator's view only: residents look a name up on the portal and never see the whole board. [MESHSAT-1814]
+// @Tags post
+// @Produce json
+// @Success 200 {array} database.PostBoardEntry
+// @Failure 500 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Router /api/post/board [get]
+func (s *Server) handleGetPostBoard(w http.ResponseWriter, r *http.Request) {
+	p := s.postOrError(w)
+	if p == nil {
+		return
+	}
+	lines, err := p.BoardLines()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, lines)
+}
+
+// handleDeletePostBoardLine takes one line off the board.
+// @Summary Remove a Safe and well line
+// @Description Takes one line off the Community Post's "Safe and well" board, on the operator's word (a resident who asks at the desk, a wrong or abusive line). Written to the audit log as post_board_removed with the line's id only, never the name. [MESHSAT-1814]
+// @Tags post
+// @Produce json
+// @Param id path integer true "Line id"
+// @Success 200 {object} map[string]string
+// @Failure 400 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Router /api/post/board/{id} [delete]
+func (s *Server) handleDeletePostBoardLine(w http.ResponseWriter, r *http.Request) {
+	p := s.postOrError(w)
+	if p == nil {
+		return
+	}
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil || id <= 0 {
+		writeError(w, http.StatusBadRequest, "invalid line id")
+		return
+	}
+	s.touchOperatorActivity()
+	ok, err := p.RemoveBoardLine(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !ok {
+		writeError(w, http.StatusNotFound, "no such line on the board")
+		return
+	}
+	if s.signing != nil {
+		detail, _ := json.Marshal(map[string]int64{"line": id})
+		s.signing.AuditEvent("post_board_removed", nil, nil, nil, nil, string(detail))
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "removed"})
 }

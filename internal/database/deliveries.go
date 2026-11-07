@@ -533,13 +533,51 @@ func (db *DB) ClaimDeliveryForSending(id int64) (bool, error) {
 // ErrSOSFrameNotRetried is RetryDelivery's answer for the SOS's Hub frame.
 var ErrSOSFrameNotRetried = errors.New("the SOS frame to the Hub is not sent again: it would pass the credit budget and raise the SOS at the Hub with its old time; a new SOS sends a new frame")
 
+// ErrDeliveryScrubbed is RetryDelivery's answer for a row whose payload the
+// retention removed (ScrubEndedDeliveries): there is nothing left to send.
+var ErrDeliveryScrubbed = errors.New("the text of this delivery was removed under the retention period, so it cannot be sent again")
+
+// scrubEndedStatuses are the ledger statuses no code moves on from by
+// itself: a row in one of them is done (RetryDelivery can requeue failed
+// and dead ones by hand, which a scrubbed row refuses).
+const scrubEndedStatuses = `'sent','delivered','dead','expired','denied','custody_transferred','failed',
+	'accepted','unknown','not_sent','superseded','cancelled'`
+
+// ScrubEndedDeliveries removes the personal data from ledger rows that
+// ended more than days ago: payload, text preview, destination and error
+// text go, and scrubbed_at records when. The row itself stays (time,
+// channel, status, ids), because the delivery stats, the SOS legs, the
+// audit chain and the TETRA view resolve rows by id. Live rows are never
+// touched: queued, retry, held and sending, a sent row still waiting for
+// its ack, and every attempt of an intent that is not closed. The cutoff
+// is SQL's own datetime, the format updated_at is written in. [MESHSAT-1814]
+func (db *DB) ScrubEndedDeliveries(days int) (int64, error) {
+	if days < 1 {
+		days = 1
+	}
+	res, err := db.Exec(`UPDATE message_deliveries
+		SET payload = NULL, text_preview = '', destination = '', last_error = '', scrubbed_at = datetime('now')
+		WHERE scrubbed_at IS NULL
+		  AND updated_at < datetime('now', ?)
+		  AND status IN (`+scrubEndedStatuses+`)
+		  AND NOT (status = 'sent' AND COALESCE(ack_status, '') = 'pending')
+		  AND (intent_id IS NULL OR intent_id NOT IN (SELECT id FROM delivery_intents WHERE state != 'closed'))`,
+		"-"+strconv.Itoa(days)+" days")
+	if err != nil {
+		return 0, fmt.Errorf("scrub ended deliveries: %w", err)
+	}
+	return res.RowsAffected()
+}
+
 // RetryDelivery forces an immediate retry of a failed/dead delivery. The
 // SOS's Hub frame (class hub_uplink at priority 0) is never re-queued
 // (ErrSOSFrameNotRetried): the SBD credit budget does not hold it back, and
 // the Hub would raise the SOS again with the frame's old time. [MESHSAT-1431]
+// A row the retention scrubbed has no payload left (ErrDeliveryScrubbed).
+// [MESHSAT-1814]
 func (db *DB) RetryDelivery(id int64) error {
 	res, err := db.Exec(`UPDATE message_deliveries SET status = 'queued', next_retry = NULL, updated_at = datetime('now')
-		WHERE id = ? AND status IN ('failed', 'dead') AND NOT (priority = 0 AND delivery_class = ?)`, id, DeliveryClassHubUplink)
+		WHERE id = ? AND status IN ('failed', 'dead') AND NOT (priority = 0 AND delivery_class = ?) AND scrubbed_at IS NULL`, id, DeliveryClassHubUplink)
 	if err != nil {
 		return fmt.Errorf("retry delivery %d: %w", id, err)
 	}
@@ -547,9 +585,14 @@ func (db *DB) RetryDelivery(id int64) error {
 	if n == 0 {
 		var priority int
 		var class, status string
-		if db.QueryRow(`SELECT priority, delivery_class, status FROM message_deliveries WHERE id = ?`, id).Scan(&priority, &class, &status) == nil &&
-			priority == 0 && class == DeliveryClassHubUplink && (status == "failed" || status == "dead") {
-			return ErrSOSFrameNotRetried
+		var scrubbed sql.NullString
+		if db.QueryRow(`SELECT priority, delivery_class, status, scrubbed_at FROM message_deliveries WHERE id = ?`, id).Scan(&priority, &class, &status, &scrubbed) == nil {
+			if scrubbed.Valid {
+				return ErrDeliveryScrubbed
+			}
+			if priority == 0 && class == DeliveryClassHubUplink && (status == "failed" || status == "dead") {
+				return ErrSOSFrameNotRetried
+			}
 		}
 		return fmt.Errorf("delivery %d not retryable (not failed/dead)", id)
 	}

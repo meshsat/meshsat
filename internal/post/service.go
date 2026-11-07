@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/rs/zerolog/log"
 
@@ -121,6 +122,9 @@ type Service struct {
 	// database keeps the same mark; this is the fast path.
 	signedIn map[string]time.Time
 	printer  printerMemory
+	// removeMisses are the wrong board removal codes per phone (its
+	// address), for removeTriesPerHour. [MESHSAT-1814]
+	removeMisses map[string][]time.Time
 }
 
 // New builds the service. It does nothing until Start.
@@ -129,7 +133,7 @@ func New(cfg Config, deps Deps) *Service {
 	if deps.Now == nil {
 		deps.Now = time.Now
 	}
-	s := &Service{cfg: cfg, deps: deps, signedIn: map[string]time.Time{}}
+	s := &Service{cfg: cfg, deps: deps, signedIn: map[string]time.Time{}, removeMisses: map[string][]time.Time{}}
 	if deps.Bearer == nil {
 		s.deps.Bearer = func() (string, bool) { return cfg.Bearer, true }
 	}
@@ -332,6 +336,30 @@ var ErrUnknownCode = errors.New("unknown code")
 // operator closed it.
 var ErrClosed = errors.New("closed")
 
+// The "Safe and well" board is looked up by name, never browsed, and a
+// resident takes their own line off with the code they got. [MESHSAT-1814]
+var (
+	// ErrQueryShort is a search with fewer than boardMinLetters letters.
+	ErrQueryShort = errors.New("query_short")
+	// ErrBadRemoveCode is a removal code no line on the board has.
+	ErrBadRemoveCode = errors.New("remove_code")
+	// ErrRemoveTries is a phone that gave removeTriesPerHour wrong codes
+	// within the hour.
+	ErrRemoveTries = errors.New("remove_tries")
+)
+
+const (
+	boardMinLetters    = 3  // letters in a search, all words together
+	boardResults       = 20 // lines a search shows at most
+	removeTriesPerHour = 5  // wrong removal codes per phone per hour
+)
+
+// boardCodeHash is what the board keeps of a removal code.
+func boardCodeHash(code string) string {
+	h := sha256.Sum256([]byte("board:" + code))
+	return hex.EncodeToString(h[:])
+}
+
 // State is whether the post is open, and when what it stored goes.
 type State struct {
 	Closed   bool
@@ -474,40 +502,98 @@ func (s *Service) Recent(limit int) ([]database.PostMessage, error) {
 }
 
 // AddBoard puts a line on the safe-and-well board; it expires after the
-// retention.
-func (s *Service) AddBoard(name, status, place string) (*database.PostBoardEntry, error) {
+// retention. The removal code comes back once, here; the board keeps only
+// its hash. [MESHSAT-1814]
+func (s *Service) AddBoard(name, status, place string) (*database.PostBoardEntry, string, error) {
 	if s.State().Closed {
-		return nil, ErrClosed
+		return nil, "", ErrClosed
 	}
 	name, err := CleanBoardField(name)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if name == "" {
-		return nil, ErrName
+		return nil, "", ErrName
 	}
 	status, err = CleanBoardField(status)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if status == "" {
-		return nil, ErrEmpty
+		return nil, "", ErrEmpty
 	}
 	place, err = CleanBoardField(place)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	now := s.now()
-	e := &database.PostBoardEntry{Name: name, Status: status, Place: place, CreatedAt: now, ExpiresAt: now.Add(s.cfg.BoardRetention)}
+	code := NewCode()
+	e := &database.PostBoardEntry{Name: name, Status: status, Place: place, CreatedAt: now, ExpiresAt: now.Add(s.cfg.BoardRetention), RemoveHash: boardCodeHash(code)}
 	if err := s.deps.DB.InsertPostBoardEntry(e, NameKey(name)); err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	return e, nil
+	return e, code, nil
 }
 
-// SearchBoard finds board lines by name; every line when q is empty.
+// SearchBoard finds the lines whose name holds every word of q as a whole
+// word: "papadaki" finds "Maria Papadaki", "mar" finds nobody. Fewer than
+// boardMinLetters letters is ErrQueryShort: the board is looked up by
+// name, never browsed. [MESHSAT-1814]
 func (s *Service) SearchBoard(q string) ([]database.PostBoardEntry, error) {
-	return s.deps.DB.SearchPostBoard(NameKey(q), s.now(), 50)
+	words := strings.Fields(NameKey(q))
+	letters := 0
+	for _, w := range words {
+		letters += utf8.RuneCountInString(w)
+	}
+	if letters < boardMinLetters {
+		return nil, ErrQueryShort
+	}
+	return s.deps.DB.SearchPostBoard(words, s.now(), boardResults)
+}
+
+// RemoveBoard takes a line off the board with the code its writer got.
+// A phone (by address, so a fresh cookie does not reset it) that gave
+// removeTriesPerHour wrong codes within the hour waits. Allowed while the
+// post is closed: taking a name off is never refused. [MESHSAT-1814]
+func (s *Service) RemoveBoard(phone, code string) error {
+	now := s.now()
+	s.mu.Lock()
+	misses := s.removeMisses[phone][:0]
+	for _, t := range s.removeMisses[phone] {
+		if now.Sub(t) < time.Hour {
+			misses = append(misses, t)
+		}
+	}
+	s.removeMisses[phone] = misses
+	blocked := len(misses) >= removeTriesPerHour
+	s.mu.Unlock()
+	if blocked {
+		return ErrRemoveTries
+	}
+	if c := NormaliseCode(code); c != "" {
+		ok, err := s.deps.DB.DeletePostBoardByCode(boardCodeHash(c))
+		if err != nil {
+			return err
+		}
+		if ok {
+			return nil
+		}
+	}
+	s.mu.Lock()
+	s.removeMisses[phone] = append(s.removeMisses[phone], now)
+	s.mu.Unlock()
+	return ErrBadRemoveCode
+}
+
+// BoardLines is every current line, for the operator. [MESHSAT-1814]
+func (s *Service) BoardLines() ([]database.PostBoardEntry, error) {
+	return s.deps.DB.ListPostBoard(s.now())
+}
+
+// RemoveBoardLine takes one line off on the operator's request; false when
+// there was no such line. [MESHSAT-1814]
+func (s *Service) RemoveBoardLine(id int64) (bool, error) {
+	return s.deps.DB.DeletePostBoardEntry(id)
 }
 
 // SignIn marks a phone as having opened the portal: its captive probes get
@@ -662,5 +748,11 @@ func (s *Service) Tick() {
 		}
 	}
 	_ = s.deps.DB.PrunePostSessions(s.now().Add(-7 * 24 * time.Hour))
+	// Expired board lines go now, not at the next add. [MESHSAT-1814]
+	if n, err := s.deps.DB.PrunePostBoard(s.now()); err != nil {
+		log.Warn().Err(err).Msg("post: board prune failed")
+	} else if n > 0 {
+		log.Info().Int64("lines", n).Msg("post: expired board lines removed")
+	}
 	s.sweep()
 }
