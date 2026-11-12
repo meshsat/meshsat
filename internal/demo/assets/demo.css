@@ -1,0 +1,15 @@
+/* The public demo's banner and notice (internal/demo, MESHSAT-1845). The
+   web app's own styles are untouched; these two elements live outside #app. */
+#meshsat-demo-banner {
+  display: flex; flex-wrap: wrap; gap: .35rem .6rem; align-items: baseline; justify-content: center;
+  padding: .4rem .75rem; background: #1d2f4a; color: #e6eefb; border-bottom: 1px solid #5b8fd6;
+  font: 500 13px/1.35 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; text-align: center;
+}
+#meshsat-demo-banner strong { letter-spacing: .08em; text-transform: uppercase; }
+#meshsat-demo-banner a { color: #bcd6ff; text-decoration: underline; }
+#meshsat-demo-toast {
+  position: fixed; left: 50%; bottom: 5.5rem; transform: translateX(-50%); z-index: 2147483647;
+  max-width: min(90vw, 28rem); padding: .6rem .9rem; border-radius: .5rem;
+  background: #1d2f4a; color: #e6eefb; border: 1px solid #5b8fd6; box-shadow: 0 4px 16px rgba(0,0,0,.5);
+  font: 500 14px/1.35 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; text-align: center;
+}

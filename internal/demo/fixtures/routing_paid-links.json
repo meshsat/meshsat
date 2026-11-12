@@ -1,0 +1,35 @@
+[
+ {
+  "id": "iridium_0",
+  "online": true,
+  "policy": {
+   "bitrate": 0,
+   "dests": [],
+   "extra_hops": 0,
+   "min_interval_sec": 0
+  },
+  "type": "iridium"
+ },
+ {
+  "id": "iridium_imt_0",
+  "online": true,
+  "policy": {
+   "bitrate": 0,
+   "dests": [],
+   "extra_hops": 0,
+   "min_interval_sec": 0
+  },
+  "type": "iridium"
+ },
+ {
+  "id": "sms_0",
+  "online": true,
+  "policy": {
+   "bitrate": 0,
+   "dests": [],
+   "extra_hops": 0,
+   "min_interval_sec": 0
+  },
+  "type": "cellular"
+ }
+]

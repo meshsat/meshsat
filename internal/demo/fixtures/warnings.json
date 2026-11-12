@@ -1,0 +1,42 @@
+[
+ {
+  "bearers": "mesh, post",
+  "cancelled": false,
+  "category": "Met",
+  "certainty": "certainty-1",
+  "event": "Wind",
+  "expires": "2026-11-01T13:00:00Z",
+  "id": "d17774c6d8373fd8",
+  "language": "en",
+  "msg_type": "Alert",
+  "received_at": "2026-11-01T09:11:00Z",
+  "ref": "d7d2af8f715c1102",
+  "sent": "2026-11-01T09:10:00Z",
+  "severity": "Moderate",
+  "source": "meteoalarm-nl",
+  "test": true,
+  "text": "Exercise message: strong wind expected this afternoon. This is a test, not a real warning.",
+  "urgency": "Expected",
+  "via": "hub"
+ },
+ {
+  "bearers": "mesh, post",
+  "cancelled": false,
+  "category": "Met",
+  "certainty": "certainty-1",
+  "event": "Flood",
+  "expires": "2026-11-01T13:00:00Z",
+  "id": "720b63143125ba59",
+  "language": "en",
+  "msg_type": "Alert",
+  "received_at": "2026-11-01T09:21:00Z",
+  "ref": "d7d2af8f715c1102",
+  "sent": "2026-11-01T09:20:00Z",
+  "severity": "Moderate",
+  "source": "meteoalarm-nl",
+  "test": true,
+  "text": "Exercise message: high water at the harbour mouth. This is a test, not a real warning.",
+  "urgency": "Expected",
+  "via": "hub"
+ }
+]

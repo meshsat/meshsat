@@ -1,0 +1,53 @@
+{
+ "available": [
+  "aprs",
+  "b2b_sms",
+  "hub_sms",
+  "imt"
+ ],
+ "hub_number": "+447700900102",
+ "imt": {
+  "connected": true,
+  "dlq_pending": 0,
+  "interface": "iridium_0",
+  "last_mo_at": "2026-11-01T09:49:00Z",
+  "last_mo_status": 0,
+  "queued": 0,
+  "recent_mo": true,
+  "running": true
+ },
+ "path": "imt",
+ "peer_number": "+447700900101",
+ "ready": true,
+ "rules": {
+  "aprs": {
+   "enabled": false,
+   "forward_to": "aprs_0",
+   "id": 900
+  },
+  "b2b_sms": {
+   "contact": "+447700900101",
+   "enabled": false,
+   "forward_to": "cellular_0",
+   "id": 901
+  },
+  "hub_sms": {
+   "contact": "+447700900102",
+   "enabled": false,
+   "forward_to": "cellular_0",
+   "id": 902
+  },
+  "imt": {
+   "enabled": true,
+   "forward_to": "iridium_0",
+   "id": 903
+  }
+ },
+ "sat": {
+  "connected": true,
+  "interface": "iridium_0",
+  "last_mo_at": "2026-11-01T09:49:00Z",
+  "modem": "sbd",
+  "running": true
+ }
+}

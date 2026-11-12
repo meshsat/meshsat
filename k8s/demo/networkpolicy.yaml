@@ -1,0 +1,51 @@
+# The demo talks to nobody. It answers the cluster's ingress controller on its
+# two ports and the kubelet's probes, and opens no connection of its own: no
+# DNS, no internet, no other pod, no node, no Kubernetes API, no metadata
+# address. Replies to accepted connections are conntrack-established and pass.
+#
+# Two walls, deliberately different mechanisms (the Hub's notes record that a
+# Cilium policy with an empty rule list silently does nothing, MESHSAT-1205 and
+# MESHSAT-1230):
+#   1. a Kubernetes NetworkPolicy that names BOTH directions in policyTypes and
+#      allows nothing, so default-deny holds even if (2) were invalid;
+#   2. a CiliumNetworkPolicy with the only allows (ingress-nginx, the host for
+#      probes) and an explicit egressDeny of everything.
+# Cilium takes the union of allows across both and every deny wins.
+# Verified with a throwaway pod in this namespace (docs/demo.md). [MESHSAT-1845]
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: meshsat-demo
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: demo-confine
+  namespace: meshsat-demo
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: meshsat-demo
+  ingress:
+    - fromEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: ingress-nginx
+            app.kubernetes.io/name: ingress-nginx
+      toPorts:
+        - ports:
+            - {port: "6050", protocol: TCP}
+            - {port: "8081", protocol: TCP}
+    - fromEntities: [host]
+      toPorts:
+        - ports:
+            - {port: "6050", protocol: TCP}
+            - {port: "8081", protocol: TCP}
+  egressDeny:
+    - toEntities:
+        - all

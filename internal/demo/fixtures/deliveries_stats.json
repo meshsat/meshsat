@@ -1,0 +1,42 @@
+[
+ {
+  "channel": "aprs_0",
+  "count": 54,
+  "status": "dead"
+ },
+ {
+  "channel": "aprs_0",
+  "count": 917,
+  "status": "delivered"
+ },
+ {
+  "channel": "aprs_0",
+  "count": 30,
+  "status": "sent"
+ },
+ {
+  "channel": "cellular_0",
+  "count": 1,
+  "status": "accepted"
+ },
+ {
+  "channel": "cellular_0",
+  "count": 4,
+  "status": "dead"
+ },
+ {
+  "channel": "cellular_0",
+  "count": 155,
+  "status": "delivered"
+ },
+ {
+  "channel": "cellular_0",
+  "count": 39,
+  "status": "sent"
+ },
+ {
+  "channel": "hub_0",
+  "count": 10,
+  "status": "accepted"
+ }
+]

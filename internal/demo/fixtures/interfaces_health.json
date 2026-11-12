@@ -1,0 +1,84 @@
+[
+ {
+  "available": true,
+  "cost_score": 100,
+  "interface_id": "aprs_0",
+  "latency_ms": 1749,
+  "samples": 4,
+  "score": 69,
+  "signal": 0,
+  "success_rate": 1
+ },
+ {
+  "available": false,
+  "cost_score": 100,
+  "interface_id": "cell_0",
+  "latency_ms": 0,
+  "samples": 0,
+  "score": 0,
+  "signal": 0,
+  "success_rate": 1
+ },
+ {
+  "available": true,
+  "cost_score": 60,
+  "interface_id": "cellular_0",
+  "latency_ms": 0,
+  "samples": 0,
+  "score": 92,
+  "signal": 100,
+  "signal_source": "cellular",
+  "success_rate": 1
+ },
+ {
+  "available": true,
+  "cost_score": 100,
+  "interface_id": "hub_0",
+  "latency_ms": 0,
+  "samples": 0,
+  "score": 70,
+  "signal": 0,
+  "success_rate": 1
+ },
+ {
+  "available": true,
+  "cost_score": 30,
+  "interface_id": "iridium_0",
+  "latency_ms": 0,
+  "samples": 0,
+  "score": 56,
+  "signal": 0,
+  "signal_source": "sbd",
+  "success_rate": 1
+ },
+ {
+  "available": true,
+  "cost_score": 30,
+  "interface_id": "iridium_imt_0",
+  "latency_ms": 0,
+  "samples": 0,
+  "score": 56,
+  "signal": 0,
+  "success_rate": 1
+ },
+ {
+  "available": true,
+  "cost_score": 100,
+  "interface_id": "lxmf_0",
+  "latency_ms": 1749,
+  "samples": 8,
+  "score": 69,
+  "signal": 0,
+  "success_rate": 1
+ },
+ {
+  "available": true,
+  "cost_score": 100,
+  "interface_id": "mesh_0",
+  "latency_ms": 1749,
+  "samples": 8,
+  "score": 69,
+  "signal": 0,
+  "success_rate": 1
+ }
+]

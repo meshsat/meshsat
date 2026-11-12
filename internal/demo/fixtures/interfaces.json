@@ -1,0 +1,86 @@
+[
+ {
+  "channel_type": "hub",
+  "egress_transforms": "Check in at the north gate",
+  "enabled": true,
+  "id": "hub_0",
+  "ingress_transforms": "Check in at the north gate",
+  "label": "label-5",
+  "last_activity": "2026-11-01T09:50:00Z",
+  "state": "unbound"
+ },
+ {
+  "channel_type": "lxmf",
+  "egress_transforms": "Team two at the crossing",
+  "enabled": true,
+  "id": "lxmf_0",
+  "ingress_transforms": "Team two at the crossing",
+  "label": "label-6",
+  "last_activity": "2026-11-01T09:40:00Z",
+  "state": "online"
+ },
+ {
+  "channel_type": "mesh",
+  "device_id": "device_id-2",
+  "device_port": "Water supply OK",
+  "egress_transforms": "Water supply OK",
+  "enabled": true,
+  "id": "mesh_0",
+  "ingress_transforms": "Water supply OK",
+  "label": "label-7",
+  "last_activity": "2026-11-01T09:30:00Z",
+  "state": "online"
+ },
+ {
+  "channel_type": "tak",
+  "egress_transforms": "All clear on channel one",
+  "enabled": true,
+  "id": "tak_0",
+  "ingress_transforms": "All clear on channel one",
+  "label": "label-8",
+  "last_activity": "2026-11-01T09:20:00Z",
+  "state": "unbound"
+ },
+ {
+  "channel_type": "iridium",
+  "egress_transforms": "Moving to point B",
+  "enabled": true,
+  "id": "iridium_0",
+  "ingress_transforms": "Moving to point B",
+  "label": "label-9",
+  "last_activity": "2026-11-01T09:10:00Z",
+  "state": "unbound"
+ },
+ {
+  "channel_type": "iridium_imt",
+  "egress_transforms": "Battery at 60 percent",
+  "enabled": true,
+  "id": "iridium_imt_0",
+  "ingress_transforms": "Battery at 60 percent",
+  "label": "label-10",
+  "last_activity": "2026-11-01T09:00:00Z",
+  "state": "unbound"
+ },
+ {
+  "channel_type": "sms",
+  "egress_transforms": "Need a radio check",
+  "enabled": true,
+  "id": "sms_0",
+  "ingress_transforms": "Need a radio check",
+  "label": "label-11",
+  "last_activity": "2026-11-01T08:50:00Z",
+  "state": "unbound"
+ },
+ {
+  "channel_type": "tetra",
+  "device_id": "device_id-4",
+  "device_port": "Arrived at the shelter",
+  "egress_transforms": "Arrived at the shelter",
+  "enabled": true,
+  "id": "tetra_0",
+  "ingress_transforms": "Arrived at the shelter",
+  "label": "label-12",
+  "last_activity": "2026-11-01T08:40:00Z",
+  "state": "offline"
+ }
+]

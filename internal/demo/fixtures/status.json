@@ -1,0 +1,19 @@
+{
+ "address": "demo",
+ "connected": true,
+ "directory": {
+  "hub_version": 0,
+  "last_sync_at": "2026-11-01T09:50:00Z"
+ },
+ "firmware_version": "2.8.0.47db0e3",
+ "hw_model": 7,
+ "hw_model_name": "T_ECHO",
+ "node_id": "!a11ce001",
+ "node_name": "Support Vessel",
+ "num_nodes": 6,
+ "own_row_zeroed": false,
+ "radio_last_reset_reason": "",
+ "radio_log_lines": 1000,
+ "reboot_count": 0,
+ "transport": "serial"
+}

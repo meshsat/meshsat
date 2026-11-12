@@ -1,0 +1,34 @@
+# The public demo of the Bridge (cmd/meshsat-demo): bridge.meshsat.net and
+# app.safertogether.eu. The same web app the kits run, built the same way,
+# embedded in a static binary that carries no Bridge API, no transport
+# code path and no tools: no shell, no package manager, a non-root user.
+# Built by the pipeline's package:demo job; never run on a kit. [MESHSAT-1845]
+FROM --platform=$BUILDPLATFORM node:22-alpine AS web-builder
+
+WORKDIR /web
+COPY web/package.json web/package-lock.json* ./
+RUN npm ci --no-audit
+COPY web/ .
+RUN npm run build
+
+FROM --platform=$BUILDPLATFORM golang:1.24-alpine AS builder
+
+ARG TARGETARCH
+ARG TARGETOS=linux
+
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+COPY --from=web-builder /web/dist ./cmd/meshsat-demo/web/dist
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w" -o /meshsat-demo ./cmd/meshsat-demo
+
+# distroless static, nonroot (uid 65532): CA certificates and tzdata only.
+FROM gcr.io/distroless/static-debian12:nonroot
+
+COPY --from=builder /meshsat-demo /meshsat-demo
+
+USER 65532:65532
+EXPOSE 6050 8081
+ENTRYPOINT ["/meshsat-demo"]

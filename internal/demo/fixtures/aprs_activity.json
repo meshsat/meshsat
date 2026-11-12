@@ -1,0 +1,45 @@
+{
+ "buckets": [
+  {
+   "rx": 0,
+   "timestamp": 1793526600,
+   "tx": 4
+  },
+  {
+   "rx": 0,
+   "timestamp": 1793526000,
+   "tx": 3
+  },
+  {
+   "rx": 0,
+   "timestamp": 1793525400,
+   "tx": 3
+  },
+  {
+   "rx": 0,
+   "timestamp": 1793524800,
+   "tx": 4
+  },
+  {
+   "rx": 0,
+   "timestamp": 1793524200,
+   "tx": 3
+  },
+  {
+   "rx": 0,
+   "timestamp": 1793523600,
+   "tx": 3
+  },
+  {
+   "rx": 0,
+   "timestamp": 1793523000,
+   "tx": 4
+  },
+  {
+   "rx": 0,
+   "timestamp": 1793522400,
+   "tx": 3
+  }
+ ],
+ "recent_paths": []
+}

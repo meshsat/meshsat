@@ -1,0 +1,28 @@
+{
+ "computed_at": "2026-11-01T09:50:00Z",
+ "current_pass": {
+  "peak_elev_deg": 16.13113451843056,
+  "quality_score": 0.33,
+  "satellite": "Check in at the north gate"
+ },
+ "enabled": true,
+ "location": "Check in at the north gate",
+ "mode": "active",
+ "mode_name": "Sample Mode 24",
+ "next_pass": {
+  "aos": 1793526600,
+  "is_active": true,
+  "los": 1793526600,
+  "peak_elev_deg": 16.13113451843056,
+  "priority": "low",
+  "quality_score": 0.33,
+  "satellite": "Check in at the north gate"
+ },
+ "next_transition": "2026-11-01T09:50:00Z",
+ "timing": {
+  "dlq_check_sec": 30,
+  "dlq_retry_base_sec": 30,
+  "poll_interval_sec": 20
+ },
+ "upcoming_passes_count": 255
+}

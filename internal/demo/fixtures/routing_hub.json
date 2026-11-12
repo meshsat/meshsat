@@ -1,0 +1,11 @@
+{
+ "bridge_id": "example-21",
+ "enabled": true,
+ "has_cert": true,
+ "has_password": true,
+ "link": "connected",
+ "running_as": "example-21",
+ "state": "connected",
+ "url": "example-20",
+ "username": "example-21"
+}

@@ -1,0 +1,14 @@
+[
+ {
+  "address": "192.0.2.10",
+  "connected": true,
+  "direction": "outbound",
+  "dynamic": true
+ },
+ {
+  "address": "192.0.2.10",
+  "connected": true,
+  "direction": "inbound",
+  "dynamic": false
+ }
+]

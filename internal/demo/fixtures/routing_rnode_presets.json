@@ -1,0 +1,42 @@
+[
+ {
+  "bandwidth": 125000,
+  "codingrate": 5,
+  "description": "Check in at the north gate",
+  "frequency": 915000000,
+  "id": "us-915",
+  "label": "label-17",
+  "spreadingfactor": 7,
+  "txpower": 22
+ },
+ {
+  "bandwidth": 125000,
+  "codingrate": 5,
+  "description": "Team two at the crossing",
+  "frequency": 867200000,
+  "id": "eu-868",
+  "label": "label-18",
+  "spreadingfactor": 8,
+  "txpower": 14
+ },
+ {
+  "bandwidth": 125000,
+  "codingrate": 5,
+  "description": "Water supply OK",
+  "frequency": 915000000,
+  "id": "au-915",
+  "label": "label-19",
+  "spreadingfactor": 7,
+  "txpower": 22
+ },
+ {
+  "bandwidth": 125000,
+  "codingrate": 5,
+  "description": "All clear on channel one",
+  "frequency": 433000000,
+  "id": "ism-433",
+  "label": "label-20",
+  "spreadingfactor": 7,
+  "txpower": 12
+ }
+]

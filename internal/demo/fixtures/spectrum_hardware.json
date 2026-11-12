@@ -1,0 +1,19 @@
+{
+ "available": false,
+ "calibration_duration_sec": 30,
+ "consecutive_errors": 0,
+ "last_good_scan_at": "2026-11-01T09:59:57Z",
+ "last_scan_at": "2026-11-01T09:59:57Z",
+ "last_scan_error_at": "0001-01-01T00:00:00Z",
+ "last_scan_ms": 0,
+ "scan_error_count": 0,
+ "scan_interval_sec": 3,
+ "scanner": {
+  "binary_path": "",
+  "dongle_pid": "2838",
+  "dongle_vid": "0bda",
+  "product_name": "RTL2838UHIDIR",
+  "reader": "",
+  "usb_path": ""
+ }
+}

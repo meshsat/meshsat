@@ -1,0 +1,15 @@
+{
+ "ap": true,
+ "ibss": true,
+ "mesh_point": false,
+ "modes": [
+  "IBSS",
+  "managed",
+  "AP",
+  "monitor",
+  "P2P-client",
+  "P2P-GO"
+ ],
+ "p2p": true,
+ "phy": "phy0"
+}

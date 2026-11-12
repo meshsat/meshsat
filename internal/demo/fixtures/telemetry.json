@@ -1,0 +1,83 @@
+{
+ "node_id": "",
+ "telemetry": [
+  {
+   "air_util_tx": 1.1,
+   "battery_level": 90,
+   "channel_util": 3.2,
+   "created_at": "2026-11-01T09:50:00Z",
+   "humidity": null,
+   "id": 700,
+   "node_id": "!a11ce001",
+   "pressure": null,
+   "temperature": null,
+   "uptime_seconds": 86400,
+   "voltage": 4.1
+  },
+  {
+   "air_util_tx": 1.1,
+   "battery_level": 89,
+   "channel_util": 3.2,
+   "created_at": "2026-11-01T09:45:00Z",
+   "humidity": null,
+   "id": 701,
+   "node_id": "!a11ce001",
+   "pressure": null,
+   "temperature": null,
+   "uptime_seconds": 87000,
+   "voltage": 4.1
+  },
+  {
+   "air_util_tx": 1.1,
+   "battery_level": 88,
+   "channel_util": 3.2,
+   "created_at": "2026-11-01T09:40:00Z",
+   "humidity": null,
+   "id": 702,
+   "node_id": "!a11ce001",
+   "pressure": null,
+   "temperature": null,
+   "uptime_seconds": 87600,
+   "voltage": 4.1
+  },
+  {
+   "air_util_tx": 1.1,
+   "battery_level": 87,
+   "channel_util": 3.2,
+   "created_at": "2026-11-01T09:35:00Z",
+   "humidity": null,
+   "id": 703,
+   "node_id": "!a11ce001",
+   "pressure": null,
+   "temperature": null,
+   "uptime_seconds": 88200,
+   "voltage": 4.1
+  },
+  {
+   "air_util_tx": 1.1,
+   "battery_level": 86,
+   "channel_util": 3.2,
+   "created_at": "2026-11-01T09:30:00Z",
+   "humidity": null,
+   "id": 704,
+   "node_id": "!a11ce001",
+   "pressure": null,
+   "temperature": null,
+   "uptime_seconds": 88800,
+   "voltage": 4.1
+  },
+  {
+   "air_util_tx": 1.1,
+   "battery_level": 85,
+   "channel_util": 3.2,
+   "created_at": "2026-11-01T09:25:00Z",
+   "humidity": null,
+   "id": 705,
+   "node_id": "!a11ce001",
+   "pressure": null,
+   "temperature": null,
+   "uptime_seconds": 89400,
+   "voltage": 4.1
+  }
+ ]
+}

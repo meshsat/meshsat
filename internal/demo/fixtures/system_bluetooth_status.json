@@ -1,0 +1,10 @@
+{
+ "address": "address-2",
+ "alias": "example-21",
+ "available": true,
+ "discoverable": false,
+ "name": "example-21",
+ "pairable": true,
+ "powered": true,
+ "rfkill_blocked": false
+}

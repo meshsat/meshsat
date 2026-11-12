@@ -1,0 +1,64 @@
+# bridge.meshsat.net -> the web app and its read-only demo API.
+# post-demo.meshsat.net -> the phone page. That name has no DNS record and the
+# edge refuses it from outside: visitors use app.safertogether.eu, which the
+# edge (CH and NO only) rewrites to this host with this SNI.
+# The edge re-encrypts to ingress-nginx and verifies the wildcard; client
+# addresses arrive in X-Forwarded-For (ingress-nginx real-ip trusts the VPS),
+# so the limits below are per visitor.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: bridge
+  namespace: meshsat-demo
+  labels:
+    app.kubernetes.io/name: meshsat-demo
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "16k"
+    nginx.ingress.kubernetes.io/limit-rps: "20"
+    nginx.ingress.kubernetes.io/limit-burst-multiplier: "5"
+    nginx.ingress.kubernetes.io/limit-connections: "30"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [bridge.meshsat.net]
+      secretName: meshsat-net-tls
+  rules:
+    - host: bridge.meshsat.net
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: meshsat-demo
+                port:
+                  number: 6050
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: post
+  namespace: meshsat-demo
+  labels:
+    app.kubernetes.io/name: meshsat-demo
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "16k"
+    nginx.ingress.kubernetes.io/limit-rps: "5"
+    nginx.ingress.kubernetes.io/limit-burst-multiplier: "4"
+    nginx.ingress.kubernetes.io/limit-connections: "10"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [post-demo.meshsat.net]
+      secretName: meshsat-net-tls
+  rules:
+    - host: post-demo.meshsat.net
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: meshsat-demo
+                port:
+                  number: 8081

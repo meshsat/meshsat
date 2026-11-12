@@ -6,6 +6,8 @@ web/node_modules/
 web/dist/
 cmd/meshsat/web/dist/*
 !cmd/meshsat/web/dist/index.html
+cmd/meshsat-demo/web/dist/*
+!cmd/meshsat-demo/web/dist/index.html
 
 # Stray `go build` output at repo root — Makefile target is build/meshsat.
 /meshsat

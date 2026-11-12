@@ -1,0 +1,16 @@
+{
+ "config": {
+  "drop_dwell_s": 10,
+  "flap_memory_s": 3600,
+  "min_set": 2,
+  "radio_repeat_s": 60,
+  "readmit_dwell_s": 600,
+  "readmit_max_s": 3600,
+  "silence_after_s": 600,
+  "trigger_window_s": 900
+ },
+ "gating": false,
+ "links": [],
+ "mode": "off",
+ "peers": []
+}

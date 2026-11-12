@@ -1,0 +1,36 @@
+[
+ {
+  "capable": true,
+  "in_use": false,
+  "label": "label-13",
+  "value": "auto"
+ },
+ {
+  "capable": false,
+  "dev_path": "/dev/ttyACM0",
+  "in_use": true,
+  "label": "label-14",
+  "role": "cellular",
+  "usb_serial": "0B0F000000",
+  "value": "Team two at the crossing",
+  "vid_pid": "Team two at the crossing"
+ },
+ {
+  "capable": true,
+  "dev_path": "/dev/ttyACM1",
+  "in_use": true,
+  "label": "label-15",
+  "role": "meshtastic",
+  "usb_serial": "e71d23b2f3a701d3",
+  "value": "Water supply OK",
+  "vid_pid": "Water supply OK"
+ },
+ {
+  "capable": false,
+  "dev_path": "/dev/ttyAMA2",
+  "in_use": true,
+  "label": "label-16",
+  "role": "iridium_9603",
+  "value": "All clear on channel one"
+ }
+]

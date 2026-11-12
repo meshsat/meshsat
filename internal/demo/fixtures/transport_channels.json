@@ -1,0 +1,281 @@
+[
+ {
+  "binary_capable": true,
+  "can_receive": true,
+  "can_send": true,
+  "default_ttl": 0,
+  "id": "mesh",
+  "is_paid": false,
+  "is_satellite": false,
+  "label": "label-7",
+  "max_payload": 237,
+  "options": [
+   {
+    "default": "Check in at the north gate",
+    "key": "channel",
+    "label": "label-29",
+    "type": "number"
+   },
+   {
+    "default": "",
+    "key": "node",
+    "label": "label-30",
+    "type": "text"
+   }
+  ],
+  "retry_config": {
+   "backoff_func": "",
+   "enabled": false,
+   "initial_wait": 0,
+   "max_retries": 1,
+   "max_wait": 0
+  }
+ },
+ {
+  "binary_capable": true,
+  "can_receive": true,
+  "can_send": true,
+  "default_ttl": 3600000000000,
+  "id": "iridium",
+  "is_paid": true,
+  "is_satellite": true,
+  "label": "label-31",
+  "max_payload": 340,
+  "options": [
+   {
+    "default": "Check in at the north gate",
+    "key": "priority",
+    "label": "label-32",
+    "options": [
+     "Check in at the north gate",
+     "Team two at the crossing",
+     "Water supply OK"
+    ],
+    "type": "select"
+   },
+   {
+    "default": "false",
+    "key": "include_gps",
+    "label": "label-33",
+    "type": "checkbox"
+   }
+  ],
+  "retry_config": {
+   "backoff_func": "isu",
+   "enabled": true,
+   "initial_wait": 180000000000,
+   "max_retries": 10,
+   "max_wait": 1800000000000
+  }
+ },
+ {
+  "binary_capable": true,
+  "can_receive": true,
+  "can_send": true,
+  "default_ttl": 3600000000000,
+  "id": "iridium_imt",
+  "is_paid": true,
+  "is_satellite": false,
+  "label": "label-34",
+  "max_payload": 102400,
+  "retry_config": {
+   "backoff_func": "exponential",
+   "enabled": true,
+   "initial_wait": 30000000000,
+   "max_retries": 10,
+   "max_wait": 300000000000
+  }
+ },
+ {
+  "binary_capable": false,
+  "can_receive": true,
+  "can_send": true,
+  "default_ttl": 86400000000000,
+  "id": "cellular",
+  "is_paid": true,
+  "is_satellite": false,
+  "label": "label-35",
+  "max_payload": 160,
+  "retry_config": {
+   "backoff_func": "exponential",
+   "enabled": true,
+   "initial_wait": 30000000000,
+   "max_retries": 3,
+   "max_wait": 300000000000
+  }
+ },
+ {
+  "binary_capable": true,
+  "can_receive": true,
+  "can_send": true,
+  "default_ttl": 0,
+  "id": "zigbee",
+  "is_paid": false,
+  "is_satellite": false,
+  "label": "label-36",
+  "max_payload": 100,
+  "options": [
+   {
+    "default": "Check in at the north gate",
+    "key": "cluster_id",
+    "label": "label-37",
+    "type": "text"
+   },
+   {
+    "default": "Team two at the crossing",
+    "key": "endpoint",
+    "label": "label-38",
+    "type": "number"
+   }
+  ],
+  "retry_config": {
+   "backoff_func": "exponential",
+   "enabled": true,
+   "initial_wait": 2000000000,
+   "max_retries": 3,
+   "max_wait": 30000000000
+  }
+ },
+ {
+  "binary_capable": false,
+  "can_receive": true,
+  "can_send": true,
+  "default_ttl": 0,
+  "id": "webhook",
+  "is_paid": false,
+  "is_satellite": false,
+  "label": "label-39",
+  "max_payload": 0,
+  "options": [
+   {
+    "default": "",
+    "key": "url",
+    "label": "label-40",
+    "type": "text"
+   },
+   {
+    "default": "POST",
+    "key": "method",
+    "label": "label-41",
+    "options": [
+     "POST",
+     "PUT"
+    ],
+    "type": "select"
+   }
+  ],
+  "retry_config": {
+   "backoff_func": "exponential",
+   "enabled": true,
+   "initial_wait": 5000000000,
+   "max_retries": 5,
+   "max_wait": 300000000000
+  }
+ },
+ {
+  "binary_capable": false,
+  "can_receive": true,
+  "can_send": true,
+  "default_ttl": 0,
+  "id": "aprs",
+  "is_paid": false,
+  "is_satellite": false,
+  "label": "label-42",
+  "max_payload": 256,
+  "options": [
+   {
+    "default": "",
+    "key": "callsign",
+    "label": "label-43",
+    "type": "text"
+   },
+   {
+    "default": "Team two at the crossing",
+    "key": "ssid",
+    "label": "label-44",
+    "type": "number"
+   },
+   {
+    "default": "localhost",
+    "key": "kiss_host",
+    "label": "label-45",
+    "type": "text"
+   },
+   {
+    "default": "All clear on channel one",
+    "key": "kiss_port",
+    "label": "label-46",
+    "type": "number"
+   },
+   {
+    "default": "",
+    "key": "kiss_device",
+    "label": "label-47",
+    "type": "text"
+   },
+   {
+    "default": "Battery at 60 percent",
+    "key": "kiss_baud",
+    "label": "label-48",
+    "type": "number"
+   },
+   {
+    "default": "Need a radio check",
+    "key": "frequency_mhz",
+    "label": "label-49",
+    "type": "text"
+   }
+  ],
+  "retry_config": {
+   "backoff_func": "",
+   "enabled": false,
+   "initial_wait": 0,
+   "max_retries": 1,
+   "max_wait": 0
+  }
+ },
+ {
+  "binary_capable": false,
+  "can_receive": true,
+  "can_send": true,
+  "default_ttl": 300000000000,
+  "id": "tak",
+  "is_paid": false,
+  "is_satellite": false,
+  "label": "label-8",
+  "max_payload": 0,
+  "options": [
+   {
+    "default": "",
+    "key": "tak_host",
+    "label": "label-50",
+    "type": "text"
+   },
+   {
+    "default": "Team two at the crossing",
+    "key": "tak_port",
+    "label": "label-51",
+    "type": "number"
+   },
+   {
+    "default": "false",
+    "key": "tak_ssl",
+    "label": "label-52",
+    "type": "checkbox"
+   },
+   {
+    "default": "MESHSAT",
+    "key": "callsign_prefix",
+    "label": "label-53",
+    "type": "text"
+   }
+  ],
+  "retry_config": {
+   "backoff_func": "exponential",
+   "enabled": true,
+   "initial_wait": 5000000000,
+   "max_retries": 5,
+   "max_wait": 300000000000
+  }
+ }
+]

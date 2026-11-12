@@ -1,0 +1,95 @@
+# One pod: the demo keeps what visitors write on the phone page in its own
+# memory (SQLite on a memory volume, purged hourly), so two replicas would be
+# two different posts. A restart forgets everything, which is the point.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: meshsat-demo
+  namespace: meshsat-demo
+  labels:
+    app.kubernetes.io/name: meshsat-demo
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: meshsat-demo
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: meshsat-demo
+    spec:
+      serviceAccountName: meshsat-demo
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      hostNetwork: false
+      hostPID: false
+      hostIPC: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: node-role.kubernetes.io/worker
+                    operator: Exists
+      containers:
+        - name: demo
+          image: ghcr.io/meshsat/meshsat
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            privileged: false
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          env:
+            - {name: MESHSAT_DEMO_LISTEN, value: ":6050"}
+            - {name: MESHSAT_DEMO_POST_LISTEN, value: ":8081"}
+            - {name: MESHSAT_DEMO_DATA, value: "/data"}
+            - {name: MESHSAT_DEMO_POST_URL, value: "https://app.safertogether.eu/"}
+            - {name: MESHSAT_DEMO_TRUSTED_PROXIES, value: "10.2.0.0/16"}
+            - {name: MESHSAT_DEMO_RETAIN_MIN, value: "60"}
+            - {name: TZ, value: "Europe/Amsterdam"}
+          ports:
+            - {name: bridge, containerPort: 6050}
+            - {name: post, containerPort: 8081}
+          readinessProbe:
+            httpGet: {path: /healthz, port: bridge}
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /healthz, port: bridge}
+            periodSeconds: 30
+            failureThreshold: 4
+          startupProbe:
+            httpGet: {path: /healthz, port: post}
+            periodSeconds: 2
+            failureThreshold: 30
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 300m, memory: 256Mi}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: data
+          emptyDir:
+            medium: Memory
+            sizeLimit: 64Mi
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Mi

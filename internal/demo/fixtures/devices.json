@@ -1,0 +1,23 @@
+[
+ {
+  "bound_to": "bound_to-1",
+  "device_id": "device_id-1",
+  "device_type": "cellular",
+  "port": "Check in at the north gate",
+  "vid_pid": "Check in at the north gate"
+ },
+ {
+  "bound_to": "bound_to-2",
+  "device_id": "device_id-2",
+  "device_type": "meshtastic",
+  "port": "Team two at the crossing",
+  "vid_pid": "Team two at the crossing"
+ },
+ {
+  "bound_to": "",
+  "device_id": "device_id-3",
+  "device_type": "ambiguous",
+  "port": "Water supply OK",
+  "vid_pid": "Water supply OK"
+ }
+]

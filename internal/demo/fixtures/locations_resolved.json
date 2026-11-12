@@ -1,0 +1,37 @@
+{
+ "cell_info": {
+  "cell_id": "000001",
+  "created_at": "2026-11-01T09:50:00Z",
+  "id": 71180,
+  "lac": "",
+  "mcc": "Check in at the north gate",
+  "mnc": "Check in at the north gate",
+  "network_type": "LTE",
+  "rsrp": 50,
+  "rsrq": 19,
+  "timestamp": 1793526600
+ },
+ "gps": {
+  "fix": false,
+  "sats": 0
+ },
+ "resolved": {
+  "accuracy_km": 0.005,
+  "alt_km": 0.002,
+  "lat": 52.0,
+  "lon": 3.9,
+  "source": "gps",
+  "timestamp": -62135596800
+ },
+ "sources": [
+  {
+   "accuracy_km": 0.005,
+   "alt_km": 0.002,
+   "id": 0,
+   "lat": 52.0,
+   "lon": 3.9,
+   "source": "gps",
+   "timestamp": -62135596800
+  }
+ ]
+}

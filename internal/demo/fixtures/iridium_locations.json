@@ -1,0 +1,18 @@
+[
+ {
+  "alt_m": 0,
+  "builtin": true,
+  "id": 1,
+  "lat": 52.0,
+  "lon": 3.9,
+  "name": "Sample Name 22"
+ },
+ {
+  "alt_m": 0,
+  "builtin": true,
+  "id": 2,
+  "lat": 52.01,
+  "lon": 3.91,
+  "name": "Sample Name 23"
+ }
+]

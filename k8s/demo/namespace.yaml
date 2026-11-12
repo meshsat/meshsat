@@ -1,0 +1,12 @@
+# PodSecurity restricted is ENFORCED: the demo is one static non-root binary
+# with every capability dropped, a read-only root filesystem and RuntimeDefault
+# seccomp. The namespace holds the demo and nothing else. [MESHSAT-1845]
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: meshsat-demo
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted

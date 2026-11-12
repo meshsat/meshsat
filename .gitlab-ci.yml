@@ -351,6 +351,108 @@ package:
     - if: $CI_COMMIT_BRANCH == "main"
 
 # -----------------------------------------------------------------------------
+# PACKAGE:DEMO — the public demo (cmd/meshsat-demo, Dockerfile.demo): the same
+# web app as the kits, in a static non-root binary with no Bridge API. amd64
+# only (the notrf01 cluster); tagged demo-<sha> in the Bridge's own public
+# package. It reaches no kit: bump_demo_pin pins it for Argo CD. [MESHSAT-1845]
+# -----------------------------------------------------------------------------
+package:demo:
+  stage: package
+  tags: [multiarch]
+  image: docker:27
+  needs:
+    - job: build
+      artifacts: false
+    - job: test
+      artifacts: false
+    - job: test:a11y
+      artifacts: false
+  before_script:
+    - echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+    - docker buildx create --name meshsatdemo-${CI_JOB_ID} --driver docker-container --use
+    - docker buildx inspect --bootstrap
+  script:
+    - |
+      docker buildx build --no-cache \
+        --platform linux/amd64 \
+        --push \
+        --metadata-file demo-metadata.json \
+        -f Dockerfile.demo \
+        -t ${MESHSAT_IMAGE}:demo-${CI_COMMIT_SHORT_SHA} \
+        -t ${MESHSAT_IMAGE}:demo \
+        .
+    - |
+      DEMO_DIGEST=$(grep -o '"containerimage.digest"[[:space:]]*:[[:space:]]*"sha256:[0-9a-f]*"' demo-metadata.json | grep -o 'sha256:[0-9a-f]*' | head -1)
+      case "$DEMO_DIGEST" in
+        sha256:????????????????????????????????????????????????????????????????) ;;
+        *) echo "ERROR: no usable digest in demo-metadata.json"; cat demo-metadata.json; exit 1 ;;
+      esac
+      echo "DEMO_DIGEST=${DEMO_DIGEST}" > demo.env
+      cat demo.env
+  artifacts:
+    reports:
+      dotenv: demo.env
+  after_script:
+    - docker buildx rm meshsatdemo-${CI_JOB_ID} || true
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+
+# -----------------------------------------------------------------------------
+# BUMP_DEMO_PIN — write the demo's new digest into k8s/demo/kustomization.yaml
+# as a [skip ci] commit (no pipeline, so no kit redeploy); Argo CD (Application
+# meshsat-demo) rolls it out. A copy of the Hub's bump_k8s_pin with its two
+# guards: never pin a build older than the pinned one (resource_group orders
+# jobs, not commits; MESHSAT-1023), and `sed -n 1p`, never `head -1`, after
+# git log under pipefail (exit 141; the Hub's 2026-09-11 lesson). The commit
+# carries the owner's identity like every commit in this repo. [MESHSAT-1845]
+# -----------------------------------------------------------------------------
+bump_demo_pin:
+  stage: deploy
+  interruptible: false
+  resource_group: demo-pin-bump
+  tags: [multiarch]
+  image: alpine:3.21
+  needs:
+    - job: package:demo
+      artifacts: true
+  variables:
+    GIT_STRATEGY: none
+    PIN_REMOTE: "git@nllei01gitlab01.nuclearlighters.net:products/meshsat/meshsat.git"
+  before_script:
+    - apk add --no-cache bash git openssh-client python3
+  script:
+    - |
+      bash -euo pipefail -c '
+      [ -n "${K8S_PIN_SSH_KEY:-}" ] || { echo "FATAL - K8S_PIN_SSH_KEY file variable not set on this project"; exit 1; }
+      install -m 600 "$K8S_PIN_SSH_KEY" /tmp/pin_key
+      export GIT_SSH_COMMAND="ssh -i /tmp/pin_key -o StrictHostKeyChecking=accept-new"
+      git clone --depth 200 --branch main "$PIN_REMOTE" /tmp/pin-repo
+      cd /tmp/pin-repo
+      pinned=$(git log -100 --pretty=%b -- k8s/demo/kustomization.yaml \
+               | sed -n "s|^Source: .*@\([0-9a-f]\{40\}\).*|\1|p" | sed -n 1p)
+      if [ -n "$pinned" ] && [ "$pinned" != "$CI_COMMIT_SHA" ] \
+         && git cat-file -e "${pinned}^{commit}" 2>/dev/null \
+         && git merge-base --is-ancestor "$CI_COMMIT_SHA" "$pinned"; then
+        echo "refusing to pin $CI_COMMIT_SHORT_SHA: it is an ANCESTOR of the already-pinned $pinned. Nothing to do."
+        exit 0
+      fi
+      rc=0
+      python3 scripts/k8s-bump-pin.py k8s/demo/kustomization.yaml "$MESHSAT_IMAGE" "$DEMO_DIGEST" \
+        "demo-$CI_COMMIT_SHORT_SHA ($(date -u +%Y-%m-%d))" || rc=$?
+      case "$rc" in 0) : ;; 3) echo "pin already current"; exit 0;; *) exit "$rc";; esac
+      git -c user.name="Kyriakos Papadopoulos" -c user.email="ncpjfuzl@mxmx.email" \
+        commit -am "[skip ci] chore(demo): pin the public demo to $CI_COMMIT_SHORT_SHA" \
+        -m "Source: $CI_PROJECT_PATH@$CI_COMMIT_SHA (pipeline $CI_PIPELINE_ID)"
+      for i in 1 2 3; do
+        git push origin HEAD:main && exit 0
+        git fetch origin main && git -c user.name="Kyriakos Papadopoulos" -c user.email="ncpjfuzl@mxmx.email" rebase origin/main
+      done
+      echo "FATAL: could not push the demo pin after 3 attempts"; exit 1
+      '
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+
+# -----------------------------------------------------------------------------
 # DEPLOY — Pull latest image on each device and restart MeshSat (via SSH)
 # Deploys to all configured devices in parallel using matrix strategy.
 # Each device has a primary and one or more fallback addresses.

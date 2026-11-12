@@ -1,0 +1,29 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# The public demo of the Bridge (MESHSAT-1845): bridge.meshsat.net and, through
+# the edge, app.safertogether.eu. Synced by the Argo CD Application
+# `meshsat-demo` (notrf01 infra repo, k8s/argocd-apps/meshsat-demo/). The image
+# digest is pinned ONLY in the images: block below; the pipeline's
+# bump_demo_pin job rewrites it after every main build (scripts/k8s-bump-pin.py).
+# Nothing here reaches a kit: the kits deploy from the pipeline's deploy jobs.
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: meshsat-demo
+      environment: production
+    includeSelectors: false
+
+resources:
+  - namespace.yaml
+  - quota.yaml
+  - serviceaccount.yaml
+  - networkpolicy.yaml
+  - tls-externalsecret.yaml
+  - deployment.yaml
+  - service.yaml
+  - ingress.yaml
+
+images:
+  - name: ghcr.io/meshsat/meshsat
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000  # not yet built
