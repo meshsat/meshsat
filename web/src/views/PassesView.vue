@@ -572,10 +572,10 @@ onMounted(async () => {
         <!-- Left Y-axis labels (signal bars 0-5) -->
         <template>
           <text v-for="t in chartData.signalTicks" :key="'sl'+t.val"
-            :x="padL - 6" :y="t.y" text-anchor="end" fill="#6b7280" font-size="8" dominant-baseline="middle">
+            :x="padL - 6" :y="t.y" text-anchor="end" fill="#999AA5" font-size="8" dominant-baseline="middle">
             {{ t.val }}
           </text>
-          <text :x="padL - 6" :y="plotTop - 5" text-anchor="end" fill="#6b7280" font-size="7">bars</text>
+          <text :x="padL - 6" :y="plotTop - 5" text-anchor="end" fill="#999AA5" font-size="7">bars</text>
         </template>
 
         <!-- Right Y-axis labels (elevation degrees) -->
@@ -635,7 +635,7 @@ onMounted(async () => {
 
         <!-- X axis time labels -->
         <text v-for="(l, idx) in chartData.labels" :key="'tl'+idx"
-          :x="l.x" :y="plotBottom + 18" text-anchor="middle" fill="#6b7280" font-size="7">
+          :x="l.x" :y="plotBottom + 18" text-anchor="middle" fill="#999AA5" font-size="7">
           {{ l.label }}
         </text>
 

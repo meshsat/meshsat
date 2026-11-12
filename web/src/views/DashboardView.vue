@@ -2051,7 +2051,7 @@ function widgetGridClass(id) {
               stroke="#f59e0b" stroke-width="0.5" stroke-dasharray="2 1" opacity="0.5" />
             <!-- Time labels -->
             <text v-for="(l, i) in miniChartData.labels" :key="'ml'+i"
-              :x="l.x" :y="miniChartData.H + 9" text-anchor="middle" fill="#4b5563" font-size="6">{{ l.label }}</text>
+              :x="l.x" :y="miniChartData.H + 9" text-anchor="middle" fill="#999AA5" font-size="6">{{ l.label }}</text>
           </svg>
           <div class="flex items-center justify-between text-[8px] text-gray-600 mt-0.5">
             <span class="flex items-center gap-2">
@@ -2187,7 +2187,7 @@ function widgetGridClass(id) {
               x1="0" x2="200" :y1="80 - ((v + 20) / 30) * 72" :y2="80 - ((v + 20) / 30) * 72"
               stroke="#374151" stroke-width="0.3" stroke-dasharray="2 3" />
             <text v-for="v in [-20, -10, 0, 10]" :key="'snrl'+v"
-              x="2" :y="80 - ((v + 20) / 30) * 72 - 2" fill="#4b5563" font-size="6">{{ v }}dB</text>
+              x="2" :y="80 - ((v + 20) / 30) * 72 - 2" fill="#999AA5" font-size="6">{{ v }}dB</text>
             <!-- Bars -->
             <rect v-for="(bar, i) in meshSNRBars" :key="'snrb'+i"
               :x="10 + i * (180 / meshSNRBars.length) + 2"
@@ -2199,7 +2199,7 @@ function widgetGridClass(id) {
             <!-- Node name labels -->
             <text v-for="(bar, i) in meshSNRBars" :key="'snrn'+i"
               :x="10 + i * (180 / meshSNRBars.length) + Math.max(4, 180 / meshSNRBars.length - 4) / 2 + 2"
-              y="78" text-anchor="middle" fill="#6b7280" font-size="5">{{ bar.name.slice(0,4) }}</text>
+              y="78" text-anchor="middle" fill="#999AA5" font-size="5">{{ bar.name.slice(0,4) }}</text>
           </svg>
           <div class="flex items-center justify-between text-[8px] text-gray-600 mt-0.5">
             <span>SNR per node</span>
@@ -2332,13 +2332,13 @@ function widgetGridClass(id) {
               x1="0" x2="200" :y1="72 - (v / 5) * 72" :y2="72 - (v / 5) * 72"
               stroke="#374151" stroke-width="0.3" stroke-dasharray="2 3" />
             <text v-for="v in [1,3,5]" :key="'cl'+v"
-              x="2" :y="72 - (v / 5) * 72 - 2" fill="#4b5563" font-size="6">{{ v }}</text>
+              x="2" :y="72 - (v / 5) * 72 - 2" fill="#999AA5" font-size="6">{{ v }}</text>
             <!-- Area fill -->
             <path v-if="cellSparklineArea" :d="cellSparklineArea" fill="rgba(56,189,248,0.08)" />
             <!-- Line -->
             <polyline v-if="cellSparklinePoints" :points="cellSparklinePoints" fill="none" stroke="#38bdf8" stroke-width="1.2" opacity="0.7" />
             <!-- No data placeholder -->
-            <text v-if="cellSparklineNoData" x="100" y="40" text-anchor="middle" fill="#4b5563" font-size="8">No signal data</text>
+            <text v-if="cellSparklineNoData" x="100" y="40" text-anchor="middle" fill="#999AA5" font-size="8">No signal data</text>
           </svg>
           <div class="flex items-center justify-between text-[8px] text-gray-600 mt-0.5">
             <span class="flex items-center gap-1">
@@ -2467,9 +2467,9 @@ function widgetGridClass(id) {
               style="animation-duration: 8s;" />
             <circle cx="60" cy="60" r="44" :fill="sosActive ? '#ef444420' : '#111820'" />
             <text x="60" y="56" text-anchor="middle" font-size="22" font-weight="700"
-              :fill="sosActive ? '#ef4444' : '#4b5563'" font-family="Oxanium, sans-serif">SOS</text>
+              :fill="sosActive ? '#ef4444' : '#999AA5'" font-family="Oxanium, sans-serif">SOS</text>
             <text x="60" y="74" text-anchor="middle" font-size="9"
-              :fill="sosActive ? '#ef444480' : '#374151'" font-family="JetBrains Mono, monospace">
+              :fill="sosActive ? '#f87171' : '#999AA5'" font-family="JetBrains Mono, monospace">
               {{ sosActive ? 'ACTIVE' : 'READY' }}
             </text>
           </svg>

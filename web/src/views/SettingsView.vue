@@ -3636,13 +3636,13 @@ onUnmounted(() => {
             class="flex-1 px-3 py-2 rounded text-xs font-medium transition-colors"
             :class="networkMode === 'ap' ? 'bg-teal-600 text-white' : 'text-gray-400 hover:text-gray-200'">
             <div class="font-semibold">Connect to Network</div>
-            <div class="text-[10px] opacity-80 mt-0.5">Join an existing WiFi AP (home / hotspot / field AP)</div>
+            <div class="text-[10px] mt-0.5">Join an existing WiFi AP (home / hotspot / field AP)</div>
           </button>
           <button @click="networkMode = 'peer'"
             class="flex-1 px-3 py-2 rounded text-xs font-medium transition-colors"
             :class="networkMode === 'peer' ? 'bg-teal-600 text-white' : 'text-gray-400 hover:text-gray-200'">
             <div class="font-semibold">Link to another kit</div>
-            <div class="text-[10px] opacity-80 mt-0.5">Direct kit-to-kit IBSS — no AP needed</div>
+            <div class="text-[10px] mt-0.5">Direct kit-to-kit IBSS — no AP needed</div>
           </button>
         </div>
 

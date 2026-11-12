@@ -284,7 +284,7 @@ const nOp = (id) => store.selectedNodeId.value ? (isSel(id) ? 1 : 0.15) : 1
         <text :x="-BW/2 + 20" dy="0" fill="#5eead4" font-size="11">
           {{ store.bridgeStatus.value?.hw_model_name || '' }}
         </text>
-        <text :x="-BW/2 + 20" dy="18" fill="#6b7280" font-size="9">
+        <text :x="-BW/2 + 20" dy="18" fill="#999AA5" font-size="9">
           {{ store.meshNodeList.value?.length || 0 }} nodes · {{ (store.interfaceNodes.value || []).length }} interfaces
         </text>
         <text :x="-BW/2 + 20" dy="32" fill="#475569" font-size="8">

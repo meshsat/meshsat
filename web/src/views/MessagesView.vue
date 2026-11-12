@@ -862,7 +862,7 @@ onUnmounted(() => {
           {{ mb.shortName }}
         </span>
         <span class="truncate max-w-[100px]">{{ mb.name }}</span>
-        <span class="text-[9px] opacity-60">{{ mb.total }}</span>
+        <span class="text-[9px] opacity-90">{{ mb.total }}</span>
       </button>
     </div>
 
