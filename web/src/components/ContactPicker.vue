@@ -77,7 +77,7 @@ watch(() => props.modelValue, (c) => { if (c) query.value = c.display_name })
     <input :id="inputId" type="text" v-model="query" @focus="onFocus" @keydown="onKey" autocomplete="off"
       class="w-full px-3 py-2 rounded bg-tactical-surface border border-tactical-border text-sm focus:outline-none focus:border-tactical-iridium min-h-[48px]"
       placeholder="Type a name or address…" />
-    <ul v-show="open && matches.length" role="listbox" aria-label="Matching contacts"
+    <ul v-show="open && matches.length" role="listbox" aria-label="Matching contacts" tabindex="0"
       class="absolute left-0 right-0 mt-1 bg-tactical-surface border border-tactical-border rounded shadow-lg z-30 max-h-64 overflow-y-auto">
       <li v-for="(c, i) in matches" :key="c.id" @click="pick(c)"
         role="option" :aria-selected="i === active"

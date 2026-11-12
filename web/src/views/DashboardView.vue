@@ -2030,7 +2030,7 @@ function widgetGridClass(id) {
               :stroke="p.active ? 'rgba(165,180,252,0.5)' : 'rgba(129,140,248,0.2)'" stroke-width="0.5" />
             <!-- Pass peak labels -->
             <text v-for="(p, i) in miniChartData.passes.filter(pp => (pp.x2 - pp.x1) > 15)" :key="'mpl'+i"
-              :x="p.xMid" :y="p.peakY - 3" text-anchor="middle" fill="#a5b4fc" font-size="5" opacity="0.6">
+              :x="p.xMid" :y="p.peakY - 3" text-anchor="middle" fill="#a5b4fc" font-size="5">
               {{ p.elev.toFixed(0) }}
             </text>
             <!-- Signal area fill -->

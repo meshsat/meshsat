@@ -1016,11 +1016,11 @@ onUnmounted(() => {
                 <span class="text-[10px] text-gray-600">{{ timeLabel(msg) }}</span>
                 <DeliveryStatus v-if="msg.delivery_status && msg.delivery_status !== 'received'" :status="msg.delivery_status" />
                 <button v-if="msg.msg_ref || msg.id" @click="showDeliveries(msg)"
-                  class="text-[10px] text-gray-600 hover:text-blue-400 opacity-0 group-hover:opacity-100 transition-opacity">
+                  class="text-[10px] text-gray-600 hover:text-blue-400 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100 transition-opacity">
                   Deliveries
                 </button>
                 <button v-if="msg.direction === 'rx'" @click="reply(msg)"
-                  class="text-[10px] text-gray-600 hover:text-teal-400 opacity-0 group-hover:opacity-100 transition-opacity">
+                  class="text-[10px] text-gray-600 hover:text-teal-400 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100 transition-opacity">
                   Reply
                 </button>
               </div>
