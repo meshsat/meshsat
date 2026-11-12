@@ -184,7 +184,7 @@ test:web:
 # TEST:A11Y — SIDN deliverable D5: WCAG 2.1 AA on Dashboard, Messages (with
 # Inbox and Compose), Map and Settings. Headless Chromium loads the built app
 # from disk with synthetic API answers (test/a11y/fixtures, no server, no
-# network), runs axe-core on 197 states in three shells and counts form
+# network), runs axe-core on 197 states in three shells (three at a time) and counts form
 # controls with no label. Any count above test/a11y/baseline.json fails, and so
 # does the canary (known defects injected into the app must be found). Unit
 # tests of the ratchet run first. Reports: a11y-results/. [MESHSAT-1843]
@@ -197,7 +197,7 @@ test:a11y:
   needs:
     - job: test:web
       artifacts: true
-  timeout: 20m
+  timeout: 30m
   script:
     - npm ci --prefix test/a11y --no-audit --no-fund --ignore-scripts
     - node --test test/a11y/ratchet.test.mjs test/a11y/fixtures.test.mjs
@@ -209,8 +209,8 @@ test:a11y:
       - a11y-results/
     reports:
       junit: a11y-results/junit.xml
-  # Measure first: the gate goes hard once CI's counts match the local ones.
-  allow_failure: true
+  # A hard gate since pipeline 64332 matched the local run state for state.
+  allow_failure: false
   rules:
     - when: always
 

@@ -38,6 +38,7 @@ function args (argv) {
     else if (k === '--allow-increase') a.allowIncrease = v()
     else if (k === '--baseline') a.baseline = path.resolve(v())
     else if (k === '--no-screens') a.screens = false
+    else if (k === '--jobs') a.jobs = Number(v())
     else throw new Error(`unknown argument ${k}`)
   }
   a.baseline ||= path.join(HERE, 'baseline.json')
@@ -246,31 +247,38 @@ async function main () {
       }
     }
     const profiles = live ? ['live'] : PROFILES
-    for (const variant of VARIANTS) {
-      for (const profile of profiles) {
-        const ctx = await browser.newContext({ ...variant.context, reducedMotion: 'reduce', serviceWorkers: 'block', locale: 'en-GB', timezoneId: 'UTC' })
-        await ctx.addInitScript(() => { try { localStorage.clear(); sessionStorage.clear() } catch {} })
-        if (live) await routeLive(ctx, { base, shapes })
-        else await routeFixtures(ctx, { dist: a.dist, fixtures: loadFixtures(path.join(HERE, 'fixtures/rich'), profile), missing })
-        for (const state of statesFor(variant, live ? 'rich' : profile)) {
-          const key = stateKey(variant, profile, state)
-          if (a.filter && !a.filter.test(key)) continue
-          const st = await measure({ ctx, base, variant, state, live, screensDir, key })
-          report.states[key] = st
-          const n = st.counts ? Object.values(st.counts).reduce((x, y) => x + y, 0) : '-'
-          console.log(`${st.status.padEnd(11)} ${String(n).padStart(4)}  ${key}${st.error ? `  (${st.error})` : ''}`)
-        }
-        if (!report.rules.length) {
-          const p = await ctx.newPage()
-          await p.goto(`${base}/?${variant.query}`, { waitUntil: 'load' })
-          await new AxeBuilder({ page: p }).withTags(TAGS).include('header').analyze()
-          report.rules = await p.evaluate((tags) => window.axe.getRules(tags).map((r) => r.ruleId).sort(), TAGS)
-          await p.close()
-        }
-        if (!live && variant.id === 'desktop-engineer' && profile === 'rich' && !a.filter) report.canary = await canary(ctx, base, axeCore.version)
-        await ctx.close()
+    // Each shell and data profile runs in its own browser context; up to
+    // `jobs` of them at once (a kit gets one at a time).
+    const groups = VARIANTS.flatMap((variant) => profiles.map((profile) => ({ variant, profile })))
+    const runGroup = async ({ variant, profile }) => {
+      const ctx = await browser.newContext({ ...variant.context, reducedMotion: 'reduce', serviceWorkers: 'block', locale: 'en-GB', timezoneId: 'UTC' })
+      await ctx.addInitScript(() => { try { localStorage.clear(); sessionStorage.clear() } catch {} })
+      if (live) await routeLive(ctx, { base, shapes })
+      else await routeFixtures(ctx, { dist: a.dist, fixtures: loadFixtures(path.join(HERE, 'fixtures/rich'), profile), missing })
+      for (const state of statesFor(variant, live ? 'rich' : profile)) {
+        const key = stateKey(variant, profile, state)
+        if (a.filter && !a.filter.test(key)) continue
+        const st = await measure({ ctx, base, variant, state, live, screensDir: profile === 'rich' ? screensDir : null, key })
+        report.states[key] = st
+        const n = st.counts ? Object.values(st.counts).reduce((x, y) => x + y, 0) : '-'
+        console.log(`${st.status.padEnd(11)} ${String(n).padStart(4)}  ${key}${st.error ? `  (${st.error})` : ''}`)
       }
+      if (!report.rules.length) {
+        const p = await ctx.newPage()
+        await p.goto(`${base}/?${variant.query}`, { waitUntil: 'load' })
+        await new AxeBuilder({ page: p }).withTags(TAGS).include('header').analyze()
+        report.rules = await p.evaluate((tags) => window.axe.getRules(tags).map((r) => r.ruleId).sort(), TAGS)
+        await p.close()
+      }
+      if (!live && variant.id === 'desktop-engineer' && profile === 'rich' && !a.filter) report.canary = await canary(ctx, base, axeCore.version)
+      await ctx.close()
     }
+    const queue = [...groups]
+    const jobs = Math.max(1, a.jobs ?? (live ? 1 : 3))
+    await Promise.all(Array.from({ length: Math.min(jobs, queue.length) }, async () => {
+      while (queue.length) await runGroup(queue.shift())
+    }))
+    report.states = Object.fromEntries(Object.entries(report.states).sort(([x], [y]) => x.localeCompare(y)))
   } finally {
     await browser.close()
   }
