@@ -38,6 +38,26 @@ type Config struct {
 	// Zone is the zone the portal shows times in: nil = the process's local
 	// zone (time.Local, from TZ; UTC in a container without TZ).
 	Zone *time.Location
+	// Demo marks the public demo (cmd/meshsat-demo): every page says that
+	// nothing is sent and that everything is deleted after an hour, and the
+	// about page describes the demo instead of a kit. Only that binary sets
+	// it; nothing on a kit reads it from the environment or the API.
+	// [MESHSAT-1845]
+	Demo bool
+	// Ceiling caps the whole post, every phone together: at most Posts
+	// posts and Board board lines per Window, and MaxRows rows stored. Zero
+	// values are no ceiling (a kit's default; its per-phone ceilings and
+	// the approval queue are its limits). A post or line over a ceiling is
+	// ErrBusy. [MESHSAT-1845]
+	Ceiling Ceiling
+}
+
+// Ceiling is Config.Ceiling.
+type Ceiling struct {
+	Posts   int
+	Board   int
+	Window  time.Duration
+	MaxRows int
 }
 
 // Defaults are the plan's: a busy post stays affordable, and a stranger
@@ -125,6 +145,9 @@ type Service struct {
 	// removeMisses are the wrong board removal codes per phone (its
 	// address), for removeTriesPerHour. [MESHSAT-1814]
 	removeMisses map[string][]time.Time
+	// recentPosts and recentBoard are the times of the posts and board
+	// lines inside Config.Ceiling.Window, every phone together.
+	recentPosts, recentBoard []time.Time
 }
 
 // New builds the service. It does nothing until Start.
@@ -229,6 +252,11 @@ func (s *Service) Create(clientKey, lang string, in Submission) (*database.PostM
 	if !ok {
 		return nil, ErrQuota
 	}
+	if ok, err := s.underCeiling(false); err != nil {
+		return nil, err
+	} else if !ok {
+		return nil, ErrBusy
+	}
 	class := database.PostClassRoutine
 	if in.Emergency {
 		class = database.PostClassEmergency
@@ -327,6 +355,46 @@ func (s *Service) Approve(code string) error {
 		s.printSlip(m, nil)
 	}
 	return nil
+}
+
+// ErrBusy is a post or a board line over Config.Ceiling. [MESHSAT-1845]
+var ErrBusy = errors.New("busy")
+
+// underCeiling answers whether one more post (board=false) or board line
+// fits Config.Ceiling, and counts it when it does.
+func (s *Service) underCeiling(board bool) (bool, error) {
+	c := s.cfg.Ceiling
+	limit, list := c.Posts, &s.recentPosts
+	if board {
+		limit, list = c.Board, &s.recentBoard
+	}
+	if c.MaxRows > 0 {
+		n, err := s.deps.DB.CountPostRows()
+		if err != nil {
+			return false, err
+		}
+		if n >= c.MaxRows {
+			return false, nil
+		}
+	}
+	if limit <= 0 || c.Window <= 0 {
+		return true, nil
+	}
+	now := s.now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	kept := (*list)[:0]
+	for _, t := range *list {
+		if now.Sub(t) < c.Window {
+			kept = append(kept, t)
+		}
+	}
+	*list = kept
+	if len(kept) >= limit {
+		return false, nil
+	}
+	*list = append(*list, now)
+	return true, nil
 }
 
 // ErrUnknownCode is a code the kit never gave out.
@@ -525,6 +593,11 @@ func (s *Service) AddBoard(name, status, place string) (*database.PostBoardEntry
 	place, err = CleanBoardField(place)
 	if err != nil {
 		return nil, "", err
+	}
+	if ok, err := s.underCeiling(true); err != nil {
+		return nil, "", err
+	} else if !ok {
+		return nil, "", ErrBusy
 	}
 	now := s.now()
 	code := NewCode()

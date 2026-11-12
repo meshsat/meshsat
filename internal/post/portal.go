@@ -212,6 +212,9 @@ type page struct {
 	// Warnings are the public warnings in force at this kit (the Hub's
 	// last-mile relay, MESHSAT-1734), shown at the top of every page.
 	Warnings []warningBanner
+	// Demo is Config.Demo: the notice on every page and the demo's own
+	// about text. [MESHSAT-1845]
+	Demo bool
 	// loc is the zone the page shows times in (Config.Zone).
 	loc *time.Location
 }
@@ -315,6 +318,10 @@ func (s *Service) newPage(w http.ResponseWriter, r *http.Request, path string) *
 		p.loc = time.Local
 	}
 	p.BoardDaysText, p.PurgeDaysText = Plural(lang, "days", p.BoardDays), Plural(lang, "days", p.PurgeDays)
+	if s.cfg.Demo {
+		// The demo keeps a board line an hour, not days. [MESHSAT-1845]
+		p.Demo, p.BoardDaysText = true, p.S["demo_one_hour"]
+	}
 	if p.Operator == "" {
 		p.Operator = p.S["operator_not_set"]
 	}
@@ -555,6 +562,8 @@ func errorText(s map[string]string, err error) string {
 		return s["err_name"]
 	case errors.Is(err, ErrQuota):
 		return s["err_quota"]
+	case errors.Is(err, ErrBusy):
+		return s["err_busy"]
 	case errors.Is(err, ErrClosed):
 		return s["closed_title"]
 	}
@@ -597,6 +606,8 @@ button{width:100%;padding:1rem;margin-top:1rem;border:0;border-radius:.6rem;back
 .warn{background:#5a3a14;border:1px solid #d08a2a;border-radius:.5rem;padding:.7rem .9rem;margin:.4rem 0 .8rem}
 .warn .meta{font-size:.85rem;color:#f3dcb4}
 .warn .tag{font-weight:700;letter-spacing:.06em}
+.demo{background:#1d2f4a;border:1px solid #5b8fd6;border-radius:.5rem;padding:.7rem .9rem;margin:.4rem 0 .8rem}
+.demo .tag{font-weight:700;letter-spacing:.06em;text-transform:uppercase}
 .chk{display:flex;gap:.6rem;align-items:flex-start;margin:1rem 0 .2rem}
 .chk input{width:1.4rem;height:1.4rem;margin:.1rem 0 0}
 .chk label{margin:0}
@@ -605,6 +616,7 @@ a{color:#8fd3c9}
 </style></head><body><main>
 <div class="langs">{{range .Langs}}<a href="{{.Href}}"{{if eq .Code $.Lang}} class="on"{{end}}>{{.Name}}</a>{{end}}</div>
 <h1>{{.S.title}}</h1>
+{{if .Demo}}<div class="demo" role="note"><span class="tag">{{.S.demo_tag}}</span> {{.S.demo_notice}}</div>{{end}}
 <nav>
 <a href="/{{.Q}}"{{if eq .Path "/"}} class="on"{{end}}>{{.S.nav_write}}</a>
 <a href="/pickup{{.Q}}"{{if eq .Path "/pickup"}} class="on"{{end}}>{{.S.nav_pickup}}</a>
@@ -692,10 +704,12 @@ a{color:#8fd3c9}
 
 {{define "about"}}{{template "head" .}}
 <p><strong>{{.S.about_operator}}:</strong> {{.Operator}}</p>
-<p>{{.S.about_how}}</p>
+{{if .Demo}}<p>{{.S.demo_about}}</p>
+<h2>{{.S.data_title}}</h2>
+<p>{{.S.demo_data}}</p>{{else}}<p>{{.S.about_how}}</p>
 <p>{{.S.about_cost}}</p>
 <h2>{{.S.data_title}}</h2>
-<p>{{printf .S.data_notice .PurgeDaysText .BoardDaysText}}</p>
+<p>{{printf .S.data_notice .PurgeDaysText .BoardDaysText}}</p>{{end}}
 {{if .Closed}}<h2>{{.S.closed_title}}</h2><p>{{printf .S.closed_text .PurgeDate}}</p>{{end}}
 {{template "foot" .}}{{end}}
 

@@ -1550,3 +1550,84 @@ func TestSafeAndWellBoardLineComesOffWithItsCode(t *testing.T) {
 		t.Fatalf("%d expired lines left after the tick", left)
 	}
 }
+
+// The public demo says on every page, in the page's language, that nothing
+// is sent and everything goes after an hour; its about page describes the
+// demo, not a kit; and the whole post stops taking posts and board lines
+// over its ceilings, whichever phone writes. A kit's pages carry none of
+// it. [MESHSAT-1845]
+func TestDemoSaysSoOnEveryPageAndHoldsItsCeilings(t *testing.T) {
+	e := newEnv(t, Config{Demo: true, BoardRetention: time.Hour, PostsPerHour: 100, PostsPerDay: 100,
+		Ceiling: Ceiling{Posts: 2, Board: 1, Window: 10 * time.Minute}})
+	c := e.client()
+	for _, lang := range Languages {
+		for _, path := range []string{"/", "/pickup", "/board", "/about"} {
+			_, body := e.get(c, path+"?lang="+lang)
+			if !strings.Contains(body, T(lang, "demo_notice")) || !strings.Contains(body, `class="demo"`) {
+				t.Errorf("%s %s: no demo notice", lang, path)
+			}
+		}
+		_, about := e.get(c, "/about?lang="+lang)
+		if !strings.Contains(about, T(lang, "demo_about")) || !strings.Contains(about, T(lang, "demo_data")) ||
+			strings.Contains(about, T(lang, "about_cost")) {
+			t.Errorf("%s: the about page must describe the demo, not a kit", lang)
+		}
+		_, board := e.get(c, "/board?lang="+lang)
+		if !strings.Contains(board, T(lang, "demo_one_hour")) {
+			t.Errorf("%s: the board must say a line stays an hour", lang)
+		}
+	}
+
+	// Two posts in ten minutes, whichever phone: the third phone is told
+	// to wait, and the window moving on frees the post again.
+	for i := 0; i < 2; i++ {
+		if code, _ := e.write(e.client(), "+447700900001", "", "safe", false); code == "" {
+			t.Fatalf("post %d refused under the ceiling", i+1)
+		}
+	}
+	if code, body := e.write(e.client(), "+447700900001", "", "safe", false); code != "" || !strings.Contains(body, T("en", "err_busy")) {
+		t.Fatal("the third post in the window must be refused as busy")
+	}
+	e.clock = e.clock.Add(10 * time.Minute)
+	if code, _ := e.write(e.client(), "+447700900001", "", "safe", false); code == "" {
+		t.Fatal("the next window takes posts again")
+	}
+	add := func() string {
+		_, body := e.post(e.client(), "/board?lang=en", url.Values{"name": {"Test Person"}, "status": {"safe"}})
+		return body
+	}
+	if body := add(); !strings.Contains(body, T("en", "board_added")) {
+		t.Fatal("the first board line must be taken")
+	}
+	if body := add(); !strings.Contains(body, T("en", "err_busy")) {
+		t.Fatal("the second board line in the window must be refused as busy")
+	}
+
+	// A kit: no notice, the kit's own about text.
+	kit := newEnv(t, Config{})
+	_, body := kit.get(kit.client(), "/about?lang=en")
+	if strings.Contains(body, `class="demo"`) || strings.Contains(body, T("en", "demo_notice")) || !strings.Contains(body, T("en", "about_cost")) {
+		t.Fatal("a kit's pages must not carry the demo notice")
+	}
+}
+
+// The demo stores at most MaxRows rows, posts, replies and board lines
+// together; past that every new one is busy until the purge makes room.
+// [MESHSAT-1845]
+func TestDemoStopsAtItsRowCap(t *testing.T) {
+	e := newEnv(t, Config{Demo: true, PostsPerHour: 100, PostsPerDay: 100, Ceiling: Ceiling{MaxRows: 2}})
+	for i := 0; i < 2; i++ {
+		if code, _ := e.write(e.client(), "+447700900001", "", "safe", false); code == "" {
+			t.Fatalf("post %d refused under the cap", i+1)
+		}
+	}
+	if code, body := e.write(e.client(), "+447700900001", "", "safe", false); code != "" || !strings.Contains(body, T("en", "err_busy")) {
+		t.Fatal("a post over the row cap must be refused as busy")
+	}
+	if _, err := e.db.PurgePostOlderThan(e.clock.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if code, _ := e.write(e.client(), "+447700900001", "", "safe", false); code == "" {
+		t.Fatal("the purge must make room")
+	}
+}

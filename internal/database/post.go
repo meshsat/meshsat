@@ -479,6 +479,103 @@ func (db *DB) PurgePost() (PostPurgeCounts, error) {
 	return c, err
 }
 
+// PurgePostOlderThan removes what the portal stored before the cut-off, in
+// one transaction: posts written before it with their replies and their
+// delivery rows, board lines added before it, and per-phone counters last
+// seen before it. It is the public demo's rolling retention (cmd/meshsat-demo
+// purges everything an hour old); a kit purges with PurgePost when the
+// operator closes the post. Times are compared parsed, not as strings: an
+// RFC 3339 string with a fraction does not sort with one without.
+// [MESHSAT-1845]
+func (db *DB) PurgePostOlderThan(before time.Time) (PostPurgeCounts, error) {
+	var c PostPurgeCounts
+	err := db.withTx(func(tx *sqlx.Tx) error {
+		type stamped struct {
+			key        string
+			deliveryID int64
+			at         string
+		}
+		old := func(query string, withDelivery bool) ([]stamped, error) {
+			rows, err := tx.Query(query)
+			if err != nil {
+				return nil, err
+			}
+			defer rows.Close()
+			var out []stamped
+			for rows.Next() {
+				var s stamped
+				var err error
+				if withDelivery {
+					err = rows.Scan(&s.key, &s.deliveryID, &s.at)
+				} else {
+					err = rows.Scan(&s.key, &s.at)
+				}
+				if err != nil {
+					return nil, err
+				}
+				if t := parsePostTime(s.at); !t.IsZero() && t.Before(before) {
+					out = append(out, s)
+				}
+			}
+			return out, rows.Err()
+		}
+		posts, err := old(`SELECT code, delivery_id, created_at FROM post_messages`, true)
+		if err != nil {
+			return fmt.Errorf("old posts: %w", err)
+		}
+		for _, p := range posts {
+			res, err := tx.Exec(`DELETE FROM post_replies WHERE code = ?`, p.key)
+			if err != nil {
+				return fmt.Errorf("purge replies of %s: %w", p.key, err)
+			}
+			n, _ := res.RowsAffected()
+			c.Replies += n
+			if p.deliveryID > 0 {
+				if _, err := tx.Exec(`DELETE FROM message_deliveries WHERE id = ?`, p.deliveryID); err != nil {
+					return fmt.Errorf("purge delivery of %s: %w", p.key, err)
+				}
+			}
+			if _, err := tx.Exec(`DELETE FROM post_messages WHERE code = ?`, p.key); err != nil {
+				return fmt.Errorf("purge post %s: %w", p.key, err)
+			}
+			c.Messages++
+		}
+		lines, err := old(`SELECT CAST(id AS TEXT), created_at FROM post_board`, false)
+		if err != nil {
+			return fmt.Errorf("old board lines: %w", err)
+		}
+		for _, l := range lines {
+			if _, err := tx.Exec(`DELETE FROM post_board WHERE id = ?`, l.key); err != nil {
+				return fmt.Errorf("purge board line %s: %w", l.key, err)
+			}
+			c.Board++
+		}
+		sessions, err := old(`SELECT client_key, last_seen_at FROM post_sessions`, false)
+		if err != nil {
+			return fmt.Errorf("old sessions: %w", err)
+		}
+		for _, s := range sessions {
+			if _, err := tx.Exec(`DELETE FROM post_sessions WHERE client_key = ?`, s.key); err != nil {
+				return fmt.Errorf("purge session: %w", err)
+			}
+			c.Sessions++
+		}
+		return nil
+	})
+	return c, err
+}
+
+// CountPostRows counts every row the portal keeps: posts, replies and board
+// lines together, what the public demo caps. [MESHSAT-1845]
+func (db *DB) CountPostRows() (int, error) {
+	var n int
+	err := db.QueryRow(`SELECT (SELECT COUNT(*) FROM post_messages) + (SELECT COUNT(*) FROM post_replies) + (SELECT COUNT(*) FROM post_board)`).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("count post rows: %w", err)
+	}
+	return n, nil
+}
+
 // The reasons a send the Community Post still waits on ends with when the
 // operator stops it (CancelWaitingPostSends).
 const (
