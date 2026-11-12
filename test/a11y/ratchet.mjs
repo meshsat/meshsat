@@ -7,6 +7,8 @@
 // so the rules are unit-tested without a browser (ratchet.test.mjs).
 
 export const UNLABELLED = 'meshsat-unlabelled-control'
+// Ids used twice where a label or ARIA reference points at them.
+export const DUPLICATE_ID = 'meshsat-duplicate-id'
 
 const sum = (counts) => Object.values(counts || {}).reduce((n, c) => n + c, 0)
 

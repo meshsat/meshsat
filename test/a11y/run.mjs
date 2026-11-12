@@ -16,7 +16,7 @@ import { AxeBuilder } from '@axe-core/playwright'
 import axeCore from 'axe-core'
 import { VARIANTS, PROFILES, statesFor, stateKey } from './states.mjs'
 import { ORIGIN, loadFixtures, routeFixtures, routeLive, keyShape } from './serve.mjs'
-import { compare, nextBaseline, total, UNLABELLED } from './ratchet.mjs'
+import { compare, nextBaseline, total, UNLABELLED, DUPLICATE_ID } from './ratchet.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const REPO = path.resolve(HERE, '../..')
@@ -87,6 +87,25 @@ async function unlabelledControls (page, scope) {
   }, { scope, bottom: BOTTOM_NAV })
 }
 
+// Ids that appear more than once and that a label or an ARIA reference
+// points at: the reference then names only the first element. axe 4.x no
+// longer reports duplicate ids, so this run counts them.
+async function duplicateReferencedIds (page) {
+  return page.evaluate(() => {
+    const referenced = new Set()
+    for (const l of document.querySelectorAll('label[for]')) referenced.add(l.getAttribute('for'))
+    for (const attr of ['aria-labelledby', 'aria-describedby', 'aria-controls']) {
+      for (const el of document.querySelectorAll(`[${attr}]`)) for (const id of el.getAttribute(attr).split(/\s+/)) if (id) referenced.add(id)
+    }
+    const out = []
+    for (const id of referenced) {
+      const n = document.querySelectorAll(`[id="${CSS.escape(id)}"]`).length
+      if (n > 1) out.push(`#${id} x${n}`)
+    }
+    return out
+  })
+}
+
 async function measure ({ ctx, base, variant, state, live, screensDir, key }) {
   const t0 = Date.now()
   const page = await ctx.newPage()
@@ -115,10 +134,12 @@ async function measure ({ ctx, base, variant, state, live, screensDir, key }) {
     builder = state.scope === 'shell' ? builder.exclude('main') : builder.exclude('header').exclude(BOTTOM_NAV)
     const r = await builder.analyze()
     const unlabelled = await unlabelledControls(page, state.scope)
+    const duplicates = state.scope === 'shell' ? [] : await duplicateReferencedIds(page)
 
     const counts = {}
     for (const v of r.violations) counts[v.id] = v.nodes.length
     if (unlabelled.length) counts[UNLABELLED] = unlabelled.length
+    if (duplicates.length) counts[DUPLICATE_ID] = duplicates.length
     const incomplete = {}
     for (const v of r.incomplete) incomplete[v.id] = v.nodes.length
     const violations = r.violations.map((v) => ({
@@ -130,7 +151,7 @@ async function measure ({ ctx, base, variant, state, live, screensDir, key }) {
     if (screensDir) {
       await page.screenshot({ path: path.join(screensDir, `${key.replace(/[/:]/g, '_')}.jpg`), fullPage: true, type: 'jpeg', quality: 60 })
     }
-    return { status: 'ok', counts, incomplete, violations, unlabelled: live ? unlabelled.length : unlabelled, pageErrors, ms: Date.now() - t0 }
+    return { status: 'ok', counts, incomplete, violations, unlabelled: live ? unlabelled.length : unlabelled, duplicates, pageErrors, ms: Date.now() - t0 }
   } catch (e) {
     return { status: 'error', error: String(e.message || e).split('\n')[0].slice(0, 300), pageErrors, ms: Date.now() - t0 }
   } finally {
@@ -150,19 +171,22 @@ async function canary (ctx, base, axeVersion) {
       d.id = 'a11y-canary'
       d.style.background = '#15151B'
       d.innerHTML = '<p style="color:#5C5C68;background:#15151B;font-size:12px">low contrast canary text</p>' +
-        '<input type="text" placeholder="canary"><div aria-label="canary strip"></div>'
+        '<input type="text" placeholder="canary"><div aria-label="canary strip"></div>' +
+        '<label for="a11y-canary-dup">canary field</label><input id="a11y-canary-dup"><input id="a11y-canary-dup" aria-label="canary twin">'
       document.querySelector('main').prepend(d)
     })
     const r = await new AxeBuilder({ page }).withTags(TAGS).include('#a11y-canary').analyze()
     const found = r.violations.map((v) => v.id).sort()
     const unl = (await unlabelledControls(page, 'view')).filter((s) => s.includes('canary')).length
+    const dup = (await duplicateReferencedIds(page)).filter((s) => s.includes('a11y-canary-dup')).length
     const need = ['aria-prohibited-attr', 'color-contrast']
     const counts = Object.fromEntries(r.violations.map((v) => [v.id, v.nodes.length]))
     counts[UNLABELLED] = unl
+    counts[DUPLICATE_ID] = dup
     const ratchet = compare({ axe: axeVersion, tags: TAGS, states: { canary: {} } },
       { axe: axeVersion, tags: TAGS, states: { canary: { status: 'ok', counts } } })
-    const ok = need.every((id) => found.includes(id)) && unl === 1 && !ratchet.ok
-    return { ok, found, unlabelled: unl, ratchetFailed: !ratchet.ok }
+    const ok = need.every((id) => found.includes(id)) && unl === 1 && dup === 1 && !ratchet.ok
+    return { ok, found, unlabelled: unl, duplicateIds: dup, ratchetFailed: !ratchet.ok }
   } catch (e) {
     return { ok: false, error: String(e.message || e).split('\n')[0] }
   } finally {
