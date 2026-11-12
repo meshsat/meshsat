@@ -104,6 +104,9 @@ func main() {
 			Board:   envInt("MESHSAT_DEMO_BOARD_PER_WINDOW", 30),
 			Window:  10 * time.Minute,
 			MaxRows: envInt("MESHSAT_DEMO_MAX_ROWS", 500),
+			// Per visitor address, whatever cookie it sends: one visitor
+			// cannot use up the whole post for everyone else.
+			PerAddressHour: envInt("MESHSAT_DEMO_PER_ADDRESS_HOUR", 6),
 		},
 	}, post.Deps{
 		DB:     db,

@@ -1631,3 +1631,57 @@ func TestDemoStopsAtItsRowCap(t *testing.T) {
 		t.Fatal("the purge must make room")
 	}
 }
+
+// Nobody walks the codes or the names: a phone address that looked up ten
+// codes the post never gave out waits an hour, even for a code that is
+// real; one that searched the board thirty times waits too. And with a
+// per-address ceiling, fresh cookies do not buy a phone more posts.
+// [MESHSAT-1845]
+func TestCodesAndNamesCannotBeWalked(t *testing.T) {
+	e := newEnv(t, Config{PostsPerHour: 100, PostsPerDay: 100, Ceiling: Ceiling{PerAddressHour: 3}})
+	c := e.client()
+	code, _ := e.write(c, "+447700900001", "", "safe", false)
+	if code == "" {
+		t.Fatal("no code")
+	}
+	for i := 0; i < pickupMissesPerHour; i++ {
+		_, body := e.get(c, "/pickup?lang=en&code=ZZZZZ"+string(rune('A'+i)))
+		if !strings.Contains(body, T("en", "unknown_code")) {
+			t.Fatalf("miss %d: %s", i, body)
+		}
+	}
+	_, body := e.get(c, "/pickup?lang=en&code="+code)
+	if !strings.Contains(body, T("en", "board_remove_wait")) || strings.Contains(body, ">safe<") {
+		t.Fatal("after ten unknown codes even a real code must wait")
+	}
+	e.clock = e.clock.Add(time.Hour)
+	if _, body := e.get(c, "/pickup?lang=en&code="+code); !strings.Contains(body, "safe") {
+		t.Fatal("an hour later the real code works again")
+	}
+
+	for i := 0; i < boardSearchesPerHour; i++ {
+		if _, body := e.get(c, "/board?lang=en&q=Nobody"); strings.Contains(body, T("en", "board_search_wait")) {
+			t.Fatalf("search %d refused too early", i+1)
+		}
+	}
+	if _, body := e.get(c, "/board?lang=en&q=Nobody"); !strings.Contains(body, T("en", "board_search_wait")) {
+		t.Fatal("the 31st search in the hour must wait")
+	}
+
+	// Posts per address, in this new hour: three with fresh cookies, then
+	// the fourth is refused whatever cookie it brings.
+	for i := 0; i < 3; i++ {
+		if code, _ := e.write(e.client(), "+447700900001", "", "safe", false); code == "" {
+			t.Fatalf("post %d refused under the per-address ceiling", i+1)
+		}
+	}
+	if code, body := e.write(e.client(), "+447700900001", "", "safe", false); code != "" || !strings.Contains(body, "sent its share") {
+		t.Fatal("a fresh cookie must not buy a fourth post from the same address")
+	}
+	for i := 0; i < 3; i++ {
+		e.post(e.client(), "/board?lang=en", url.Values{"name": {"Test Person"}, "status": {"safe"}})
+	}
+	if _, body := e.post(e.client(), "/board?lang=en", url.Values{"name": {"Test Person"}, "status": {"safe"}}); !strings.Contains(body, "sent its share") {
+		t.Fatal("the fourth board line from one address must be refused")
+	}
+}

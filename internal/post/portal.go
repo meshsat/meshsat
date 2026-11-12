@@ -406,7 +406,15 @@ func (s *Service) send(w http.ResponseWriter, r *http.Request) {
 		Emergency: r.PostForm.Get("emergency") != ""}
 	p.Form = map[string]string{"to": in.Recipient, "text": in.Text, "name": in.Name}
 	p.Emergency = in.Emergency
-	m, err := s.Create(key, p.Lang, in)
+	var m *database.PostMessage
+	ok, err := s.AddressAllowed(ipKey(r), false)
+	switch {
+	case err != nil:
+	case !ok:
+		err = ErrQuota
+	default:
+		m, err = s.Create(key, p.Lang, in)
+	}
 	if err != nil {
 		if errors.Is(err, ErrClosed) {
 			s.render(w, "closed", s.newPage(w, r, "/"))
@@ -440,11 +448,20 @@ func (s *Service) pickup(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.TrimSpace(code) != "" {
 		p.Form["code"] = code
+		addr := ipKey(r)
+		if s.PickupBlocked(addr) {
+			// Too many codes the post never gave out: no lookup at all,
+			// so the codes cannot be walked. [MESHSAT-1845]
+			p.Err = p.S["board_remove_wait"]
+			s.render(w, "pickup", p)
+			return
+		}
 		m, replies, err := s.Status(code)
 		if err != nil {
 			log.Error().Err(err).Msg("post: pickup failed")
 			p.Err = p.S["err_other"]
 		} else if m == nil {
+			s.PickupMiss(addr)
 			p.Err = p.S["unknown_code"]
 		} else {
 			p.Post, p.Replies = m, replies
@@ -486,7 +503,9 @@ func (s *Service) board(w http.ResponseWriter, r *http.Request) {
 			}
 		} else {
 			p.Form = map[string]string{"name": r.PostForm.Get("name"), "status": r.PostForm.Get("status"), "place": r.PostForm.Get("place")}
-			if _, code, err := s.AddBoard(p.Form["name"], p.Form["status"], p.Form["place"]); errors.Is(err, ErrClosed) {
+			if ok, err := s.AddressAllowed(ipKey(r), true); err == nil && !ok {
+				p.Err = p.S["err_quota"]
+			} else if _, code, err := s.AddBoard(p.Form["name"], p.Form["status"], p.Form["place"]); errors.Is(err, ErrClosed) {
 				p.Err = fmt.Sprintf(p.S["closed_text"], p.PurgeDate)
 			} else if err != nil {
 				p.Err = errorText(p.S, err)
@@ -504,6 +523,11 @@ func (s *Service) board(w http.ResponseWriter, r *http.Request) {
 	// without a query, and a query too short to be a name shows nothing
 	// either. [MESHSAT-1814]
 	p.Query = strings.TrimSpace(r.URL.Query().Get("q"))
+	if p.Query != "" && !s.SearchAllowed(ipKey(r)) {
+		// A name is looked up, never walked. [MESHSAT-1845]
+		p.Err = p.S["board_search_wait"]
+		p.Query = ""
+	}
 	if p.Query != "" {
 		entries, err := s.SearchBoard(p.Query)
 		switch {

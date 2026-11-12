@@ -52,12 +52,15 @@ type Config struct {
 	Ceiling Ceiling
 }
 
-// Ceiling is Config.Ceiling.
+// Ceiling is Config.Ceiling. PerAddressHour caps the posts, and
+// separately the board lines, one phone address may write in an hour,
+// whatever cookie it sends: a cookie is the phone's to forge.
 type Ceiling struct {
-	Posts   int
-	Board   int
-	Window  time.Duration
-	MaxRows int
+	Posts          int
+	Board          int
+	Window         time.Duration
+	MaxRows        int
+	PerAddressHour int
 }
 
 // Defaults are the plan's: a busy post stays affordable, and a stranger
@@ -148,6 +151,9 @@ type Service struct {
 	// recentPosts and recentBoard are the times of the posts and board
 	// lines inside Config.Ceiling.Window, every phone together.
 	recentPosts, recentBoard []time.Time
+	// tries are the counted attempts per kind and phone address within the
+	// hour: wrong pickup codes and board searches. [MESHSAT-1845]
+	tries map[string][]time.Time
 }
 
 // New builds the service. It does nothing until Start.
@@ -156,7 +162,7 @@ func New(cfg Config, deps Deps) *Service {
 	if deps.Now == nil {
 		deps.Now = time.Now
 	}
-	s := &Service{cfg: cfg, deps: deps, signedIn: map[string]time.Time{}, removeMisses: map[string][]time.Time{}}
+	s := &Service{cfg: cfg, deps: deps, signedIn: map[string]time.Time{}, removeMisses: map[string][]time.Time{}, tries: map[string][]time.Time{}}
 	if deps.Bearer == nil {
 		s.deps.Bearer = func() (string, bool) { return cfg.Bearer, true }
 	}
@@ -395,6 +401,80 @@ func (s *Service) underCeiling(board bool) (bool, error) {
 	}
 	*list = append(*list, now)
 	return true, nil
+}
+
+// A phone address may look up pickupMissesPerHour codes the post never
+// gave out, and search the board boardSearchesPerHour times, within the
+// hour; then it waits. A code is 30^6, and a post's words are its writer's:
+// nobody may walk the codes or the names. [MESHSAT-1845]
+const (
+	pickupMissesPerHour  = 10
+	boardSearchesPerHour = 30
+)
+
+// ErrPickupTries is a phone that gave pickupMissesPerHour unknown codes
+// within the hour; ErrSearchTries one that searched the board
+// boardSearchesPerHour times.
+var (
+	ErrPickupTries = errors.New("pickup_tries")
+	ErrSearchTries = errors.New("search_tries")
+)
+
+// tried answers whether addr has used up limit attempts of kind within
+// the hour, and counts this one when count is set and it has not.
+func (s *Service) tried(kind, addr string, limit int, count bool) bool {
+	now := s.now()
+	key := kind + "|" + addr
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	kept := s.tries[key][:0]
+	for _, t := range s.tries[key] {
+		if now.Sub(t) < time.Hour {
+			kept = append(kept, t)
+		}
+	}
+	if len(kept) >= limit {
+		s.tries[key] = kept
+		return true
+	}
+	if count {
+		kept = append(kept, now)
+	}
+	if len(kept) == 0 {
+		delete(s.tries, key)
+	} else {
+		s.tries[key] = kept
+	}
+	return false
+}
+
+// PickupBlocked answers whether addr has used up its unknown codes.
+func (s *Service) PickupBlocked(addr string) bool {
+	return s.tried("pickup", addr, pickupMissesPerHour, false)
+}
+
+// PickupMiss counts one unknown code from addr.
+func (s *Service) PickupMiss(addr string) { s.tried("pickup", addr, pickupMissesPerHour, true) }
+
+// SearchAllowed counts one board search from addr, false once it has used
+// up its searches.
+func (s *Service) SearchAllowed(addr string) bool {
+	return !s.tried("search", addr, boardSearchesPerHour, true)
+}
+
+// AddressAllowed counts one post (board=false) or board line from a phone
+// address against Ceiling.PerAddressHour; true when there is no such
+// ceiling. [MESHSAT-1845]
+func (s *Service) AddressAllowed(addr string, board bool) (bool, error) {
+	n := s.cfg.Ceiling.PerAddressHour
+	if n <= 0 {
+		return true, nil
+	}
+	kind := "addr-post:"
+	if board {
+		kind = "addr-board:"
+	}
+	return s.deps.DB.TakePostSlot(kind+addr, s.now(), n, 0)
 }
 
 // ErrUnknownCode is a code the kit never gave out.
@@ -796,6 +876,18 @@ func (s *Service) Run(ctx context.Context, every time.Duration) {
 	}
 }
 
+// pruneTries forgets the attempts older than the hour.
+func (s *Service) pruneTries() {
+	now := s.now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for key, list := range s.tries {
+		if len(list) == 0 || now.Sub(list[len(list)-1]) >= time.Hour {
+			delete(s.tries, key)
+		}
+	}
+}
+
 // Tick is one pass of Run.
 func (s *Service) Tick() {
 	queued, err := s.deps.DB.ListPostMessages([]string{database.PostStatusQueued}, 200)
@@ -821,6 +913,7 @@ func (s *Service) Tick() {
 		}
 	}
 	_ = s.deps.DB.PrunePostSessions(s.now().Add(-7 * 24 * time.Hour))
+	s.pruneTries()
 	// Expired board lines go now, not at the next add. [MESHSAT-1814]
 	if n, err := s.deps.DB.PrunePostBoard(s.now()); err != nil {
 		log.Warn().Err(err).Msg("post: board prune failed")

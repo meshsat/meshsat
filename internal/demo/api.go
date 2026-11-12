@@ -1,10 +1,15 @@
 package demo
 
 import (
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -35,6 +40,18 @@ type API struct {
 	Post     *post.Service // nil = the post reads come from the fixtures too
 	DB       *database.DB
 	Now      func() time.Time
+
+	labelOnce sync.Once
+	labelKey  []byte
+
+	cacheMu sync.Mutex
+	cache   map[string]cached
+}
+
+// cached is one shifted fixture, good for the second it was made in.
+type cached struct {
+	sec  int64
+	body []byte
 }
 
 func (a *API) now() time.Time {
@@ -85,11 +102,35 @@ func (a *API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := a.now()
-	if body, ok := a.lookup(segs, now); ok {
+	if body, ok := a.lookupCached(segs, now); ok {
 		writeJSON(w, http.StatusOK, body)
 		return
 	}
 	writeErr(w, http.StatusNotFound, "not found")
+}
+
+// lookupCached is lookup, made at most once a second per path: shifting a
+// fixture is a decode and an encode, and a public listener must not do that
+// for every request a visitor (or anyone) sends.
+func (a *API) lookupCached(segs []string, now time.Time) ([]byte, bool) {
+	key, sec := strings.Join(segs, "/"), now.Unix()
+	a.cacheMu.Lock()
+	if c, ok := a.cache[key]; ok && c.sec == sec {
+		a.cacheMu.Unlock()
+		return c.body, true
+	}
+	a.cacheMu.Unlock()
+	body, ok := a.lookup(segs, now)
+	if !ok {
+		return nil, false
+	}
+	a.cacheMu.Lock()
+	if a.cache == nil || len(a.cache) > 1000 {
+		a.cache = map[string]cached{}
+	}
+	a.cache[key] = cached{sec: sec, body: body}
+	a.cacheMu.Unlock()
+	return body, true
 }
 
 // lookup finds the fixture for a path: the exact one ("a_b_c"), else the
@@ -133,7 +174,7 @@ func (a *API) servePost(w http.ResponseWriter, rest []string) {
 			writeErr(w, http.StatusInternalServerError, "the post could not be read")
 			return
 		}
-		b, _ := json.Marshal(map[string]any{"pending": MaskPosts(pending), "recent": MaskPosts(recent), "counts": counts})
+		b, _ := json.Marshal(map[string]any{"pending": a.MaskPosts(pending), "recent": a.MaskPosts(recent), "counts": counts})
 		writeJSON(w, http.StatusOK, b)
 	case len(rest) == 1 && rest[0] == "board":
 		lines, err := a.Post.BoardLines()
@@ -161,16 +202,17 @@ type MaskedPost struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-// MaskPosts keeps what a visitor needs to see their post go through and
-// nothing anyone could read it by: the recipient as the paper slips mask it,
-// no name, the text as its length only, and the code cut to its first three
-// letters so it opens nobody's pickup page.
-func MaskPosts(in []database.PostMessage) []MaskedPost {
+// MaskPosts keeps what a visitor needs to see their post go through (its
+// time, its length, its status) and nothing anyone could read it by: the
+// recipient as its country code and last two digits, no name, the text as
+// its length, and instead of the code a label that holds no letter of it,
+// so it opens nobody's pickup page and narrows no guess.
+func (a *API) MaskPosts(in []database.PostMessage) []MaskedPost {
 	out := make([]MaskedPost, 0, len(in))
 	for _, m := range in {
 		out = append(out, MaskedPost{
-			Code:      MaskCode(m.Code),
-			Recipient: post.MaskRecipient(m.Recipient),
+			Code:      a.label(m.Code),
+			Recipient: MaskRecipient(m.Recipient),
 			Text:      MaskedText(m.Text),
 			Class:     m.Class,
 			Status:    m.Status,
@@ -182,12 +224,37 @@ func MaskPosts(in []database.PostMessage) []MaskedPost {
 	return out
 }
 
-// MaskCode is a pickup code cut to its first three letters.
-func MaskCode(code string) string {
-	if len(code) <= 3 {
+// label stands for a code on the public screen: four hex digits of an
+// HMAC under a key made at start, so it is stable for a post while the
+// process runs and says nothing about the code.
+func (a *API) label(code string) string {
+	a.labelOnce.Do(func() {
+		a.labelKey = make([]byte, 32)
+		if _, err := rand.Read(a.labelKey); err != nil {
+			a.labelKey = nil
+		}
+	})
+	mac := hmac.New(sha256.New, a.labelKey)
+	mac.Write([]byte(code))
+	return "•••" + hex.EncodeToString(mac.Sum(nil))[:4]
+}
+
+// MaskRecipient keeps the least a visitor needs to recognise their own
+// post: a number's country code (its first three characters) and last two
+// digits, an address's first letter and top-level domain.
+func MaskRecipient(v string) string {
+	if i := strings.LastIndex(v, "@"); i > 0 {
+		tld := ""
+		if j := strings.LastIndex(v[i:], "."); j > 0 {
+			tld = v[i+j:]
+		}
+		r, _ := utf8.DecodeRuneInString(v)
+		return string(r) + "•••@•••" + tld
+	}
+	if len(v) < 6 {
 		return "•••"
 	}
-	return code[:3] + "•••"
+	return v[:3] + "•••" + v[len(v)-2:]
 }
 
 // MaskedText is a visitor's text as its length only.

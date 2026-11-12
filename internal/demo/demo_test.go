@@ -257,7 +257,8 @@ func TestAVisitorsPostGoesThroughMaskedAndIsGoneAfterAnHour(t *testing.T) {
 		t.Fatal("a new post waits for the volunteer")
 	}
 	_, q := e.do(e.bridge, http.MethodGet, "/api/post/queue", nil)
-	if !strings.Contains(q, code[:3]+"•••") || !strings.Contains(q, "+4477****23") || !strings.Contains(q, "47 characters") {
+	if !strings.Contains(q, `"code":"•••`) || !strings.Contains(q, "+44•••23") || !strings.Contains(q, "47 characters") ||
+		strings.Contains(q, code[:3]) || strings.Contains(q, "7700") {
 		t.Fatalf("masked queue: %s", q)
 	}
 
@@ -346,8 +347,13 @@ func TestClientIPTrustsOnlyTheIngress(t *testing.T) {
 }
 
 func TestMaskers(t *testing.T) {
-	if MaskCode("K7QW2X") != "K7Q•••" || MaskCode("AB") != "•••" {
-		t.Error("MaskCode")
+	a := &API{}
+	l1, l2 := a.label("K7QW2X"), a.label("K7QW2Y")
+	if l1 != a.label("K7QW2X") || l1 == l2 || strings.ContainsAny(strings.TrimPrefix(l1, "•••"), "KQWX") || len([]rune(l1)) != 7 {
+		t.Errorf("label: %q %q", l1, l2)
+	}
+	if MaskRecipient("+31612345678") != "+31•••78" || MaskRecipient("maria@example.org") != "m•••@•••.org" || MaskRecipient("+31") != "•••" {
+		t.Errorf("MaskRecipient: %q %q", MaskRecipient("+31612345678"), MaskRecipient("maria@example.org"))
 	}
 	if Initials("maria  van der berg") != "M. V. D." || Initials("  ") != "•" || Initials("Ελένη Παπά") != "Ε. Π." {
 		t.Error("Initials")
