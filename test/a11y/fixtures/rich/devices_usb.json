@@ -1,0 +1,28 @@
+[
+ {
+  "dev_path": "/dev/ttyAMA2",
+  "first_seen": "2026-11-01T09:50:00Z",
+  "last_seen": "2026-11-01T09:50:00Z",
+  "role": "iridium_9603",
+  "state": "ready",
+  "vid_pid": ""
+ },
+ {
+  "dev_path": "/dev/ttyACM0",
+  "first_seen": "2026-11-01T09:40:00Z",
+  "last_seen": "2026-11-01T09:40:00Z",
+  "role": "cellular",
+  "state": "ready",
+  "usb_serial": "0B0F000000",
+  "vid_pid": "Team two at the crossing"
+ },
+ {
+  "dev_path": "/dev/ttyACM1",
+  "first_seen": "2026-11-01T09:30:00Z",
+  "last_seen": "2026-11-01T09:30:00Z",
+  "role": "meshtastic",
+  "state": "ready",
+  "usb_serial": "e71d23b2f3a701d3",
+  "vid_pid": "Water supply OK"
+ }
+]

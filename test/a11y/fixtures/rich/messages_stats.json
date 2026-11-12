@@ -1,0 +1,24 @@
+{
+ "by_portnum": {
+  "LXMF": 65,
+  "NODEINFO_APP": 82,
+  "POSITION_APP": 111,
+  "PRIVATE_APP": 2,
+  "ROUTING_APP": 144,
+  "TELEMETRY_APP": 40923,
+  "TEXT_MESSAGE_APP": 73
+ },
+ "by_transport": {
+  "aprs": 18,
+  "cellular": 8,
+  "hub": 11,
+  "radio": 41266,
+  "reticulum": 65,
+  "tetra": 32
+ },
+ "newest_at": "2026-11-01T09:50:00Z",
+ "oldest_at": "2026-11-01T09:50:00Z",
+ "today": 733,
+ "today_text": 12,
+ "total": 41400
+}

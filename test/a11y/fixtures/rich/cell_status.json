@@ -1,0 +1,50 @@
+{
+ "configured": false,
+ "host": {
+  "agent": true,
+  "host": {
+   "arfcn": [
+    873
+   ],
+   "auto_radio": true,
+   "bts": null,
+   "core": {
+    "units": {
+     "osmo-bsc": false,
+     "osmo-cbc": false,
+     "osmo-hlr": false,
+     "osmo-mgw": false,
+     "osmo-msc": false,
+     "osmo-stp": false
+    },
+    "up": false
+   },
+   "licence": {
+    "arfcn_block": "Check in at the north gate",
+    "band": "DCS1800",
+    "number": ""
+   },
+   "mode": "bridge",
+   "phones": [],
+   "pluto": {
+    "present": false,
+    "reachable": false
+   },
+   "radio": {
+    "active": false
+   },
+   "smpp": {
+    "bind": "192.0.2.10",
+    "password_set": true,
+    "port": 2775,
+    "short_code": "Check in at the north gate",
+    "system_id": "meshsat-bridge"
+   }
+  },
+  "installed": true,
+  "local": true,
+  "pluto_port": "",
+  "present": false,
+  "tx_log_rows": 0
+ }
+}

@@ -1,0 +1,22 @@
+[
+ {
+  "announce_count": 1410,
+  "dest_hash": "93b6a629200a17c4410ee71016c41b52",
+  "encryption_pub": "73d8b99e51eebb7d8f6703f36bdb1dea786aab2538ca9ba4b24d2a866bd33755",
+  "first_seen": "2026-11-01T09:50:00Z",
+  "hop_count": 1,
+  "last_seen": "2026-11-01T09:50:00Z",
+  "signing_pub": "412a6365a08f3787056aa56b84d62b9a3b34e905565a6e5635eb61b10eb4f987",
+  "source_iface": "tcp_0"
+ },
+ {
+  "announce_count": 207,
+  "dest_hash": "82a3af7a3934b19bd48916927c256e00",
+  "encryption_pub": "73d8b99e51eebb7d8f6703f36bdb1dea786aab2538ca9ba4b24d2a866bd33755",
+  "first_seen": "2026-11-01T09:40:00Z",
+  "hop_count": 1,
+  "last_seen": "2026-11-01T09:40:00Z",
+  "signing_pub": "412a6365a08f3787056aa56b84d62b9a3b34e905565a6e5635eb61b10eb4f987",
+  "source_iface": "tcp_0"
+ }
+]

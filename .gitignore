@@ -28,6 +28,10 @@ test-results/
 test/e2e/test-results/
 test/e2e/node_modules/
 
+# The accessibility run's npm deps and its reports. [MESHSAT-1843]
+test/a11y/node_modules/
+a11y-results/
+
 # Local-only working files, never committed
 .meshsat-issue-manifest.tsv
 

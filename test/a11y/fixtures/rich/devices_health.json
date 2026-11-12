@@ -1,0 +1,160 @@
+{
+ "clock": {
+  "checked_at": "2026-11-01T09:50:00Z",
+  "source": "floor",
+  "trusted": true
+ },
+ "enabled": true,
+ "targets": [
+  {
+   "detail": "Check in at the north gate",
+   "external": true,
+   "hard_budget": 0,
+   "hard_resets_last_hour": 0,
+   "interfaces": [
+    "aprs_0",
+    "ax25_0"
+   ],
+   "levels": [],
+   "max_level": 0,
+   "misses": 0,
+   "name": "Sample Name 11",
+   "paused": false,
+   "state": "degraded",
+   "step": 0
+  },
+  {
+   "detail": "Team two at the crossing",
+   "hard_budget": 2,
+   "hard_resets_last_hour": 0,
+   "interfaces": [
+    "cellular_0",
+    "sms_0"
+   ],
+   "last_ok": "2026-11-01T09:40:00Z",
+   "last_probe": "2026-11-01T09:40:00Z",
+   "levels": [
+    1,
+    2,
+    3
+   ],
+   "max_level": 3,
+   "misses": 0,
+   "name": "Sample Name 12",
+   "paused": false,
+   "state": "ok",
+   "step": 0
+  },
+  {
+   "detail": "Water supply OK",
+   "hard_budget": 3,
+   "hard_resets_last_hour": 0,
+   "interfaces": null,
+   "last_probe": "2026-11-01T09:30:00Z",
+   "levels": [
+    1,
+    3
+   ],
+   "max_level": 1,
+   "misses": 0,
+   "name": "Sample Name 13",
+   "paused": false,
+   "state": "unknown",
+   "step": 0
+  },
+  {
+   "detail": "All clear on channel one",
+   "hard_budget": 3,
+   "hard_resets_last_hour": 0,
+   "interfaces": [
+    "iridium_imt_0"
+   ],
+   "last_probe": "2026-11-01T09:20:00Z",
+   "levels": [
+    1,
+    2
+   ],
+   "max_level": 1,
+   "misses": 0,
+   "name": "Sample Name 14",
+   "paused": false,
+   "state": "unknown",
+   "step": 0
+  },
+  {
+   "detail": "Moving to point B",
+   "hard_budget": 3,
+   "hard_resets_last_hour": 0,
+   "interfaces": [
+    "iridium_0"
+   ],
+   "last_ok": "2026-11-01T09:10:00Z",
+   "last_probe": "2026-11-01T09:10:00Z",
+   "levels": [
+    1
+   ],
+   "max_level": 1,
+   "misses": 0,
+   "name": "Sample Name 15",
+   "paused": false,
+   "state": "ok",
+   "step": 0
+  },
+  {
+   "detail": "Battery at 60 percent",
+   "hard_budget": 3,
+   "hard_resets_last_hour": 0,
+   "interfaces": [
+    "mesh_0"
+   ],
+   "last_ok": "2026-11-01T09:00:00Z",
+   "last_probe": "2026-11-01T09:00:00Z",
+   "levels": [
+    1,
+    2,
+    3
+   ],
+   "max_level": 3,
+   "misses": 0,
+   "name": "Sample Name 16",
+   "paused": false,
+   "state": "ok",
+   "step": 0
+  },
+  {
+   "detail": "Need a radio check",
+   "hard_budget": 2,
+   "hard_resets_last_hour": 1,
+   "interfaces": null,
+   "last_error": "Need a radio check",
+   "last_probe": "2026-11-01T08:50:00Z",
+   "levels": [
+    1,
+    3
+   ],
+   "max_level": 3,
+   "misses": 13486,
+   "name": "Sample Name 17",
+   "paused": false,
+   "state": "failed",
+   "step": 2,
+   "step_at": "2026-11-01T08:50:00Z",
+   "step_level": 3,
+   "step_name": "Sample Step 18"
+  },
+  {
+   "detail": "Arrived at the shelter",
+   "external": true,
+   "hard_budget": 0,
+   "hard_resets_last_hour": 0,
+   "interfaces": null,
+   "levels": [],
+   "max_level": 0,
+   "misses": 0,
+   "name": "Sample Name 19",
+   "paused": false,
+   "state": "ok",
+   "step": 0
+  }
+ ]
+}

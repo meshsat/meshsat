@@ -1,0 +1,50 @@
+[
+ {
+  "cost": 0.05,
+  "floodable": false,
+  "id": "iridium_0",
+  "mtu": 340,
+  "online": true,
+  "type": "iridium"
+ },
+ {
+  "cost": 0.05,
+  "floodable": false,
+  "id": "iridium_imt_0",
+  "mtu": 102400,
+  "online": true,
+  "type": "iridium"
+ },
+ {
+  "cost": 0.005,
+  "floodable": false,
+  "id": "sms_0",
+  "mtu": 140,
+  "online": true,
+  "type": "cellular"
+ },
+ {
+  "cost": 0,
+  "floodable": true,
+  "id": "ble_0",
+  "mtu": 500,
+  "online": true,
+  "type": "ble"
+ },
+ {
+  "cost": 0,
+  "floodable": true,
+  "id": "mesh_0",
+  "mtu": 230,
+  "online": true,
+  "type": "mesh"
+ },
+ {
+  "cost": 0,
+  "floodable": true,
+  "id": "tcp_0",
+  "mtu": 65535,
+  "online": true,
+  "type": "tcp"
+ }
+]

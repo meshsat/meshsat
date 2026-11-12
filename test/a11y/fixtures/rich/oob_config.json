@@ -1,0 +1,5 @@
+{
+ "enabled": true,
+ "host_socket": "example.invalid",
+ "reply_budget": 40
+}

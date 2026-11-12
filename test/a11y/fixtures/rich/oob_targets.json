@@ -1,0 +1,164 @@
+{
+ "commands": [
+  {
+   "code": 1,
+   "max_args": 0,
+   "min_args": 0,
+   "min_role": "readonly",
+   "name": "PING"
+  },
+  {
+   "code": 2,
+   "max_args": 2,
+   "min_args": 0,
+   "min_role": "control",
+   "name": "REBOOT"
+  },
+  {
+   "code": 3,
+   "max_args": 0,
+   "min_args": 0,
+   "min_role": "control",
+   "name": "RESTART"
+  },
+  {
+   "code": 4,
+   "max_args": 2,
+   "min_args": 2,
+   "min_role": "control",
+   "name": "RESET"
+  },
+  {
+   "code": 5,
+   "max_args": 2,
+   "min_args": 2,
+   "min_role": "control",
+   "name": "BEARER"
+  },
+  {
+   "code": 6,
+   "max_args": 2,
+   "min_args": 1,
+   "min_role": "readonly",
+   "name": "LOG"
+  },
+  {
+   "code": 7,
+   "max_args": 69,
+   "min_args": 0,
+   "min_role": "readonly",
+   "name": "Sample Name 29"
+  }
+ ],
+ "reverts": [],
+ "targets": [
+  {
+   "bearer": false,
+   "code": 1,
+   "kind": "host",
+   "levels": [
+    1,
+    2
+   ],
+   "name": "Sample Name 30",
+   "power_cycle": false
+  },
+  {
+   "bearer": false,
+   "code": 2,
+   "kind": "device",
+   "levels": [
+    1,
+    2,
+    3
+   ],
+   "name": "Sample Name 31",
+   "power_cycle": false
+  },
+  {
+   "bearer": true,
+   "code": 3,
+   "iface_id": "cellular_0",
+   "kind": "interface",
+   "levels": [
+    1,
+    2,
+    3
+   ],
+   "name": "Sample Name 12",
+   "power_cycle": false
+  },
+  {
+   "bearer": true,
+   "code": 4,
+   "iface_id": "mesh_0",
+   "kind": "interface",
+   "levels": [
+    1,
+    2,
+    3
+   ],
+   "name": "Sample Name 16",
+   "power_cycle": false
+  },
+  {
+   "bearer": true,
+   "code": 5,
+   "iface_id": "iridium_0",
+   "kind": "interface",
+   "levels": [
+    1,
+    3
+   ],
+   "name": "Sample Name 15",
+   "power_cycle": false
+  },
+  {
+   "bearer": true,
+   "code": 6,
+   "iface_id": "iridium_imt_0",
+   "kind": "interface",
+   "levels": [
+    1,
+    2,
+    3
+   ],
+   "name": "Sample Name 14",
+   "power_cycle": false
+  },
+  {
+   "bearer": true,
+   "code": 7,
+   "iface_id": "zigbee_0",
+   "kind": "interface",
+   "levels": [
+    1,
+    3
+   ],
+   "name": "Sample Name 32",
+   "power_cycle": false
+  },
+  {
+   "bearer": true,
+   "code": 8,
+   "iface_id": "ble_0",
+   "kind": "interface",
+   "levels": [
+    1,
+    3
+   ],
+   "name": "Sample Name 33",
+   "power_cycle": false
+  }
+ ],
+ "units": [
+  "meshsat-oob-agent",
+  "docker",
+  "netplan-wpa-wlan0",
+  "systemd-networkd",
+  "x1202-monitor",
+  "meshsat-mgmt-keepalive",
+  "meshsat-p2p-link",
+  "bluetooth"
+ ]
+}

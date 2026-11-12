@@ -1,0 +1,91 @@
+[
+ {
+  "addresses": [
+   {
+    "bearer_hint": 50,
+    "contact_id": "c432aee342f8c7006eee918ba7d12affe416",
+    "created_at": "2026-11-01T09:50:00Z",
+    "id": "c49e6fbe368bdf49bf849e4ac4b392560b1e",
+    "kind": "SMS",
+    "label": "label-3",
+    "origin": "Check in at the north gate",
+    "primary_rank": 0,
+    "updated_at": "2026-11-01T09:50:00Z",
+    "value": "+447700900005",
+    "verified": false
+   }
+  ],
+  "created_at": "2026-11-01T09:50:00Z",
+  "display_name": "Sample Display 20",
+  "hub_version": 0,
+  "id": "c432aee342f8c7006eee918ba7d12affe416",
+  "local_override": "Check in at the north gate",
+  "notes": "example-14",
+  "origin": "Check in at the north gate",
+  "tenant_id": "default",
+  "trust_level": 0,
+  "updated_at": "2026-11-01T09:50:00Z"
+ },
+ {
+  "addresses": [
+   {
+    "bearer_hint": 50,
+    "contact_id": "26106d23eba0d90391005ea8723a68d6d2ca",
+    "created_at": "2026-11-01T09:50:00Z",
+    "id": "1f237f66ebcf144781289bb14cddbcc5ec1b",
+    "kind": "IRIDIUM_IMT",
+    "origin": "local",
+    "primary_rank": 0,
+    "updated_at": "2026-11-01T09:50:00Z",
+    "value": "+447700900006",
+    "verified": false
+   },
+   {
+    "bearer_hint": 50,
+    "contact_id": "26106d23eba0d90391005ea8723a68d6d2ca",
+    "created_at": "2026-11-01T09:40:00Z",
+    "id": "d81cc8e807bc7a657dfefabcfe88ee7b343d",
+    "kind": "SMS",
+    "origin": "local",
+    "primary_rank": 0,
+    "updated_at": "2026-11-01T09:40:00Z",
+    "value": "+447700900002",
+    "verified": false
+   }
+  ],
+  "created_at": "2026-11-01T09:40:00Z",
+  "display_name": "example-15",
+  "hub_version": 0,
+  "id": "26106d23eba0d90391005ea8723a68d6d2ca",
+  "local_override": "Team two at the crossing",
+  "origin": "imported",
+  "tenant_id": "",
+  "trust_level": 0,
+  "updated_at": "2026-11-01T09:40:00Z"
+ },
+ {
+  "addresses": [
+   {
+    "bearer_hint": 50,
+    "contact_id": "22d00ecc0b35f8ad70530c962009dc5c4bfb",
+    "created_at": "2026-11-01T09:50:00Z",
+    "id": "1de45fe721616de679e5155338f48267e636",
+    "kind": "MQTT",
+    "origin": "local",
+    "primary_rank": 0,
+    "updated_at": "2026-11-01T09:50:00Z",
+    "value": "example-4",
+    "verified": false
+   }
+  ],
+  "created_at": "2026-11-01T09:30:00Z",
+  "display_name": "example-16",
+  "hub_version": 0,
+  "id": "22d00ecc0b35f8ad70530c962009dc5c4bfb",
+  "local_override": "Water supply OK",
+  "origin": "imported",
+  "tenant_id": "",
+  "trust_level": 0,
+  "updated_at": "2026-11-01T09:30:00Z"
+ }
+]

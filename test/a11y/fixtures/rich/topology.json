@@ -1,0 +1,45 @@
+{
+ "links": [],
+ "nodes": [
+  {
+   "battery": 101,
+   "id": "a11ce004",
+   "label": "example-17",
+   "last_seen": 1793526600,
+   "online": true,
+   "snr": 0
+  },
+  {
+   "battery": 0,
+   "id": "a11ce003",
+   "label": "label-27",
+   "last_seen": 1793526000,
+   "online": false,
+   "snr": 4
+  },
+  {
+   "battery": 0,
+   "id": "a11ce001",
+   "label": "example-18",
+   "last_seen": 1793525400,
+   "online": false,
+   "snr": 6.25
+  },
+  {
+   "battery": 0,
+   "id": "a11ce002",
+   "label": "label-28",
+   "last_seen": 1793524800,
+   "lat": 52.03,
+   "lon": 3.93,
+   "online": false,
+   "snr": 6.75
+  }
+ ],
+ "stats": {
+  "avg_snr": 5.666666666666667,
+  "online_nodes": 1,
+  "total_links": 0,
+  "total_nodes": 4
+ }
+}

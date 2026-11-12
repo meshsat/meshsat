@@ -1,0 +1,31 @@
+{
+ "connected": true,
+ "health_detail": "Check in at the north gate",
+ "health_state": "ok",
+ "iccid": "+447700900003",
+ "imei": "+447700900004",
+ "model": "A7670E-FASE",
+ "network_type": "LTE",
+ "operator": "KPN",
+ "port": "Check in at the north gate",
+ "registration": "registered_home",
+ "sim_state": "READY",
+ "sms_bundle": {
+  "alert_configured": true,
+  "alerted": false,
+  "empty": false,
+  "expired": false,
+  "expires_at": "2026-11-01T09:50:00Z",
+  "expiring_soon": false,
+  "low": false,
+  "remaining": 243,
+  "reset_at": "2026-11-01T09:50:00Z",
+  "sent": 6,
+  "size": 250,
+  "uncertain": 1,
+  "usable": 243,
+  "warn_at": 50
+ },
+ "sms_received": 0,
+ "sms_sent": 0
+}

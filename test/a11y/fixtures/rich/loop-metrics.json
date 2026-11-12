@@ -1,0 +1,6 @@
+{
+ "delivery_dedups": 0,
+ "hop_limit_drops": 0,
+ "self_loop_drops": 0,
+ "visited_set_drops": 0
+}

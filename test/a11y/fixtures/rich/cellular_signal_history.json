@@ -1,0 +1,194 @@
+[
+ {
+  "bars": 5,
+  "dbm": -73,
+  "id": 71202,
+  "operator": "Check in at the north gate",
+  "technology": "LTE",
+  "timestamp": 1793526600
+ },
+ {
+  "bars": 5,
+  "dbm": -73,
+  "id": 71201,
+  "operator": "Team two at the crossing",
+  "technology": "LTE",
+  "timestamp": 1793526000
+ },
+ {
+  "bars": 5,
+  "dbm": -73,
+  "id": 71200,
+  "operator": "Water supply OK",
+  "technology": "LTE",
+  "timestamp": 1793525400
+ },
+ {
+  "bars": 5,
+  "dbm": -73,
+  "id": 71199,
+  "operator": "All clear on channel one",
+  "technology": "LTE",
+  "timestamp": 1793524800
+ },
+ {
+  "bars": 5,
+  "dbm": -73,
+  "id": 71198,
+  "operator": "Moving to point B",
+  "technology": "LTE",
+  "timestamp": 1793524200
+ },
+ {
+  "bars": 5,
+  "dbm": -73,
+  "id": 71197,
+  "operator": "Battery at 60 percent",
+  "technology": "LTE",
+  "timestamp": 1793523600
+ },
+ {
+  "bars": 5,
+  "dbm": -73,
+  "id": 71196,
+  "operator": "Need a radio check",
+  "technology": "LTE",
+  "timestamp": 1793523000
+ },
+ {
+  "bars": 4,
+  "dbm": -83,
+  "id": 71195,
+  "operator": "Arrived at the shelter",
+  "technology": "LTE",
+  "timestamp": 1793522400
+ },
+ {
+  "bars": 4,
+  "dbm": -83,
+  "id": 71194,
+  "operator": "Check in at the north gate",
+  "technology": "LTE",
+  "timestamp": 1793521800
+ },
+ {
+  "bars": 4,
+  "dbm": -83,
+  "id": 71193,
+  "operator": "Team two at the crossing",
+  "technology": "LTE",
+  "timestamp": 1793521200
+ },
+ {
+  "bars": 4,
+  "dbm": -83,
+  "id": 71192,
+  "operator": "Water supply OK",
+  "technology": "LTE",
+  "timestamp": 1793520600
+ },
+ {
+  "bars": 4,
+  "dbm": -83,
+  "id": 71191,
+  "operator": "All clear on channel one",
+  "technology": "LTE",
+  "timestamp": 1793520000
+ },
+ {
+  "bars": 5,
+  "dbm": -73,
+  "id": 71190,
+  "operator": "Moving to point B",
+  "technology": "LTE",
+  "timestamp": 1793519400
+ },
+ {
+  "bars": 5,
+  "dbm": -73,
+  "id": 71189,
+  "operator": "Battery at 60 percent",
+  "technology": "LTE",
+  "timestamp": 1793518800
+ },
+ {
+  "bars": 4,
+  "dbm": -83,
+  "id": 71188,
+  "operator": "Need a radio check",
+  "technology": "LTE",
+  "timestamp": 1793518200
+ },
+ {
+  "bars": 5,
+  "dbm": -73,
+  "id": 71187,
+  "operator": "Arrived at the shelter",
+  "technology": "LTE",
+  "timestamp": 1793517600
+ },
+ {
+  "bars": 5,
+  "dbm": -73,
+  "id": 71186,
+  "operator": "Check in at the north gate",
+  "technology": "LTE",
+  "timestamp": 1793517000
+ },
+ {
+  "bars": 5,
+  "dbm": -73,
+  "id": 71185,
+  "operator": "Team two at the crossing",
+  "technology": "LTE",
+  "timestamp": 1793516400
+ },
+ {
+  "bars": 5,
+  "dbm": -73,
+  "id": 71184,
+  "operator": "Water supply OK",
+  "technology": "LTE",
+  "timestamp": 1793515800
+ },
+ {
+  "bars": 4,
+  "dbm": -83,
+  "id": 71183,
+  "operator": "All clear on channel one",
+  "technology": "LTE",
+  "timestamp": 1793515200
+ },
+ {
+  "bars": 5,
+  "dbm": -73,
+  "id": 71182,
+  "operator": "Moving to point B",
+  "technology": "LTE",
+  "timestamp": 1793514600
+ },
+ {
+  "bars": 4,
+  "dbm": -83,
+  "id": 71181,
+  "operator": "Battery at 60 percent",
+  "technology": "LTE",
+  "timestamp": 1793514000
+ },
+ {
+  "bars": 5,
+  "dbm": -73,
+  "id": 71180,
+  "operator": "Need a radio check",
+  "technology": "LTE",
+  "timestamp": 1793513400
+ },
+ {
+  "bars": 4,
+  "dbm": -83,
+  "id": 71179,
+  "operator": "Arrived at the shelter",
+  "technology": "LTE",
+  "timestamp": 1793512800
+ }
+]

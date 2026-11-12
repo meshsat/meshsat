@@ -170,6 +170,47 @@ test:web:
     - cd web
     - npm ci --no-audit --no-fund
     - npm test
+    # The same build the image ships (Dockerfile web stage: node:22-alpine,
+    # npm ci, npm run build), handed to test:a11y. [MESHSAT-1843]
+    - npm run build
+  artifacts:
+    paths:
+      - web/dist/
+    expire_in: 1 week
+  rules:
+    - when: always
+
+# -----------------------------------------------------------------------------
+# TEST:A11Y — SIDN deliverable D5: WCAG 2.1 AA on Dashboard, Messages (with
+# Inbox and Compose), Map and Settings. Headless Chromium loads the built app
+# from disk with synthetic API answers (test/a11y/fixtures, no server, no
+# network), runs axe-core on 197 states in three shells and counts form
+# controls with no label. Any count above test/a11y/baseline.json fails, and so
+# does the canary (known defects injected into the app must be found). Unit
+# tests of the ratchet run first. Reports: a11y-results/. [MESHSAT-1843]
+# -----------------------------------------------------------------------------
+test:a11y:
+  stage: validate
+  tags: [multiarch]
+  # Must match the playwright version pinned in test/a11y/package.json.
+  image: mcr.microsoft.com/playwright:v1.59.1-noble
+  needs:
+    - job: test:web
+      artifacts: true
+  timeout: 20m
+  script:
+    - npm ci --prefix test/a11y --no-audit --no-fund --ignore-scripts
+    - node --test test/a11y/ratchet.test.mjs test/a11y/fixtures.test.mjs
+    - node test/a11y/run.mjs --dist web/dist --out a11y-results
+  artifacts:
+    when: always
+    expire_in: 30 days
+    paths:
+      - a11y-results/
+    reports:
+      junit: a11y-results/junit.xml
+  # Measure first: the gate goes hard once CI's counts match the local ones.
+  allow_failure: true
   rules:
     - when: always
 

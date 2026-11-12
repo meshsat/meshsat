@@ -1,0 +1,18 @@
+[
+ {
+  "dest_hash": "a87b8f78fc8f610ec2bd5a73c5014ab2",
+  "display_name": "Sample Display 25",
+  "hops": 1,
+  "interface": "tcp_rns_0",
+  "last_seen": "2026-11-01T09:50:00Z",
+  "stamp_cost": 0
+ },
+ {
+  "dest_hash": "82a3af7a3934b19bd48916927c256e00",
+  "display_name": "Sample Display 26",
+  "hops": 1,
+  "interface": "tcp_0",
+  "last_seen": "2026-11-01T09:40:00Z",
+  "stamp_cost": 0
+ }
+]

@@ -1,0 +1,6 @@
+{
+ "announce_interval": 300,
+ "imt_rns_framing": false,
+ "listen_addr": "Check in at the north gate",
+ "listen_port": 4242
+}

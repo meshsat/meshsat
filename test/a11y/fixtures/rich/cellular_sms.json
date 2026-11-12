@@ -1,0 +1,82 @@
+[
+ {
+  "created_at": "2026-11-01T09:50:00Z",
+  "direction": "tx",
+  "encrypted": false,
+  "id": 599,
+  "phone": "+447700900001",
+  "status": "sent",
+  "text": "4e960d1516219ba0432bd9f49a0490d7725373cf9872",
+  "timestamp": 1793526600
+ },
+ {
+  "created_at": "2026-11-01T09:40:00Z",
+  "direction": "tx",
+  "encrypted": false,
+  "id": 598,
+  "phone": "+447700900001",
+  "status": "sent",
+  "text": "Team two at the crossing",
+  "timestamp": 1793526000
+ },
+ {
+  "created_at": "2026-11-01T09:30:00Z",
+  "direction": "rx",
+  "encrypted": false,
+  "id": 597,
+  "phone": "+447700900001",
+  "status": "delivered",
+  "text": "Water supply OK",
+  "timestamp": 1793525400
+ },
+ {
+  "created_at": "2026-11-01T09:20:00Z",
+  "direction": "rx",
+  "encrypted": true,
+  "id": 596,
+  "phone": "+447700900002",
+  "status": "delivered",
+  "text": "All clear on channel one",
+  "timestamp": 1793524800
+ },
+ {
+  "created_at": "2026-11-01T09:10:00Z",
+  "direction": "tx",
+  "encrypted": false,
+  "id": 595,
+  "phone": "+447700900002",
+  "status": "sent",
+  "text": "Moving to point B",
+  "timestamp": 1793524200
+ },
+ {
+  "created_at": "2026-11-01T09:00:00Z",
+  "direction": "tx",
+  "encrypted": false,
+  "id": 594,
+  "phone": "+447700900002",
+  "status": "sent",
+  "text": "Battery at 60 percent",
+  "timestamp": 1793523600
+ },
+ {
+  "created_at": "2026-11-01T08:50:00Z",
+  "direction": "tx",
+  "encrypted": false,
+  "id": 593,
+  "phone": "+447700900002",
+  "status": "failed",
+  "text": "Need a radio check",
+  "timestamp": 1793523000
+ },
+ {
+  "created_at": "2026-11-01T08:40:00Z",
+  "direction": "rx",
+  "encrypted": false,
+  "id": 592,
+  "phone": "+447700900002",
+  "status": "delivered",
+  "text": "Arrived at the shelter",
+  "timestamp": 1793522400
+ }
+]

@@ -1,0 +1,821 @@
+{
+ "schema": 1,
+ "axe": "4.13.0",
+ "tags": [
+  "wcag2a",
+  "wcag2aa",
+  "wcag21a",
+  "wcag21aa"
+ ],
+ "measured": {
+  "commit": "9622e30fb22073b1f876c23424d14c95d3c8b8ad",
+  "date": "2026-11-12",
+  "total": 3153
+ },
+ "notes": [],
+ "states": {
+  "desktop-engineer/empty/compose:main": {
+   "color-contrast": 3,
+   "meshsat-unlabelled-control": 5,
+   "select-name": 3
+  },
+  "desktop-engineer/empty/compose:picker": {
+   "color-contrast": 3,
+   "meshsat-unlabelled-control": 5,
+   "select-name": 3
+  },
+  "desktop-engineer/empty/dashboard:customize": {
+   "color-contrast": 58
+  },
+  "desktop-engineer/empty/dashboard:main": {
+   "color-contrast": 51
+  },
+  "desktop-engineer/empty/inbox:main": {
+   "color-contrast": 1
+  },
+  "desktop-engineer/empty/map:geofence": {
+   "color-contrast": 8,
+   "meshsat-unlabelled-control": 1,
+   "select-name": 1
+  },
+  "desktop-engineer/empty/map:main": {
+   "color-contrast": 8,
+   "meshsat-unlabelled-control": 1,
+   "select-name": 1
+  },
+  "desktop-engineer/empty/messages:broadcasts": {
+   "color-contrast": 7,
+   "meshsat-unlabelled-control": 1,
+   "select-name": 1
+  },
+  "desktop-engineer/empty/messages:mesh": {
+   "color-contrast": 16
+  },
+  "desktop-engineer/empty/messages:sbd": {
+   "color-contrast": 5
+  },
+  "desktop-engineer/empty/messages:sms": {
+   "color-contrast": 7,
+   "meshsat-unlabelled-control": 2
+  },
+  "desktop-engineer/empty/messages:webhooks": {
+   "color-contrast": 8
+  },
+  "desktop-engineer/empty/settings:about": {
+   "color-contrast": 7
+  },
+  "desktop-engineer/empty/settings:aprs": {
+   "color-contrast": 8
+  },
+  "desktop-engineer/empty/settings:canned": {
+   "color-contrast": 2,
+   "meshsat-unlabelled-control": 1
+  },
+  "desktop-engineer/empty/settings:cell": {
+   "color-contrast": 12,
+   "meshsat-unlabelled-control": 1
+  },
+  "desktop-engineer/empty/settings:cellular": {
+   "color-contrast": 21,
+   "label": 3,
+   "meshsat-unlabelled-control": 10,
+   "select-name": 1
+  },
+  "desktop-engineer/empty/settings:channels": {},
+  "desktop-engineer/empty/settings:config_mgmt": {
+   "color-contrast": 2,
+   "meshsat-unlabelled-control": 1
+  },
+  "desktop-engineer/empty/settings:credentials": {
+   "color-contrast": 2
+  },
+  "desktop-engineer/empty/settings:deadman": {
+   "color-contrast": 4
+  },
+  "desktop-engineer/empty/settings:device_mqtt": {
+   "color-contrast": 5
+  },
+  "desktop-engineer/empty/settings:devices": {
+   "color-contrast": 2
+  },
+  "desktop-engineer/empty/settings:iridium": {
+   "color-contrast": 17,
+   "label": 8,
+   "meshsat-unlabelled-control": 9,
+   "select-name": 1
+  },
+  "desktop-engineer/empty/settings:media_hop": {
+   "color-contrast": 5
+  },
+  "desktop-engineer/empty/settings:mqtt": {
+   "color-contrast": 5,
+   "label": 4,
+   "meshsat-unlabelled-control": 5
+  },
+  "desktop-engineer/empty/settings:network": {
+   "color-contrast": 6
+  },
+  "desktop-engineer/empty/settings:position": {
+   "color-contrast": 5,
+   "label": 3,
+   "meshsat-unlabelled-control": 3
+  },
+  "desktop-engineer/empty/settings:radio": {
+   "meshsat-unlabelled-control": 1,
+   "select-name": 1
+  },
+  "desktop-engineer/empty/settings:range_test": {
+   "color-contrast": 4,
+   "label": 1,
+   "meshsat-unlabelled-control": 2
+  },
+  "desktop-engineer/empty/settings:remote_mgmt": {
+   "color-contrast": 8,
+   "label": 1,
+   "meshsat-unlabelled-control": 5,
+   "select-name": 3
+  },
+  "desktop-engineer/empty/settings:routing": {
+   "color-contrast": 34,
+   "label": 3,
+   "meshsat-unlabelled-control": 11
+  },
+  "desktop-engineer/empty/settings:store_forward": {
+   "color-contrast": 4,
+   "label": 1,
+   "meshsat-unlabelled-control": 2
+  },
+  "desktop-engineer/empty/settings:tak": {
+   "color-contrast": 11,
+   "label": 5,
+   "meshsat-unlabelled-control": 9,
+   "select-name": 1
+  },
+  "desktop-engineer/empty/settings:tetra": {},
+  "desktop-engineer/empty/settings:zigbee": {
+   "color-contrast": 13,
+   "label": 5,
+   "meshsat-unlabelled-control": 6
+  },
+  "desktop-engineer/empty/shell:header": {
+   "color-contrast": 23
+  },
+  "desktop-engineer/empty/shell:power": {
+   "color-contrast": 23
+  },
+  "desktop-engineer/rich/compose:main": {
+   "color-contrast": 3,
+   "meshsat-unlabelled-control": 5,
+   "select-name": 3
+  },
+  "desktop-engineer/rich/compose:picker": {
+   "aria-input-field-name": 1,
+   "color-contrast": 4,
+   "meshsat-unlabelled-control": 5,
+   "select-name": 3
+  },
+  "desktop-engineer/rich/dashboard:customize": {
+   "color-contrast": 134,
+   "scrollable-region-focusable": 1
+  },
+  "desktop-engineer/rich/dashboard:main": {
+   "color-contrast": 130,
+   "scrollable-region-focusable": 1
+  },
+  "desktop-engineer/rich/inbox:main": {
+   "color-contrast": 3
+  },
+  "desktop-engineer/rich/map:geofence": {
+   "aria-command-name": 4,
+   "color-contrast": 10,
+   "meshsat-unlabelled-control": 1,
+   "select-name": 1
+  },
+  "desktop-engineer/rich/map:main": {
+   "aria-command-name": 4,
+   "color-contrast": 10,
+   "meshsat-unlabelled-control": 1,
+   "select-name": 1
+  },
+  "desktop-engineer/rich/map:popup": {
+   "aria-command-name": 4,
+   "color-contrast": 12,
+   "meshsat-unlabelled-control": 1,
+   "select-name": 1
+  },
+  "desktop-engineer/rich/messages:broadcasts": {
+   "color-contrast": 7,
+   "meshsat-unlabelled-control": 1,
+   "select-name": 1
+  },
+  "desktop-engineer/rich/messages:mesh": {
+   "color-contrast": 46
+  },
+  "desktop-engineer/rich/messages:sbd": {
+   "color-contrast": 5
+  },
+  "desktop-engineer/rich/messages:sms": {
+   "color-contrast": 15,
+   "meshsat-unlabelled-control": 2
+  },
+  "desktop-engineer/rich/messages:webhooks": {
+   "color-contrast": 8
+  },
+  "desktop-engineer/rich/settings:about": {
+   "color-contrast": 7
+  },
+  "desktop-engineer/rich/settings:aprs": {
+   "color-contrast": 8
+  },
+  "desktop-engineer/rich/settings:canned": {
+   "color-contrast": 2,
+   "meshsat-unlabelled-control": 1
+  },
+  "desktop-engineer/rich/settings:cell": {
+   "color-contrast": 12,
+   "meshsat-unlabelled-control": 1
+  },
+  "desktop-engineer/rich/settings:cellular": {
+   "color-contrast": 24,
+   "label": 3,
+   "meshsat-unlabelled-control": 10,
+   "select-name": 1
+  },
+  "desktop-engineer/rich/settings:channels": {},
+  "desktop-engineer/rich/settings:config_mgmt": {
+   "color-contrast": 2,
+   "meshsat-unlabelled-control": 1
+  },
+  "desktop-engineer/rich/settings:credentials": {
+   "color-contrast": 2
+  },
+  "desktop-engineer/rich/settings:deadman": {
+   "color-contrast": 4
+  },
+  "desktop-engineer/rich/settings:device_mqtt": {
+   "color-contrast": 5
+  },
+  "desktop-engineer/rich/settings:devices": {
+   "color-contrast": 2
+  },
+  "desktop-engineer/rich/settings:iridium": {
+   "color-contrast": 16,
+   "label": 8,
+   "meshsat-unlabelled-control": 9,
+   "select-name": 1
+  },
+  "desktop-engineer/rich/settings:media_hop": {
+   "color-contrast": 5
+  },
+  "desktop-engineer/rich/settings:mqtt": {
+   "color-contrast": 5,
+   "label": 4,
+   "meshsat-unlabelled-control": 5
+  },
+  "desktop-engineer/rich/settings:network": {
+   "color-contrast": 6
+  },
+  "desktop-engineer/rich/settings:position": {
+   "color-contrast": 5,
+   "label": 3,
+   "meshsat-unlabelled-control": 3
+  },
+  "desktop-engineer/rich/settings:radio": {
+   "meshsat-unlabelled-control": 1,
+   "select-name": 1
+  },
+  "desktop-engineer/rich/settings:range_test": {
+   "color-contrast": 4,
+   "label": 1,
+   "meshsat-unlabelled-control": 2
+  },
+  "desktop-engineer/rich/settings:remote_mgmt": {
+   "color-contrast": 14,
+   "label": 1,
+   "meshsat-unlabelled-control": 5,
+   "select-name": 3
+  },
+  "desktop-engineer/rich/settings:routing": {
+   "color-contrast": 64,
+   "label": 6,
+   "meshsat-unlabelled-control": 17
+  },
+  "desktop-engineer/rich/settings:store_forward": {
+   "color-contrast": 4,
+   "label": 1,
+   "meshsat-unlabelled-control": 2
+  },
+  "desktop-engineer/rich/settings:tak": {
+   "color-contrast": 11,
+   "label": 5,
+   "meshsat-unlabelled-control": 9,
+   "select-name": 1
+  },
+  "desktop-engineer/rich/settings:tetra": {},
+  "desktop-engineer/rich/settings:zigbee": {
+   "color-contrast": 13,
+   "label": 5,
+   "meshsat-unlabelled-control": 6
+  },
+  "desktop-engineer/rich/shell:header": {
+   "color-contrast": 22
+  },
+  "desktop-engineer/rich/shell:power": {
+   "color-contrast": 22
+  },
+  "kiosk-engineer/empty/compose:main": {
+   "color-contrast": 3,
+   "meshsat-unlabelled-control": 5,
+   "select-name": 3
+  },
+  "kiosk-engineer/empty/compose:picker": {
+   "color-contrast": 3,
+   "meshsat-unlabelled-control": 5,
+   "select-name": 3
+  },
+  "kiosk-engineer/empty/dashboard:customize": {
+   "color-contrast": 58
+  },
+  "kiosk-engineer/empty/dashboard:main": {
+   "color-contrast": 51
+  },
+  "kiosk-engineer/empty/inbox:main": {
+   "color-contrast": 1
+  },
+  "kiosk-engineer/empty/map:geofence": {
+   "color-contrast": 8,
+   "meshsat-unlabelled-control": 1,
+   "select-name": 1
+  },
+  "kiosk-engineer/empty/map:main": {
+   "color-contrast": 7,
+   "meshsat-unlabelled-control": 1,
+   "select-name": 1
+  },
+  "kiosk-engineer/empty/messages:broadcasts": {
+   "color-contrast": 7,
+   "meshsat-unlabelled-control": 1,
+   "select-name": 1
+  },
+  "kiosk-engineer/empty/messages:mesh": {
+   "color-contrast": 16
+  },
+  "kiosk-engineer/empty/messages:sbd": {
+   "color-contrast": 5
+  },
+  "kiosk-engineer/empty/messages:sms": {
+   "color-contrast": 7,
+   "meshsat-unlabelled-control": 2
+  },
+  "kiosk-engineer/empty/messages:webhooks": {
+   "color-contrast": 8
+  },
+  "kiosk-engineer/empty/settings:about": {
+   "color-contrast": 7
+  },
+  "kiosk-engineer/empty/settings:aprs": {
+   "color-contrast": 8
+  },
+  "kiosk-engineer/empty/settings:canned": {
+   "color-contrast": 2,
+   "meshsat-unlabelled-control": 1
+  },
+  "kiosk-engineer/empty/settings:cell": {
+   "color-contrast": 12,
+   "meshsat-unlabelled-control": 1
+  },
+  "kiosk-engineer/empty/settings:cellular": {
+   "color-contrast": 21,
+   "label": 3,
+   "meshsat-unlabelled-control": 10,
+   "select-name": 1
+  },
+  "kiosk-engineer/empty/settings:channels": {},
+  "kiosk-engineer/empty/settings:config_mgmt": {
+   "color-contrast": 2,
+   "meshsat-unlabelled-control": 1
+  },
+  "kiosk-engineer/empty/settings:credentials": {
+   "color-contrast": 2
+  },
+  "kiosk-engineer/empty/settings:deadman": {
+   "color-contrast": 4
+  },
+  "kiosk-engineer/empty/settings:device_mqtt": {
+   "color-contrast": 5
+  },
+  "kiosk-engineer/empty/settings:devices": {
+   "color-contrast": 2
+  },
+  "kiosk-engineer/empty/settings:iridium": {
+   "color-contrast": 17,
+   "label": 8,
+   "meshsat-unlabelled-control": 9,
+   "select-name": 1
+  },
+  "kiosk-engineer/empty/settings:media_hop": {
+   "color-contrast": 5
+  },
+  "kiosk-engineer/empty/settings:mqtt": {
+   "color-contrast": 5,
+   "label": 4,
+   "meshsat-unlabelled-control": 5
+  },
+  "kiosk-engineer/empty/settings:network": {
+   "color-contrast": 6
+  },
+  "kiosk-engineer/empty/settings:position": {
+   "color-contrast": 5,
+   "label": 3,
+   "meshsat-unlabelled-control": 3
+  },
+  "kiosk-engineer/empty/settings:radio": {
+   "meshsat-unlabelled-control": 1,
+   "select-name": 1
+  },
+  "kiosk-engineer/empty/settings:range_test": {
+   "color-contrast": 4,
+   "label": 1,
+   "meshsat-unlabelled-control": 2
+  },
+  "kiosk-engineer/empty/settings:remote_mgmt": {
+   "color-contrast": 8,
+   "label": 1,
+   "meshsat-unlabelled-control": 5,
+   "select-name": 3
+  },
+  "kiosk-engineer/empty/settings:routing": {
+   "color-contrast": 34,
+   "label": 3,
+   "meshsat-unlabelled-control": 11
+  },
+  "kiosk-engineer/empty/settings:store_forward": {
+   "color-contrast": 4,
+   "label": 1,
+   "meshsat-unlabelled-control": 2
+  },
+  "kiosk-engineer/empty/settings:tak": {
+   "color-contrast": 11,
+   "label": 5,
+   "meshsat-unlabelled-control": 9,
+   "select-name": 1
+  },
+  "kiosk-engineer/empty/settings:tetra": {},
+  "kiosk-engineer/empty/settings:zigbee": {
+   "color-contrast": 13,
+   "label": 5,
+   "meshsat-unlabelled-control": 6
+  },
+  "kiosk-engineer/empty/shell:header": {
+   "aria-prohibited-attr": 5,
+   "color-contrast": 11
+  },
+  "kiosk-engineer/empty/shell:power": {
+   "aria-prohibited-attr": 5,
+   "color-contrast": 11
+  },
+  "kiosk-engineer/rich/compose:main": {
+   "color-contrast": 3,
+   "meshsat-unlabelled-control": 5,
+   "select-name": 3
+  },
+  "kiosk-engineer/rich/compose:picker": {
+   "aria-input-field-name": 1,
+   "color-contrast": 4,
+   "meshsat-unlabelled-control": 5,
+   "select-name": 3
+  },
+  "kiosk-engineer/rich/dashboard:customize": {
+   "color-contrast": 133,
+   "scrollable-region-focusable": 1
+  },
+  "kiosk-engineer/rich/dashboard:main": {
+   "color-contrast": 129,
+   "scrollable-region-focusable": 1
+  },
+  "kiosk-engineer/rich/inbox:main": {
+   "color-contrast": 3
+  },
+  "kiosk-engineer/rich/map:geofence": {
+   "aria-command-name": 4,
+   "color-contrast": 10,
+   "meshsat-unlabelled-control": 1,
+   "select-name": 1
+  },
+  "kiosk-engineer/rich/map:main": {
+   "aria-command-name": 4,
+   "color-contrast": 9,
+   "meshsat-unlabelled-control": 1,
+   "select-name": 1
+  },
+  "kiosk-engineer/rich/map:popup": {
+   "aria-command-name": 4,
+   "color-contrast": 11,
+   "meshsat-unlabelled-control": 1,
+   "select-name": 1
+  },
+  "kiosk-engineer/rich/messages:broadcasts": {
+   "color-contrast": 7,
+   "meshsat-unlabelled-control": 1,
+   "select-name": 1
+  },
+  "kiosk-engineer/rich/messages:mesh": {
+   "color-contrast": 36
+  },
+  "kiosk-engineer/rich/messages:sbd": {
+   "color-contrast": 5
+  },
+  "kiosk-engineer/rich/messages:sms": {
+   "color-contrast": 15,
+   "meshsat-unlabelled-control": 2
+  },
+  "kiosk-engineer/rich/messages:webhooks": {
+   "color-contrast": 8
+  },
+  "kiosk-engineer/rich/settings:about": {
+   "color-contrast": 7
+  },
+  "kiosk-engineer/rich/settings:aprs": {
+   "color-contrast": 8
+  },
+  "kiosk-engineer/rich/settings:canned": {
+   "color-contrast": 2,
+   "meshsat-unlabelled-control": 1
+  },
+  "kiosk-engineer/rich/settings:cell": {
+   "color-contrast": 12,
+   "meshsat-unlabelled-control": 1
+  },
+  "kiosk-engineer/rich/settings:cellular": {
+   "color-contrast": 24,
+   "label": 3,
+   "meshsat-unlabelled-control": 10,
+   "select-name": 1
+  },
+  "kiosk-engineer/rich/settings:channels": {},
+  "kiosk-engineer/rich/settings:config_mgmt": {
+   "color-contrast": 2,
+   "meshsat-unlabelled-control": 1
+  },
+  "kiosk-engineer/rich/settings:credentials": {
+   "color-contrast": 2
+  },
+  "kiosk-engineer/rich/settings:deadman": {
+   "color-contrast": 4
+  },
+  "kiosk-engineer/rich/settings:device_mqtt": {
+   "color-contrast": 5
+  },
+  "kiosk-engineer/rich/settings:devices": {
+   "color-contrast": 2
+  },
+  "kiosk-engineer/rich/settings:iridium": {
+   "color-contrast": 16,
+   "label": 8,
+   "meshsat-unlabelled-control": 9,
+   "select-name": 1
+  },
+  "kiosk-engineer/rich/settings:media_hop": {
+   "color-contrast": 5
+  },
+  "kiosk-engineer/rich/settings:mqtt": {
+   "color-contrast": 5,
+   "label": 4,
+   "meshsat-unlabelled-control": 5
+  },
+  "kiosk-engineer/rich/settings:network": {
+   "color-contrast": 6
+  },
+  "kiosk-engineer/rich/settings:position": {
+   "color-contrast": 5,
+   "label": 3,
+   "meshsat-unlabelled-control": 3
+  },
+  "kiosk-engineer/rich/settings:radio": {
+   "meshsat-unlabelled-control": 1,
+   "select-name": 1
+  },
+  "kiosk-engineer/rich/settings:range_test": {
+   "color-contrast": 4,
+   "label": 1,
+   "meshsat-unlabelled-control": 2
+  },
+  "kiosk-engineer/rich/settings:remote_mgmt": {
+   "color-contrast": 14,
+   "label": 1,
+   "meshsat-unlabelled-control": 5,
+   "select-name": 3
+  },
+  "kiosk-engineer/rich/settings:routing": {
+   "color-contrast": 64,
+   "label": 6,
+   "meshsat-unlabelled-control": 17
+  },
+  "kiosk-engineer/rich/settings:store_forward": {
+   "color-contrast": 4,
+   "label": 1,
+   "meshsat-unlabelled-control": 2
+  },
+  "kiosk-engineer/rich/settings:tak": {
+   "color-contrast": 11,
+   "label": 5,
+   "meshsat-unlabelled-control": 9,
+   "select-name": 1
+  },
+  "kiosk-engineer/rich/settings:tetra": {},
+  "kiosk-engineer/rich/settings:zigbee": {
+   "color-contrast": 13,
+   "label": 5,
+   "meshsat-unlabelled-control": 6
+  },
+  "kiosk-engineer/rich/shell:header": {
+   "aria-prohibited-attr": 5,
+   "color-contrast": 11
+  },
+  "kiosk-engineer/rich/shell:power": {
+   "aria-prohibited-attr": 5,
+   "color-contrast": 11
+  },
+  "kiosk-operator/empty/compose:main": {
+   "color-contrast": 3,
+   "meshsat-unlabelled-control": 2
+  },
+  "kiosk-operator/empty/compose:picker": {
+   "color-contrast": 3,
+   "meshsat-unlabelled-control": 2
+  },
+  "kiosk-operator/empty/dashboard:main": {
+   "color-contrast": 17
+  },
+  "kiosk-operator/empty/inbox:main": {
+   "color-contrast": 1
+  },
+  "kiosk-operator/empty/map:geofence": {
+   "color-contrast": 8,
+   "meshsat-unlabelled-control": 1,
+   "select-name": 1
+  },
+  "kiosk-operator/empty/map:main": {
+   "color-contrast": 7,
+   "meshsat-unlabelled-control": 1,
+   "select-name": 1
+  },
+  "kiosk-operator/empty/messages:broadcasts": {
+   "color-contrast": 7,
+   "meshsat-unlabelled-control": 1,
+   "select-name": 1
+  },
+  "kiosk-operator/empty/messages:mesh": {
+   "color-contrast": 16
+  },
+  "kiosk-operator/empty/messages:sbd": {
+   "color-contrast": 5
+  },
+  "kiosk-operator/empty/messages:sms": {
+   "color-contrast": 7,
+   "meshsat-unlabelled-control": 2
+  },
+  "kiosk-operator/empty/messages:webhooks": {
+   "color-contrast": 8
+  },
+  "kiosk-operator/empty/settings:cell": {
+   "color-contrast": 13,
+   "meshsat-unlabelled-control": 1
+  },
+  "kiosk-operator/empty/settings:cellular": {
+   "color-contrast": 22,
+   "label": 3,
+   "meshsat-unlabelled-control": 10,
+   "select-name": 1
+  },
+  "kiosk-operator/empty/settings:channels": {
+   "color-contrast": 1
+  },
+  "kiosk-operator/empty/settings:iridium": {
+   "color-contrast": 18,
+   "label": 8,
+   "meshsat-unlabelled-control": 9,
+   "select-name": 1
+  },
+  "kiosk-operator/empty/settings:position": {
+   "color-contrast": 6,
+   "label": 3,
+   "meshsat-unlabelled-control": 3
+  },
+  "kiosk-operator/empty/settings:radio": {
+   "color-contrast": 1,
+   "meshsat-unlabelled-control": 1,
+   "select-name": 1
+  },
+  "kiosk-operator/empty/settings:tetra": {
+   "color-contrast": 1
+  },
+  "kiosk-operator/empty/shell:header": {
+   "aria-prohibited-attr": 5,
+   "color-contrast": 7
+  },
+  "kiosk-operator/empty/shell:more": {
+   "aria-prohibited-attr": 5,
+   "color-contrast": 7
+  },
+  "kiosk-operator/empty/shell:power": {
+   "aria-prohibited-attr": 5,
+   "color-contrast": 7
+  },
+  "kiosk-operator/rich/compose:main": {
+   "color-contrast": 3,
+   "meshsat-unlabelled-control": 2
+  },
+  "kiosk-operator/rich/compose:picker": {
+   "aria-input-field-name": 1,
+   "color-contrast": 4,
+   "meshsat-unlabelled-control": 2
+  },
+  "kiosk-operator/rich/dashboard:main": {
+   "color-contrast": 17
+  },
+  "kiosk-operator/rich/inbox:main": {
+   "color-contrast": 3
+  },
+  "kiosk-operator/rich/map:geofence": {
+   "aria-command-name": 4,
+   "color-contrast": 10,
+   "meshsat-unlabelled-control": 1,
+   "select-name": 1
+  },
+  "kiosk-operator/rich/map:main": {
+   "aria-command-name": 4,
+   "color-contrast": 9,
+   "meshsat-unlabelled-control": 1,
+   "select-name": 1
+  },
+  "kiosk-operator/rich/map:popup": {
+   "aria-command-name": 4,
+   "color-contrast": 11,
+   "meshsat-unlabelled-control": 1,
+   "select-name": 1
+  },
+  "kiosk-operator/rich/messages:broadcasts": {
+   "color-contrast": 7,
+   "meshsat-unlabelled-control": 1,
+   "select-name": 1
+  },
+  "kiosk-operator/rich/messages:mesh": {
+   "color-contrast": 37
+  },
+  "kiosk-operator/rich/messages:sbd": {
+   "color-contrast": 5
+  },
+  "kiosk-operator/rich/messages:sms": {
+   "color-contrast": 15,
+   "meshsat-unlabelled-control": 2
+  },
+  "kiosk-operator/rich/messages:webhooks": {
+   "color-contrast": 8
+  },
+  "kiosk-operator/rich/settings:cell": {
+   "color-contrast": 13,
+   "meshsat-unlabelled-control": 1
+  },
+  "kiosk-operator/rich/settings:cellular": {
+   "color-contrast": 25,
+   "label": 3,
+   "meshsat-unlabelled-control": 10,
+   "select-name": 1
+  },
+  "kiosk-operator/rich/settings:channels": {
+   "color-contrast": 1
+  },
+  "kiosk-operator/rich/settings:iridium": {
+   "color-contrast": 17,
+   "label": 8,
+   "meshsat-unlabelled-control": 9,
+   "select-name": 1
+  },
+  "kiosk-operator/rich/settings:position": {
+   "color-contrast": 6,
+   "label": 3,
+   "meshsat-unlabelled-control": 3
+  },
+  "kiosk-operator/rich/settings:radio": {
+   "color-contrast": 1,
+   "meshsat-unlabelled-control": 1,
+   "select-name": 1
+  },
+  "kiosk-operator/rich/settings:tetra": {
+   "color-contrast": 1
+  },
+  "kiosk-operator/rich/shell:header": {
+   "aria-prohibited-attr": 5,
+   "color-contrast": 7
+  },
+  "kiosk-operator/rich/shell:more": {
+   "aria-prohibited-attr": 5,
+   "color-contrast": 7
+  },
+  "kiosk-operator/rich/shell:power": {
+   "aria-prohibited-attr": 5,
+   "color-contrast": 7
+  }
+ }
+}

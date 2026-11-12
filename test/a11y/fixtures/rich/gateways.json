@@ -1,0 +1,186 @@
+{
+ "gateways": [
+  {
+   "config": {
+    "ack_attempts": 0,
+    "ack_timeout_ms": 0,
+    "aprs_is_enabled": false,
+    "aprs_is_filter_km": 100,
+    "aprs_is_filter_lat": 0,
+    "aprs_is_filter_lon": 0,
+    "aprs_is_passcode": "",
+    "aprs_is_server": "Check in at the north gate",
+    "audio_card": "AllInOneCable",
+    "beacon_repeat_gap_ms": 0,
+    "beacon_secs": 30,
+    "beacon_text": "",
+    "callsign": "N0CALL",
+    "external_direwolf": false,
+    "frequency_mhz": 144.8,
+    "kiss_baud": 115200,
+    "kiss_device": "9505792b6d8653bcfa380183e7c00c1f4c6cd158ea67",
+    "kiss_host": "192.0.2.10",
+    "kiss_port": 8001,
+    "mode": "kiss",
+    "modem_baud": 1200,
+    "persist": 0,
+    "position_beacon": false,
+    "position_beacon_min": 10,
+    "ptt_device": "",
+    "ptt_line": "",
+    "relay_third_party": false,
+    "slot_time": 0,
+    "ssid": 10,
+    "tx_delay": 50,
+    "tx_repeat": 2,
+    "tx_repeat_gap_ms": 4000,
+    "tx_tail": 0
+   },
+   "connected": true,
+   "connection_uptime": "Check in at the north gate",
+   "direwolf_bundled": false,
+   "enabled": true,
+   "errors": 0,
+   "health_detail": "Check in at the north gate",
+   "health_state": "degraded",
+   "instance_id": "aprs_0",
+   "last_activity": "2026-11-01T09:50:00Z",
+   "messages_in": 0,
+   "messages_out": 4,
+   "mode": "kiss",
+   "receive_state": "silent",
+   "state": "connected",
+   "type": "aprs"
+  },
+  {
+   "config": {
+    "allowed_senders": [
+     "+447700900002",
+     "+447700900001"
+    ],
+    "auto_connect_data": false,
+    "auto_reconnect": false,
+    "destination_numbers": [
+     "+447700900002"
+    ],
+    "dyndns": {
+     "custom_url": "",
+     "domain": "",
+     "enabled": false,
+     "interval": 300,
+     "password": "",
+     "provider": "",
+     "record_id": "",
+     "token": "",
+     "username": "Sample Username 21",
+     "zone_id": ""
+    },
+    "forward_all": false,
+    "inbound_channel": 0,
+    "max_sms_segments": 1,
+    "plaintext_peers": [
+     "+447700900001"
+    ],
+    "sms_prefix": "MeshSat",
+    "webhook_in_enabled": true
+   },
+   "connected": true,
+   "connection_uptime": "Team two at the crossing",
+   "enabled": true,
+   "errors": 0,
+   "health_detail": "Team two at the crossing",
+   "health_state": "ok",
+   "instance_id": "cellular_0",
+   "last_activity": "2026-11-01T09:40:00Z",
+   "messages_in": 0,
+   "messages_out": 0,
+   "type": "cellular"
+  },
+  {
+   "config": {},
+   "connected": true,
+   "connection_uptime": "Water supply OK",
+   "enabled": true,
+   "errors": 2226,
+   "health_detail": "Water supply OK",
+   "health_state": "ok",
+   "instance_id": "iridium_0",
+   "last_activity": "2026-11-01T09:30:00Z",
+   "messages_in": 0,
+   "messages_out": 0,
+   "type": "iridium"
+  },
+  {
+   "config": {
+    "mo_destination": "+447700900006"
+   },
+   "connected": false,
+   "enabled": false,
+   "errors": 0,
+   "health_detail": "All clear on channel one",
+   "health_state": "unknown",
+   "instance_id": "iridium_imt_0",
+   "messages_in": 0,
+   "messages_out": 0,
+   "type": "iridium_imt"
+  },
+  {
+   "config": {
+    "callsign_prefix": "N0CALL",
+    "coalesce_seconds": 60,
+    "cot_stale_seconds": 1800,
+    "hub_export": true,
+    "multicast": false,
+    "multicast_iface": "",
+    "protocol": "",
+    "tak_host": "",
+    "tak_port": 8087,
+    "tak_ssl": false
+   },
+   "connected": true,
+   "connection_uptime": "Moving to point B",
+   "enabled": true,
+   "errors": 0,
+   "instance_id": "tak_0",
+   "last_activity": "2026-11-01T09:10:00Z",
+   "messages_in": 0,
+   "messages_out": 0,
+   "type": "tak"
+  },
+  {
+   "config": {
+    "acks": "auto",
+    "destination": "",
+    "mode": "dmo",
+    "port": "",
+    "prefix": ""
+   },
+   "connected": false,
+   "enabled": false,
+   "errors": 0,
+   "instance_id": "tetra_0",
+   "messages_in": 0,
+   "messages_out": 0,
+   "type": "tetra"
+  },
+  {
+   "config": {
+    "default_cluster": 6,
+    "default_dst_addr": 65535,
+    "default_dst_ep": 1,
+    "forward_all": false,
+    "inbound_channel": 0,
+    "serial_port": "auto"
+   },
+   "connected": false,
+   "enabled": false,
+   "errors": 0,
+   "health_detail": "Need a radio check",
+   "health_state": "unknown",
+   "instance_id": "zigbee_0",
+   "messages_in": 0,
+   "messages_out": 0,
+   "type": "zigbee"
+  }
+ ]
+}

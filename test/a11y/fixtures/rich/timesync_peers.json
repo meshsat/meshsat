@@ -1,0 +1,39 @@
+{
+ "discovery_interval_sec": 600,
+ "enabled": true,
+ "interfaces": [
+  {
+   "iface": "ble_0",
+   "last_request_at": "2026-11-01T09:50:00Z",
+   "mode": "discovery",
+   "period_sec": 600
+  },
+  {
+   "bitrate_bps": 1200,
+   "iface": "mesh_0",
+   "last_request_at": "2026-11-01T09:40:00Z",
+   "mode": "discovery",
+   "period_sec": 600
+  },
+  {
+   "iface": "tcp_0",
+   "last_request_at": "2026-11-01T09:30:00Z",
+   "mode": "peer",
+   "peer_seen_at": "2026-11-01T09:30:00Z",
+   "period_sec": 30
+  }
+ ],
+ "peers": [
+  {
+   "dest_hash": "93b6a629200a17c4410ee71016c41b52",
+   "iface": "tcp_0",
+   "last_rtt_ms": 10.869275,
+   "last_seen": "2026-11-01T09:50:00Z",
+   "offset_ms": -5.564305292085296,
+   "samples": 14099,
+   "stale": false,
+   "stratum": 5
+  }
+ ],
+ "request_interval_sec": 30
+}

@@ -1,0 +1,23 @@
+[
+ {
+  "coded": true,
+  "config": {
+   "host": "example-22",
+   "ifac_netname": "Sample Ifac 38",
+   "managed": "hub",
+   "port": 4242,
+   "tls": false
+  },
+  "enabled": true,
+  "id": "tcp_rns_0",
+  "online": true,
+  "running": true,
+  "stats": {
+   "rx_bytes": 1427760,
+   "tx_bytes": 307157
+  },
+  "summary": "example-23",
+  "type": "tcp_rns",
+  "updated_at": "2026-11-01T09:50:00Z"
+ }
+]
