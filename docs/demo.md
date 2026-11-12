@@ -30,10 +30,14 @@ API: `cmd/meshsat-demo/deps_test.go` fails the build if it ever links `internal/
   it a minute later, and an automatic reply, in the page's language, that says it is automatic.
   Everything a visitor writes, the safe-and-well board included, is deleted after an hour; the
   database lives on a memory volume and is empty after every restart. The whole post takes at
-  most 60 messages and 30 board lines per 10 minutes and keeps at most 500 rows.
-- **The volunteer screen** (`/post` on `bridge.meshsat.net`) shows the real queue, masked: the
-  recipient as the paper slips show it, no name, the text as its length, the code cut to three
-  letters. A visitor's words and numbers never appear there.
+  most 60 messages and 30 board lines per 10 minutes and keeps at most 500 rows. One address
+  gets at most 6 messages and 6 board lines an hour, 10 unknown pickup codes and 30 name
+  searches, whatever cookie it sends.
+- **The volunteer screen** (`/post` on `bridge.meshsat.net`) shows the real queue, masked: a
+  number as its country code and last two digits (an address as its first letter and its
+  top-level domain), no name, the text as its length, and in place of the code a label that
+  holds no letter of it. Board lines show initials only. A visitor's words and numbers never
+  appear there, and nothing on it opens anyone's pickup page.
 
 ## The data
 
