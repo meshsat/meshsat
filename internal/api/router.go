@@ -766,6 +766,9 @@ func (s *Server) Router() http.Handler {
 		r.Post("/devices/health/{target}/pause", s.handlePauseDeviceHealth)
 		r.Post("/devices/health/{target}/resume", s.handleResumeDeviceHealth)
 		r.Post("/devices/health/{target}/heal", s.handleHealDevice)
+		r.Post("/devices/health/{target}/fitted", s.handleSetDeviceFitted) // [MESHSAT-1842]
+		r.Post("/devices/health/{target}/note", s.handleNoteDevice)
+		r.Get("/devices/power", s.handleGetDevicePower)
 		r.Get("/access-rules", s.handleGetAccessRules)
 		r.Post("/access-rules", s.handleCreateAccessRule)
 		r.Put("/access-rules/{id}", s.handleUpdateAccessRule)

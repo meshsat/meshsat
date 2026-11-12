@@ -61,6 +61,17 @@ func deviceHealthActions(db *database.DB, proc *engine.Processor, signing *engin
 			}
 			signing.AuditEvent("device_health", iface, nil, nil, nil, target+": "+detail)
 		},
+		// device_inventory and device_note rows for the reliability log. [MESHSAT-1842]
+		Record: func(eventType, target, ifaceID, detail string) {
+			if signing == nil {
+				return
+			}
+			var iface *string
+			if ifaceID != "" {
+				iface = &ifaceID
+			}
+			signing.AuditEvent(eventType, iface, nil, nil, nil, target+": "+detail)
+		},
 		Persist: func(name string, p gateway.PersistedTarget) {
 			raw, err := json.Marshal(p)
 			if err != nil {

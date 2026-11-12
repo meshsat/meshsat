@@ -2015,6 +2015,15 @@ var migrations = []string{
 	// board; lines from before have none and only the operator removes
 	// them. [MESHSAT-1814]
 	`ALTER TABLE post_board ADD COLUMN remove_hash TEXT NOT NULL DEFAULT '';`,
+
+	// v90: the kit's powered time for the device reliability log, one row
+	// per kernel boot: when the bridge first ran in it and when it last
+	// saw it running (a 5-minute heartbeat). [MESHSAT-1842]
+	`CREATE TABLE IF NOT EXISTS kit_power (
+		boot_id    TEXT PRIMARY KEY,
+		first_seen TEXT NOT NULL,
+		last_seen  TEXT NOT NULL
+	);`,
 }
 
 // postMigration is what a migration needs to know that its SQL cannot see:

@@ -3493,6 +3493,7 @@ func main() {
 			HardBudget: cfg.DeviceHealthHardBudget,
 			HardGap:    time.Duration(cfg.DeviceHealthHardGapSec) * time.Second,
 			Seed:       seedDeviceHealth(db),
+			BootID:     clockstate.BootID(),
 		}, deviceHealthActions(db, proc, signingService))
 		registerDeviceHealthTargets(devHealth, cfg, oobActions, mesh, cell, imtTransport, sat, gwMgr, spectrumMon, gpsReader, rxWatchdog, supervisor, usbPowerCycle,
 			newRTLSDRLocation(db))
@@ -3511,6 +3512,41 @@ func main() {
 		go devHealth.Run(ctx)
 		log.Info().Int("tick_sec", cfg.DeviceHealthTickSec).Int("misses", cfg.DeviceHealthMisses).
 			Int("hard_budget", cfg.DeviceHealthHardBudget).Msg("device health watchdog enabled")
+	}
+
+	// Device reliability log [MESHSAT-1842]: every reboot the mesh radio
+	// reports becomes a signed radio_reset row, and the kit's powered time
+	// is kept per kernel boot (a 5-minute heartbeat; nothing is written
+	// while the clock guard does not trust the clock).
+	if signingService != nil {
+		proc.SetRadioResetHook(func(msg string) {
+			iface := "mesh_0"
+			go signingService.AuditEvent("radio_reset", &iface, nil, nil, nil, "mesh: "+msg)
+		})
+	}
+	if boot := clockstate.BootID(); boot != "" {
+		go func() {
+			touch := func() {
+				if clockGuard != nil && !clockGuard.Trusted() {
+					return
+				}
+				if err := db.TouchKitPower(boot, time.Now()); err != nil {
+					log.Warn().Err(err).Msg("kit power: heartbeat not stored")
+				}
+			}
+			touch()
+			t := time.NewTicker(5 * time.Minute)
+			defer t.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					touch()
+					return
+				case <-t.C:
+					touch()
+				}
+			}
+		}()
 	}
 
 	// Start HTTP server

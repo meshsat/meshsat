@@ -501,3 +501,26 @@ func TestSignerIDStableAcrossWrap(t *testing.T) {
 		t.Errorf("SignerID changed across wrap: before=%s after=%s", idBefore, ss.SignerID())
 	}
 }
+
+// A row deleted from the middle leaves every remaining hash valid; only the
+// link from the next row to the one before the gap gives it away. [MESHSAT-1842]
+func TestVerifyChainDetectsADeletedRow(t *testing.T) {
+	db := testDB(t)
+	ss, err := NewSigningService(db)
+	if err != nil {
+		t.Fatalf("NewSigningService: %v", err)
+	}
+	for _, d := range []string{"one", "two", "three", "four"} {
+		ss.AuditEvent("device_health", nil, nil, nil, nil, d)
+	}
+	if _, brokenAt := ss.VerifyChain(10); brokenAt != -1 {
+		t.Fatalf("intact chain reported broken at %d", brokenAt)
+	}
+	if _, err := db.Exec("DELETE FROM audit_log WHERE id = 2"); err != nil {
+		t.Fatal(err)
+	}
+	valid, brokenAt := ss.VerifyChain(10)
+	if brokenAt != 1 || valid != 1 {
+		t.Fatalf("deleted row: valid %d broken at %d, want 1 and 1", valid, brokenAt)
+	}
+}

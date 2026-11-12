@@ -41,6 +41,9 @@ type Processor struct {
 	// directText sees every text a mesh node sends to this Bridge's own
 	// node (gateway.TAKChat.Reply). [MESHSAT-1705]
 	directText atomic.Pointer[func(from uint32, text string)]
+	// radioReset is told each time the mesh radio reports a reboot, so the
+	// signed audit log keeps it for the device reliability log. [MESHSAT-1842]
+	radioReset atomic.Pointer[func(msg string)]
 	// gatewayText sees every text a gateway receives, as it came off the
 	// link and before the chain: the Community Post's reply parser
 	// (post.Service.HandleInbound). [MESHSAT-1733]
@@ -200,6 +203,16 @@ func (p *Processor) SetRoutingReceiptHook(fn func(ifaceID string, msg transport.
 // own node: a crew answering a dispatcher who wrote to it from TAK or the Hub
 // map. fn runs on its own goroutine and only observes; the rules see the text
 // as before. [MESHSAT-1705]
+// SetRadioResetHook sets the function told about each reboot the mesh radio
+// reports (nil clears it). [MESHSAT-1842]
+func (p *Processor) SetRadioResetHook(fn func(msg string)) {
+	if fn == nil {
+		p.radioReset.Store(nil)
+		return
+	}
+	p.radioReset.Store(&fn)
+}
+
 func (p *Processor) SetMeshDirectTextHook(fn func(from uint32, text string)) {
 	if fn == nil {
 		p.directText.Store(nil)
@@ -573,6 +586,11 @@ func (p *Processor) handleEvent(ctx context.Context, event transport.MeshEvent) 
 		// the bridge log carries the firmware's reason next to the
 		// handshake that follows it. [MESHSAT-1112]
 		log.Warn().Str("type", event.Type).Str("message", event.Message).Msg("mesh radio reported")
+		if event.Type == "radio_rebooted" {
+			if fn := p.radioReset.Load(); fn != nil {
+				(*fn)(event.Message)
+			}
+		}
 	default:
 		log.Debug().Str("type", event.Type).Msg("unhandled event type")
 	}

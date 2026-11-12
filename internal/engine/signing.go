@@ -263,7 +263,8 @@ func (ss *SigningService) AuditEvent(eventType string, interfaceID, direction *s
 	ss.lastHash = hash
 }
 
-// VerifyChain verifies the integrity of the last N audit log entries.
+// VerifyChain verifies the integrity of the last N audit log entries: every
+// row's hash, and every row's link to the row before it.
 // Returns the number of valid entries and the first broken index (or -1 if all valid).
 func (ss *SigningService) VerifyChain(limit int) (valid int, brokenAt int) {
 	entries, err := ss.db.GetAuditLog(limit)
@@ -285,6 +286,12 @@ func (ss *SigningService) VerifyChain(limit int) (valid int, brokenAt int) {
 		expected := hex.EncodeToString(h.Sum(nil))
 
 		if entry.Hash != expected {
+			return i, i
+		}
+		// Each row must also point at the row before it: a row deleted
+		// from the middle leaves every remaining hash valid and only
+		// this link broken. [MESHSAT-1842]
+		if i > 0 && entry.PrevHash != entries[i-1].Hash {
 			return i, i
 		}
 	}

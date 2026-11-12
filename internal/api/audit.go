@@ -69,10 +69,10 @@ func (s *Server) handleCountAuditLog(w http.ResponseWriter, r *http.Request) {
 
 // handleVerifyAuditChain verifies the integrity of the audit log hash chain.
 // @Summary Verify audit chain
-// @Description Verifies the integrity of the Ed25519-signed audit log hash chain
+// @Description Verifies the audit log's SHA-256 hash chain over the newest entries: each row's hash and its link to the row before it
 // @Tags audit
 // @Produce json
-// @Param limit query integer false "Max entries to verify (default: 1000, max: 10000)"
+// @Param limit query integer false "Max entries to verify (default: 1000, max: 100000)"
 // @Success 200 {object} map[string]interface{}
 // @Failure 503 {object} map[string]string
 // @Router /api/audit/verify [get]
@@ -84,12 +84,15 @@ func (s *Server) handleVerifyAuditChain(w http.ResponseWriter, r *http.Request) 
 
 	limit := 1000
 	if q := r.URL.Query().Get("limit"); q != "" {
-		if n, err := strconv.Atoi(q); err == nil && n > 0 && n <= 10000 {
+		if n, err := strconv.Atoi(q); err == nil && n > 0 && n <= 100000 {
 			limit = n
 		}
 	}
 
 	valid, brokenAt := s.signing.VerifyChain(limit)
+	if brokenAt == -1 {
+		limit = valid // "checked" is what was there to check [MESHSAT-1842]
+	}
 
 	result := map[string]interface{}{
 		"verified":  brokenAt == -1,

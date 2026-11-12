@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -52,7 +53,17 @@ var (
 	ErrHealthConfirm       = errors.New("device health: level above the automatic maximum needs confirm")
 	ErrHealthNoStep        = errors.New("device health: no recovery step at that level")
 	ErrHealthExternal      = errors.New("device health: target is managed by another watchdog")
+	ErrHealthRemoved       = errors.New("device health: target is marked as removed from the kit; mark it fitted again first")
+	ErrHealthNoteAction    = errors.New("device health: unknown hands-on action")
 )
+
+// NoteActions are the hands-on fixes an operator can record against a
+// device for the reliability log. [MESHSAT-1842]
+var NoteActions = []string{"re-seat", "button", "power-cycle", "swap", "reflash", "other"}
+
+// NoteOnlyTargets can carry a hands-on note although the watchdog does not
+// probe them: the panel and the kit as a whole. [MESHSAT-1842]
+var NoteOnlyTargets = []string{"display", "kit"}
 
 // ProbeResult is what a probe closure reports.
 type ProbeResult struct {
@@ -112,6 +123,9 @@ type HealthTarget struct {
 type PersistedTarget struct {
 	HardResets []time.Time `json:"hard_resets"`
 	Paused     bool        `json:"paused"`
+	// Removed marks a device taken out of the kit: it is paused, writes
+	// nothing, and its absence is not a wedge. [MESHSAT-1842]
+	Removed bool `json:"removed,omitempty"`
 }
 
 // TargetStatus is one row of the status API.
@@ -134,7 +148,9 @@ type TargetStatus struct {
 	Levels     []int      `json:"levels"`
 	MaxLevel   byte       `json:"max_level"`
 	Paused     bool       `json:"paused"`
-	External   bool       `json:"external,omitempty"`
+	// Removed: the operator marked the device as taken out of the kit.
+	Removed  bool `json:"removed,omitempty"`
+	External bool `json:"external,omitempty"`
 }
 
 // DeviceHealthConfig tunes the engine. Zero fields take the defaults.
@@ -147,6 +163,10 @@ type DeviceHealthConfig struct {
 	StepTimeout  time.Duration // context deadline for a rung (90 s)
 	Now          func() time.Time
 	Seed         map[string]PersistedTarget
+	// BootID is the kernel's boot id. The start row carries its first
+	// eight characters so the reliability log can tell a bridge restart
+	// from a kit power cycle. [MESHSAT-1842]
+	BootID string
 }
 
 // DeviceHealthActions are the engine's outputs.
@@ -157,6 +177,10 @@ type DeviceHealthActions struct {
 	Audit func(target, ifaceID, detail string)
 	// Persist stores the per-target state for the next process.
 	Persist func(target string, p PersistedTarget)
+	// Record appends a row of another event type to the signed audit
+	// chain: device_inventory (removed / fitted again) and device_note (a
+	// hands-on fix). [MESHSAT-1842]
+	Record func(eventType, target, ifaceID, detail string)
 }
 
 type externalStatus func() (state, detail string)
@@ -180,6 +204,14 @@ type healthTargetState struct {
 	inflight   bool
 	probing    bool
 	external   externalStatus
+	// The reliability log's view of an episode [MESHSAT-1842]: episode is
+	// open from "unhealthy" until the device answers again, even while it
+	// is off the bus (away); stepFailed says the last rung returned an
+	// error, so a recovery after it is not credited to it.
+	episode    bool
+	away       bool
+	stepFailed bool
+	removed    bool
 }
 
 // DeviceHealth is the engine.
@@ -252,7 +284,8 @@ func (d *DeviceHealth) Register(t HealthTarget) {
 	ts := &healthTargetState{t: t, state: HealthStateUnknown}
 	if seed, ok := d.cfg.Seed[t.Name]; ok {
 		ts.hardResets = append(ts.hardResets, seed.HardResets...)
-		ts.paused = seed.Paused
+		ts.paused = seed.Paused || seed.Removed
+		ts.removed = seed.Removed
 		if ts.paused {
 			ts.state = HealthStatePaused
 		}
@@ -280,6 +313,19 @@ func (d *DeviceHealth) Run(ctx context.Context) {
 	d.mu.Lock()
 	d.runCtx = ctx
 	d.mu.Unlock()
+	// A start row in the signed log: an episode open before it was ended
+	// by a bridge restart, or by a kit power cycle when the boot changed.
+	// [MESHSAT-1842]
+	if d.act.Audit != nil {
+		boot := d.cfg.BootID
+		if len(boot) > 8 {
+			boot = boot[:8]
+		}
+		if boot == "" {
+			boot = "unknown"
+		}
+		d.act.Audit("watchdog", "", "watchdog started (boot "+boot+")")
+	}
 	t := time.NewTicker(d.cfg.Tick)
 	defer t.Stop()
 	d.tick(ctx)
@@ -378,6 +424,7 @@ func (d *DeviceHealth) statusLocked(ts *healthTargetState, now time.Time) Target
 		HardBudget: ts.t.HardBudget,
 		MaxLevel:   ts.t.MaxLevel,
 		Paused:     ts.paused,
+		Removed:    ts.removed,
 		Levels:     []int{},
 	}
 	if ts.external != nil {
@@ -432,6 +479,10 @@ func (d *DeviceHealth) setPaused(name string, paused bool) error {
 		d.mu.Unlock()
 		return ErrHealthExternal
 	}
+	if !paused && ts.removed {
+		d.mu.Unlock()
+		return ErrHealthRemoved
+	}
 	ts.paused = paused
 	if paused {
 		ts.state = HealthStatePaused
@@ -439,11 +490,119 @@ func (d *DeviceHealth) setPaused(name string, paused bool) error {
 		ts.state = HealthStateUnknown
 	}
 	ts.misses, ts.step, ts.stepAt, ts.graceUntil = 0, 0, time.Time{}, time.Time{}
-	p := PersistedTarget{HardResets: append([]time.Time(nil), ts.hardResets...), Paused: ts.paused}
+	p := ts.persisted()
 	d.mu.Unlock()
 	d.persist(name, p)
 	log.Info().Str("target", name).Bool("paused", paused).Msg("device health: pause state changed")
 	return nil
+}
+
+func (ts *healthTargetState) persisted() PersistedTarget {
+	return PersistedTarget{HardResets: append([]time.Time(nil), ts.hardResets...), Paused: ts.paused, Removed: ts.removed}
+}
+
+// SetFitted records that a device was taken out of the kit (fitted=false)
+// or put back (fitted=true). A removed device is paused and persisted as
+// removed, so its absence writes nothing and is never read as a wedge; an
+// episode open at that moment ends with the removal. Both directions write
+// a device_inventory row to the signed log. [MESHSAT-1842]
+func (d *DeviceHealth) SetFitted(name string, fitted bool, note string) error {
+	d.mu.Lock()
+	ts, ok := d.targets[name]
+	if !ok {
+		d.mu.Unlock()
+		return ErrHealthTargetUnknown
+	}
+	if ts.external != nil {
+		d.mu.Unlock()
+		return ErrHealthExternal
+	}
+	ts.removed = !fitted
+	ts.paused = !fitted
+	if fitted {
+		if ts.state == HealthStatePaused {
+			ts.state = HealthStateUnknown
+		}
+	} else {
+		ts.state = HealthStatePaused
+	}
+	ts.misses, ts.step, ts.stepAt, ts.graceUntil, ts.failedAt = 0, 0, time.Time{}, time.Time{}, time.Time{}
+	ts.stepLevel, ts.stepName = 0, ""
+	ts.episode, ts.away, ts.stepFailed = false, false, false
+	p := ts.persisted()
+	iface := firstIface(ts.t.IfaceIDs)
+	d.mu.Unlock()
+	d.persist(name, p)
+	detail := name + " removed from the kit"
+	if fitted {
+		detail = name + " fitted again"
+	}
+	if n := CleanNote(note); n != "" {
+		detail += ": " + n
+	}
+	if d.act.Record != nil {
+		d.act.Record("device_inventory", name, iface, detail)
+	}
+	log.Info().Str("target", name).Bool("fitted", fitted).Msg("device health: inventory changed")
+	return nil
+}
+
+// Note records a hands-on fix against a device for the reliability log:
+// what was done, whether the case had to be opened, and a short note. It
+// changes no state; the log attaches it to the device's wedge that was
+// open or had just ended. [MESHSAT-1842]
+func (d *DeviceHealth) Note(name, action string, caseOpened bool, note string) error {
+	if !slices.Contains(NoteActions, action) {
+		return ErrHealthNoteAction
+	}
+	iface := ""
+	d.mu.Lock()
+	ts, ok := d.targets[name]
+	if ok {
+		iface = firstIface(ts.t.IfaceIDs)
+	}
+	d.mu.Unlock()
+	if !ok && !slices.Contains(NoteOnlyTargets, name) {
+		return ErrHealthTargetUnknown
+	}
+	opened := "no"
+	if caseOpened {
+		opened = "yes"
+	}
+	detail := fmt.Sprintf("%s hands-on fix: %s; case opened: %s", name, action, opened)
+	if n := CleanNote(note); n != "" {
+		detail += "; " + n
+	}
+	if d.act.Record != nil {
+		d.act.Record("device_note", name, iface, detail)
+	}
+	log.Info().Str("target", name).Str("action", action).Bool("case_opened", caseOpened).Msg("device health: hands-on fix noted")
+	return nil
+}
+
+// CleanNote makes an operator's note fit one audit row: control characters
+// become spaces, runs of space collapse, and it is cut at 200 characters.
+func CleanNote(s string) string {
+	b := make([]rune, 0, len(s))
+	space := false
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f || r == ' ' {
+			if !space && len(b) > 0 {
+				b = append(b, ' ')
+			}
+			space = true
+			continue
+		}
+		space = false
+		b = append(b, r)
+		if len(b) >= 200 {
+			break
+		}
+	}
+	for len(b) > 0 && b[len(b)-1] == ' ' {
+		b = b[:len(b)-1]
+	}
+	return string(b)
 }
 
 // Heal runs the first rung at the given level now, with the same accounting
@@ -486,7 +645,7 @@ func (d *DeviceHealth) Heal(ctx context.Context, name string, level byte, confir
 		}
 		d.lastHardAt = now
 		ts.hardResets = append(d.recentHard(ts, now), now)
-		p := PersistedTarget{HardResets: append([]time.Time(nil), ts.hardResets...), Paused: ts.paused}
+		p := ts.persisted()
 		go d.persist(name, p)
 	}
 	ts.state = HealthStateHealing
@@ -518,7 +677,7 @@ func (d *DeviceHealth) NoteExternalReset(name string, level byte) {
 	if level == HealLevelHard {
 		d.lastHardAt = now
 		ts.hardResets = append(d.recentHard(ts, now), now)
-		p := PersistedTarget{HardResets: append([]time.Time(nil), ts.hardResets...), Paused: ts.paused}
+		p := ts.persisted()
 		go d.persist(name, p)
 	}
 	log.Info().Str("target", name).Uint8("level", level).Dur("grace", grace).
@@ -609,12 +768,16 @@ func (d *DeviceHealth) applyProbeLocked(ctx context.Context, ts *healthTargetSta
 		ts.detail = res.Detail
 		switch ts.state {
 		case HealthStateDegraded, HealthStateHealing, HealthStateFailed:
-			msg := fmt.Sprintf("%s recovered after step %d", ts.t.Name, ts.step)
-			if ts.stepName != "" {
-				msg += " (" + ts.stepName + ")"
+			d.notifyLocked(ts, "device_recovered", d.recoveryTextLocked(ts, now), false)
+		default:
+			if ts.episode {
+				// It left the bus while unhealthy (or was paused mid-episode)
+				// and answers again with no rung run since: a hand, a restart
+				// or the device itself. [MESHSAT-1842]
+				d.notifyLocked(ts, "device_recovered", fmt.Sprintf("%s came back without a software step (by hand, by itself or a restart)", ts.t.Name), false)
 			}
-			d.notifyLocked(ts, "device_recovered", msg, false)
 		}
+		ts.episode, ts.away, ts.stepFailed = false, false, false
 		ts.step, ts.stepLevel, ts.stepName = 0, 0, ""
 		ts.stepAt, ts.graceUntil, ts.failedAt = time.Time{}, time.Time{}, time.Time{}
 		if ts.paused {
@@ -629,6 +792,14 @@ func (d *DeviceHealth) applyProbeLocked(ctx context.Context, ts *healthTargetSta
 		if inGrace {
 			// The device is expected to be away while a rung settles.
 			return
+		}
+		switch ts.state {
+		case HealthStateDegraded, HealthStateHealing, HealthStateFailed:
+			// The episode stays open while the device is off the bus, so
+			// its return is recorded and never credited to software that
+			// did not run. [MESHSAT-1842]
+			ts.away = true
+			d.notifyLocked(ts, "device_away", fmt.Sprintf("%s left the bus while unhealthy: %s", ts.t.Name, res.Detail), true)
 		}
 		ts.detail = res.Detail
 		ts.misses = 0
@@ -669,9 +840,38 @@ func (d *DeviceHealth) applyProbeLocked(ctx context.Context, ts *healthTargetSta
 		}
 		ts.state = HealthStateDegraded
 		ts.step, ts.stepLevel, ts.stepName = 0, 0, ""
-		d.notifyLocked(ts, "device_unhealthy", fmt.Sprintf("%s unhealthy: %s (%d consecutive misses)", ts.t.Name, res.Detail, ts.misses), true)
+		if ts.episode {
+			// Back on the bus after leaving it while unhealthy, and still
+			// not answering: the same wedge, not a new one. [MESHSAT-1842]
+			d.notifyLocked(ts, "device_unhealthy", fmt.Sprintf("%s back but still unhealthy: %s (%d consecutive misses)", ts.t.Name, res.Detail, ts.misses), true)
+		} else {
+			d.notifyLocked(ts, "device_unhealthy", fmt.Sprintf("%s unhealthy: %s (%d consecutive misses)", ts.t.Name, res.Detail, ts.misses), true)
+		}
+		ts.episode, ts.away = true, false
 	}
 	d.nextStepLocked(ctx, ts, now)
+}
+
+// recoveryTextLocked words a recovery from an open ladder. The last rung is
+// credited only when it ran without an error and the device answered
+// within its grace window (plus two ticks); otherwise the text says the
+// device came back without a software step that worked, so a re-seat is
+// never booked as a hub-port cut that could not act. [MESHSAT-1842]
+func (d *DeviceHealth) recoveryTextLocked(ts *healthTargetState, now time.Time) string {
+	name := ts.t.Name
+	if ts.step == 0 || ts.stepName == "" || ts.away {
+		return fmt.Sprintf("%s came back without a software step (by hand, by itself or a restart)", name)
+	}
+	late := !ts.graceUntil.IsZero() && now.After(ts.graceUntil.Add(2*d.cfg.Tick))
+	if !ts.stepFailed && ts.state != HealthStateFailed && !late {
+		return fmt.Sprintf("%s recovered after step %d (%s)", name, ts.step, ts.stepName)
+	}
+	why := "could not act"
+	if !ts.stepFailed {
+		why = "ran " + now.Sub(ts.stepAt).Round(time.Minute).String() + " earlier"
+	}
+	return fmt.Sprintf("%s came back without a software step that worked (by hand, by itself or a restart); the last, step %d (%s), %s",
+		name, ts.step, ts.stepName, why)
 }
 
 // nextStepLocked runs the next rung of the ladder or declares the target failed.
@@ -700,7 +900,7 @@ func (d *DeviceHealth) nextStepLocked(ctx context.Context, ts *healthTargetState
 			}
 			d.lastHardAt = now
 			ts.hardResets = append(d.recentHard(ts, now), now)
-			p := PersistedTarget{HardResets: append([]time.Time(nil), ts.hardResets...), Paused: ts.paused}
+			p := ts.persisted()
 			go d.persist(ts.t.Name, p)
 		}
 		ts.state = HealthStateHealing
@@ -728,6 +928,7 @@ func (d *DeviceHealth) startStepLocked(ctx context.Context, ts *healthTargetStat
 	ts.graceUntil = now.Add(s.Grace)
 	ts.inflight = true
 	ts.lastErr = ""
+	ts.stepFailed = false
 	d.notifyLocked(ts, "device_heal_step", fmt.Sprintf("%s: step %d, level %d, %s (%s)", ts.t.Name, ts.step, s.Level, s.Name, origin), false)
 	name := ts.t.Name
 	go func() {
@@ -744,6 +945,7 @@ func (d *DeviceHealth) startStepLocked(ctx context.Context, ts *healthTargetStat
 		ts.inflight = false
 		if err != nil {
 			ts.lastErr = fmt.Sprintf("step %d %s: %v", idx+1, s.Name, err)
+			ts.stepFailed = true
 			log.Warn().Err(err).Str("target", name).Int("step", idx+1).Str("name", s.Name).Msg("device health: recovery step failed")
 			if d.act.Audit != nil {
 				iface := firstIface(ts.t.IfaceIDs)

@@ -96,6 +96,9 @@ func Parse(r io.Reader) State {
 // bootIDPath is the kernel's per-boot identifier, readable inside a container.
 const bootIDPath = "/proc/sys/kernel/random/boot_id"
 
+// BootID is the kernel's boot id ("" when unreadable). [MESHSAT-1842]
+func BootID() string { return readBootID() }
+
 func readBootID() string {
 	b, err := os.ReadFile(bootIDPath)
 	if err != nil {

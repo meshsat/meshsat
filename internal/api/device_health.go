@@ -3,6 +3,8 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"io"
+	"math"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -142,6 +144,134 @@ func (s *Server) handleHealDevice(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "healing", "target": target})
 }
 
+// DeviceFittedRequest is the body of POST /api/devices/health/{target}/fitted.
+type DeviceFittedRequest struct {
+	// Fitted false marks the device as taken out of the kit; true as put back.
+	Fitted bool `json:"fitted"`
+	// Note says why, in a few words (at most 200 characters are kept).
+	Note string `json:"note"`
+}
+
+// DeviceNoteRequest is the body of POST /api/devices/health/{target}/note.
+type DeviceNoteRequest struct {
+	// Action is what was done by hand: re-seat, button, power-cycle, swap, reflash or other.
+	Action string `json:"action"`
+	// CaseOpened says whether the kit's case had to be opened for it.
+	CaseOpened *bool `json:"case_opened"`
+	// Note adds a few words (at most 200 characters are kept).
+	Note string `json:"note"`
+}
+
+// DevicePowerBoot is one kernel boot in GET /api/devices/power.
+type DevicePowerBoot struct {
+	Boot      string  `json:"boot"`
+	FirstSeen string  `json:"first_seen"`
+	LastSeen  string  `json:"last_seen"`
+	Hours     float64 `json:"hours"`
+	Current   bool    `json:"current,omitempty"`
+}
+
+// DevicePowerResponse is the body of GET /api/devices/power.
+type DevicePowerResponse struct {
+	TotalHours float64           `json:"total_hours"`
+	Since      string            `json:"since,omitempty"`
+	Boots      []DevicePowerBoot `json:"boots"`
+}
+
+// handleSetDeviceFitted records that a device left the kit or came back.
+// @Summary Mark a device as removed from the kit, or fitted again
+// @Description A removed device is paused and stays paused across restarts, so its absence is not logged as a wedge; both directions write a device_inventory row to the signed audit log for the device reliability log. [MESHSAT-1842]
+// @Tags devices
+// @Accept json
+// @Param target path string true "Target name (mesh, cellular, zigbee, rtl_sdr, gps, imt, iridium)"
+// @Param body body DeviceFittedRequest true "Fitted or removed, and why"
+// @Success 204
+// @Failure 400 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Failure 409 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Router /api/devices/health/{target}/fitted [post]
+func (s *Server) handleSetDeviceFitted(w http.ResponseWriter, r *http.Request) {
+	if s.deviceHealth == nil {
+		writeError(w, http.StatusServiceUnavailable, "device health watchdog disabled")
+		return
+	}
+	var req DeviceFittedRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if err := s.deviceHealth.SetFitted(chi.URLParam(r, "target"), req.Fitted, req.Note); err != nil {
+		writeDeviceHealthError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleNoteDevice records a hands-on fix for the device reliability log.
+// @Summary Record a hands-on fix on a device
+// @Description What was done by hand (re-seat, button, power-cycle, swap, reflash, other), whether the case had to be opened, and a short note. Writes a device_note row to the signed audit log; the device reliability log attaches it to the device's wedge. The targets display and kit take notes too. [MESHSAT-1842]
+// @Tags devices
+// @Accept json
+// @Param target path string true "Target name, or display or kit"
+// @Param body body DeviceNoteRequest true "The fix"
+// @Success 204
+// @Failure 400 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Failure 503 {object} map[string]string
+// @Router /api/devices/health/{target}/note [post]
+func (s *Server) handleNoteDevice(w http.ResponseWriter, r *http.Request) {
+	if s.deviceHealth == nil {
+		writeError(w, http.StatusServiceUnavailable, "device health watchdog disabled")
+		return
+	}
+	var req DeviceNoteRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if req.CaseOpened == nil {
+		writeError(w, http.StatusBadRequest, "case_opened is required (true or false)")
+		return
+	}
+	if err := s.deviceHealth.Note(chi.URLParam(r, "target"), req.Action, *req.CaseOpened, req.Note); err != nil {
+		writeDeviceHealthError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleGetDevicePower lists the kit's powered time per kernel boot.
+// @Summary Powered time of the kit
+// @Description One row per kernel boot, from the bridge's first heartbeat in it to its last (every 5 minutes), and the total in hours, for the device reliability log. Time before the bridge started in a boot is not counted. [MESHSAT-1842]
+// @Tags devices
+// @Produce json
+// @Success 200 {object} DevicePowerResponse
+// @Failure 500 {object} map[string]string
+// @Router /api/devices/power [get]
+func (s *Server) handleGetDevicePower(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.db.KitPower()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	current := clockstate.BootID()
+	out := DevicePowerResponse{Boots: make([]DevicePowerBoot, 0, len(rows))}
+	for _, row := range rows {
+		b := DevicePowerBoot{Boot: row.BootID, FirstSeen: row.FirstSeen, LastSeen: row.LastSeen, Hours: row.Hours(), Current: row.BootID == current}
+		if len(b.Boot) > 8 {
+			b.Boot = b.Boot[:8]
+		}
+		out.TotalHours += b.Hours
+		out.Boots = append(out.Boots, b)
+	}
+	if len(rows) > 0 {
+		out.Since = rows[0].FirstSeen
+	}
+	out.TotalHours = math.Round(out.TotalHours*100) / 100
+	writeJSON(w, http.StatusOK, out)
+}
+
 func writeDeviceHealthError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, gateway.ErrHealthTargetUnknown):
@@ -150,8 +280,10 @@ func writeDeviceHealthError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusForbidden, err.Error())
 	case errors.Is(err, gateway.ErrHealthTargetBusy), errors.Is(err, gateway.ErrHealthExternal), errors.Is(err, gateway.ErrHealthTargetPaused):
 		writeError(w, http.StatusConflict, err.Error())
-	case errors.Is(err, gateway.ErrHealthNoStep):
+	case errors.Is(err, gateway.ErrHealthNoStep), errors.Is(err, gateway.ErrHealthNoteAction):
 		writeError(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, gateway.ErrHealthRemoved):
+		writeError(w, http.StatusConflict, err.Error())
 	default:
 		writeError(w, http.StatusConflict, err.Error())
 	}
