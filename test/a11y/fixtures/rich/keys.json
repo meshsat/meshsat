@@ -1,0 +1,40 @@
+{
+ "keys": [
+  {
+   "address": "N0CALL-1",
+   "channel_type": "aprs",
+   "created_at": "2026-10-01T10:00:00Z",
+   "id": 1,
+   "key_check": "9e541001",
+   "key_version": 1,
+   "status": "active"
+  },
+  {
+   "address": "+447700900001",
+   "channel_type": "sms",
+   "created_at": "2026-10-01T10:00:00Z",
+   "id": 2,
+   "key_check": "ba826fbd",
+   "key_version": 1,
+   "status": "active"
+  },
+  {
+   "address": "shared",
+   "channel_type": "iridium",
+   "created_at": "2026-10-01T10:00:00Z",
+   "id": 3,
+   "key_check": "96f291b4",
+   "key_version": 1,
+   "status": "active"
+  },
+  {
+   "address": "!a11ce002",
+   "channel_type": "mesh",
+   "created_at": "2026-10-01T10:00:00Z",
+   "id": 4,
+   "key_check": "7e42304a",
+   "key_version": 1,
+   "status": "active"
+  }
+ ]
+}

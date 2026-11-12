@@ -1,0 +1,67 @@
+[
+ {
+  "bearer": "cellular_0",
+  "cmd": 1,
+  "counter": 1000,
+  "delivery_id": 500,
+  "direction": "out",
+  "from_addr": "+447700900001",
+  "id": 900,
+  "kind": "command",
+  "peer_id": 9393,
+  "result": "ok",
+  "ts": "2026-11-01T09:50:00Z"
+ },
+ {
+  "bearer": "cellular_0",
+  "cmd": 1,
+  "counter": 1001,
+  "delivery_id": 501,
+  "direction": "in",
+  "from_addr": "+447700900001",
+  "id": 901,
+  "kind": "reply",
+  "peer_id": 9393,
+  "result": "ok",
+  "ts": "2026-11-01T09:45:00Z"
+ },
+ {
+  "bearer": "cellular_0",
+  "cmd": 1,
+  "counter": 1002,
+  "delivery_id": 502,
+  "direction": "out",
+  "from_addr": "+447700900001",
+  "id": 902,
+  "kind": "command",
+  "peer_id": 9393,
+  "result": "ok",
+  "ts": "2026-11-01T09:40:00Z"
+ },
+ {
+  "bearer": "cellular_0",
+  "cmd": 1,
+  "counter": 1003,
+  "delivery_id": 503,
+  "direction": "in",
+  "from_addr": "+447700900001",
+  "id": 903,
+  "kind": "reply",
+  "peer_id": 9393,
+  "result": "ok",
+  "ts": "2026-11-01T09:35:00Z"
+ },
+ {
+  "bearer": "cellular_0",
+  "cmd": 1,
+  "counter": 1004,
+  "delivery_id": 504,
+  "direction": "out",
+  "from_addr": "+447700900001",
+  "id": 904,
+  "kind": "command",
+  "peer_id": 9393,
+  "result": "ok",
+  "ts": "2026-11-01T09:30:00Z"
+ }
+]

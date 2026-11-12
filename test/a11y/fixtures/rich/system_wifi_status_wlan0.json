@@ -1,0 +1,18 @@
+{
+ "address": "02:00:00:00:00:01",
+ "bssid": "02:00:00:00:00:02",
+ "freq": "5180",
+ "group_cipher": "CCMP",
+ "id": "0",
+ "ieee80211ac": "1",
+ "interface": "wlan0",
+ "ip_address": "192.0.2.20",
+ "key_mgmt": "WPA2-PSK",
+ "mode": "station",
+ "p2p_device_address": "02:00:00:00:00:03",
+ "pairwise_cipher": "CCMP",
+ "signal": -55,
+ "ssid": "field-ap",
+ "uuid": "00000000-0000-0000-0000-000000000000",
+ "wpa_state": "COMPLETED"
+}

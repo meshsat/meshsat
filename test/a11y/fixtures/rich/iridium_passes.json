@@ -37,5 +37,7 @@
    "peak_elev_deg": 14.9,
    "satellite": "IRIDIUM 102"
   }
- ]
+ ],
+ "tle_age_sec": 3600,
+ "tle_source": "downloaded"
 }

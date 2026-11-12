@@ -97,3 +97,14 @@ test('the first baseline is the run, with zeros dropped and keys sorted', () => 
   assert.deepEqual(next.measured, { commit: 'abc', date: '2026-11-13', total: 2 })
   assert.equal(total({ x: { a: 1, b: 2 }, y: { counts: { c: 3 } } }), 6)
 })
+
+test('a state that shows less than its content floor fails', () => {
+  const b = { ...base({ a: {} }), content: { a: 40 } }
+  assert.equal(compare(b, run({ a: { status: 'ok', counts: {}, content: 50 } })).ok, true)
+  assert.deepEqual(compare(b, run({ a: { status: 'ok', counts: {}, content: 12 } })).failures, [{ kind: 'content-drop', state: 'a', base: 40, now: 12 }])
+})
+
+test('the baseline keeps 80 % of each state\'s content as its floor', () => {
+  const next = nextBaseline(null, run({ a: { status: 'ok', counts: {}, content: 51 } }))
+  assert.deepEqual(next.content, { a: 40 })
+})

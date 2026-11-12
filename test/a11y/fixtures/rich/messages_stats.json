@@ -5,13 +5,15 @@
   "POSITION_APP": 111,
   "PRIVATE_APP": 2,
   "ROUTING_APP": 144,
-  "TELEMETRY_APP": 40923,
-  "TEXT_MESSAGE_APP": 73
+  "TELEMETRY_APP": 900,
+  "TEXT_MESSAGE_APP": 120
  },
  "by_transport": {
   "aprs": 18,
   "cellular": 8,
   "hub": 11,
+  "iridium": 12,
+  "mqtt": 4,
   "radio": 41266,
   "reticulum": 65,
   "tetra": 32

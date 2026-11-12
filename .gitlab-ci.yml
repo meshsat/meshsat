@@ -184,7 +184,7 @@ test:web:
 # TEST:A11Y — SIDN deliverable D5: WCAG 2.1 AA on Dashboard, Messages (with
 # Inbox and Compose), Map and Settings. Headless Chromium loads the built app
 # from disk with synthetic API answers (test/a11y/fixtures, no server, no
-# network), runs axe-core on 197 states in three shells (three at a time) and counts form
+# network), runs axe-core on 249 states in three shells (three at a time) and counts form
 # controls with no label. Any count above test/a11y/baseline.json fails, and so
 # does the canary (known defects injected into the app must be found). Unit
 # tests of the ratchet run first. Reports: a11y-results/. [MESHSAT-1843]

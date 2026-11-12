@@ -11,6 +11,13 @@ export const UNLABELLED = 'meshsat-unlabelled-control'
 export const DUPLICATE_ID = 'meshsat-duplicate-id'
 // Contrast axe left undecided, measured directly (run.mjs FALLBACK).
 export const CONTRAST_FALLBACK = 'meshsat-contrast-fallback'
+// Contrast axe left for review that the direct measurement could not reach.
+export const CONTRAST_UNRESOLVED = 'meshsat-contrast-unresolved'
+// A JavaScript error on the page while the state was measured.
+export const PAGE_ERROR = 'meshsat-page-error'
+// A state must keep showing at least this share of the visible text it had
+// when the baseline was written, so a screen that broke cannot score zero.
+export const CONTENT_FLOOR = 0.8
 
 const sum = (counts) => Object.values(counts || {}).reduce((n, c) => n + c, 0)
 
@@ -36,6 +43,10 @@ export function compare (baseline, run) {
     if (st.status !== 'ok') { failures.push({ kind: 'error', state: key, now: st.error || st.status }); continue }
     const base = baseline.states[key]
     const counts = st.counts || {}
+    const floor = baseline.content?.[key]
+    if (floor !== undefined && typeof st.content === 'number' && st.content < floor) {
+      failures.push({ kind: 'content-drop', state: key, base: floor, now: st.content })
+    }
     if (base === undefined) {
       if (sum(counts) > 0) failures.push({ kind: 'new-state', state: key, now: sum(counts) })
       else notes.push({ kind: 'new-clean-state', state: key })
@@ -85,7 +96,11 @@ export function nextBaseline (baseline, run, { allowIncrease = '', commit = '', 
   for (const [key, st] of Object.entries(run.states)) states[key] = clean(st.counts)
   const sorted = {}
   for (const k of Object.keys(states).sort()) sorted[k] = states[k]
+  const content = run.partial ? { ...(prev.content || {}) } : {}
+  for (const [key, st] of Object.entries(run.states)) if (typeof st.content === 'number') content[key] = Math.floor(st.content * CONTENT_FLOOR)
+  const sortedContent = {}
+  for (const k of Object.keys(content).sort()) sortedContent[k] = content[k]
   const notes = [...(prev.notes || [])]
   if (raised.length) notes.push({ date, commit, reason: allowIncrease, raised: raised.map((f) => `${f.state} ${f.rule} ${f.base}->${f.now}`) })
-  return { schema: 1, axe: run.axe, tags: run.tags, measured: { commit, date, total: total(sorted) }, notes, states: sorted }
+  return { schema: 1, axe: run.axe, tags: run.tags, measured: { commit, date, total: total(sorted) }, notes, states: sorted, content: sortedContent }
 }

@@ -1,0 +1,17 @@
+{
+ "interface": "wlan0",
+ "networks": [
+  {
+   "bssid": "any",
+   "flags": "[CURRENT]",
+   "id": "0",
+   "ssid": "field-ap"
+  },
+  {
+   "bssid": "any",
+   "flags": "",
+   "id": "1",
+   "ssid": "backup-ap"
+  }
+ ]
+}

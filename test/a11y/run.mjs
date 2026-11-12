@@ -16,7 +16,7 @@ import { AxeBuilder } from '@axe-core/playwright'
 import axeCore from 'axe-core'
 import { VARIANTS, PROFILES, statesFor, stateKey } from './states.mjs'
 import { ORIGIN, loadFixtures, routeFixtures, routeLive, keyShape } from './serve.mjs'
-import { compare, nextBaseline, total, UNLABELLED, DUPLICATE_ID, CONTRAST_FALLBACK } from './ratchet.mjs'
+import { compare, nextBaseline, total, UNLABELLED, DUPLICATE_ID, CONTRAST_FALLBACK, CONTRAST_UNRESOLVED, PAGE_ERROR } from './ratchet.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const REPO = path.resolve(HERE, '../..')
@@ -172,6 +172,13 @@ async function measure ({ ctx, base, variant, state, live, screensDir, key }) {
       }
       await page.waitForTimeout(500)
     }
+    // The page must show what the state's name says, or the state errors.
+    if (state.expect) {
+      try { await state.expect(page) } catch (e) {
+        if (live && state.act) return { status: 'unreachable', error: `expectation: ${String(e.message).split('\n')[0]}`, ms: Date.now() - t0 }
+        throw new Error(`expectation failed: ${String(e.message).split('\n')[0]}`)
+      }
+    }
     await page.addStyleTag({ content: QUIET_CSS })
     await page.waitForTimeout(100)
 
@@ -179,6 +186,19 @@ async function measure ({ ctx, base, variant, state, live, screensDir, key }) {
     builder = state.scope === 'shell' ? builder.exclude('main') : builder.exclude('header').exclude(BOTTOM_NAV)
     const r = await builder.analyze()
     const unlabelled = await unlabelledControls(page, state.scope)
+    // How much visible text the measured part shows: a floor in the baseline
+    // keeps a screen that broke or lost its data from scoring zero.
+    const content = await page.evaluate(({ scope, bottom }) => {
+      let n = 0
+      for (const el of document.querySelectorAll('body *')) {
+        if (scope === 'shell' ? el.closest('main') : (el.closest('header') || el.closest(bottom))) continue
+        if (![...el.childNodes].some((c) => c.nodeType === 3 && c.textContent.trim())) continue
+        const r = el.getBoundingClientRect()
+        const cs = getComputedStyle(el)
+        if (r.width > 0 && r.height > 0 && cs.visibility !== 'hidden' && cs.display !== 'none') n++
+      }
+      return n
+    }, { scope: state.scope, bottom: BOTTOM_NAV })
     const duplicates = state.scope === 'shell' ? [] : await duplicateReferencedIds(page)
     const review = r.incomplete.find((v) => v.id === 'color-contrast')
     const reviewTargets = review ? review.nodes.map((n) => n.target[0]) : []
@@ -191,6 +211,8 @@ async function measure ({ ctx, base, variant, state, live, screensDir, key }) {
     if (unlabelled.length) counts[UNLABELLED] = unlabelled.length
     if (duplicates.length) counts[DUPLICATE_ID] = duplicates.length
     if (lowContrast.length) counts[CONTRAST_FALLBACK] = lowContrast.length
+    if (fb.tally.unresolved) counts[CONTRAST_UNRESOLVED] = fb.tally.unresolved
+    if (pageErrors.length) counts[PAGE_ERROR] = pageErrors.length
     const incomplete = {}
     for (const v of r.incomplete) incomplete[v.id] = v.nodes.length
     const violations = r.violations.map((v) => ({
@@ -202,7 +224,7 @@ async function measure ({ ctx, base, variant, state, live, screensDir, key }) {
     if (screensDir) {
       await page.screenshot({ path: path.join(screensDir, `${key.replace(/[/:]/g, '_')}.jpg`), fullPage: true, type: 'jpeg', quality: 60 })
     }
-    return { status: 'ok', counts, incomplete, violations, unlabelled: live ? unlabelled.length : unlabelled, duplicates, lowContrast: live ? lowContrast.length : lowContrast, contrastReview: fb.tally, pageErrors, ms: Date.now() - t0 }
+    return { status: 'ok', counts, incomplete, violations, unlabelled: live ? unlabelled.length : unlabelled, duplicates, lowContrast: live ? lowContrast.length : lowContrast, contrastReview: fb.tally, content, pageErrors, ms: Date.now() - t0 }
   } catch (e) {
     return { status: 'error', error: String(e.message || e).split('\n')[0].slice(0, 300), pageErrors, ms: Date.now() - t0 }
   } finally {
