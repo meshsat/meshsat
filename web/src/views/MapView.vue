@@ -487,7 +487,8 @@ function updateMap() {
     let icon = null
     if (sidc) icon = milsymbolIcon(sidc, callsign, stale, fresh)
     if (!icon) icon = cotMarkerIcon(cotType, callsign, stale, fresh)
-    const m = L.marker([node.latitude, node.longitude], { icon })
+    // The marker is a button (Leaflet makes it focusable); its title names it. [MESHSAT-1843]
+    const m = L.marker([node.latitude, node.longitude], { icon, title: `Node ${node.long_name || callsign}`, alt: `Node ${node.long_name || callsign}` })
     let html = `<strong>${node.long_name || node.short_name || node._id}</strong>`
     html += `<br><span style="color:#888;font-size:11px">${cotType}</span>`
     if (node.battery != null) html += `<br>Battery: ${Math.round(node.battery)}%`
@@ -946,7 +947,7 @@ onUnmounted(() => {
           :class="coordsCopied ? 'text-emerald-400 bg-emerald-400/10' : 'text-gray-400 hover:text-white bg-gray-700'">
           {{ coordsCopied ? 'Copied' : 'Copy' }}
         </button>
-        <button @click.stop="clickedCoords = null" class="text-[10px] text-gray-500 hover:text-gray-300">&times;</button>
+        <button type="button" @click.stop="clickedCoords = null" aria-label="Close" class="text-[10px] text-gray-500 hover:text-gray-300">&times;</button>
       </div>
       <!-- Measurement result overlay -->
       <div v-if="measureMode" class="absolute top-2 left-2 z-[1000] px-2.5 py-1.5 rounded bg-gray-900/90 border border-gray-700 backdrop-blur-sm">
@@ -1011,7 +1012,7 @@ onUnmounted(() => {
         <!-- Team/group filter -->
         <div class="flex items-center gap-1.5">
           <span class="text-gray-600 text-[10px]">Team:</span>
-          <select v-model="selectedTeam"
+          <select v-model="selectedTeam" aria-label="Team"
             class="px-1.5 py-0.5 rounded bg-gray-800 border border-gray-700 text-xs text-gray-300 focus:ring-0 focus:border-gray-600">
             <option value="all">All</option>
             <option v-for="team in availableTeams" :key="team" :value="team">{{ team }}</option>
@@ -1100,16 +1101,16 @@ onUnmounted(() => {
 
         <div v-if="showNewZoneForm" class="space-y-2 bg-tactical-bg/50 rounded-lg p-3">
           <div class="flex gap-2">
-            <input v-model="newZone.name" placeholder="Zone name"
+            <input v-model="newZone.name" aria-label="Zone name" placeholder="Zone name"
               class="flex-1 px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-xs text-gray-200" />
-            <select v-model="newZone.alert_on"
+            <select v-model="newZone.alert_on" aria-label="Alert on"
               class="px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-xs text-gray-200">
               <option value="both">Alert: Both</option>
               <option value="enter">Alert: Enter</option>
               <option value="exit">Alert: Exit</option>
             </select>
           </div>
-          <textarea v-model="newZone.polygon" rows="4"
+          <textarea v-model="newZone.polygon" aria-label="Zone polygon points" rows="4"
             placeholder="Polygon vertices (one per line):&#10;52.370216, 4.895168&#10;52.373086, 4.892568&#10;52.371463, 4.899351"
             class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-xs text-gray-200 font-mono" />
           <div class="flex gap-2">

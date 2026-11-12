@@ -1,6 +1,9 @@
 <script setup>
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, useId } from 'vue'
 import { templates, templateList } from '@/composables/usmtfTemplates'
+
+// Links the visible "USMTF template" label to its select. [MESHSAT-1843]
+const templateId = useId()
 
 // USMTF form picker + field editor. [MESHSAT-563]
 //
@@ -43,10 +46,10 @@ const currentTemplate = computed(() => selected.value ? templates[selected.value
 <template>
   <div class="space-y-3 border border-dashed border-tactical-border rounded p-3">
     <div class="flex items-center justify-between gap-2">
-      <label class="block text-[10px] font-medium text-gray-400 uppercase tracking-wide">
+      <label :for="templateId" class="block text-[10px] font-medium text-gray-400 uppercase tracking-wide">
         USMTF template
       </label>
-      <select v-model="selected"
+      <select :id="templateId" v-model="selected"
         class="px-2 py-1.5 rounded bg-tactical-surface border border-tactical-border text-xs min-h-[36px]">
         <option value="">— none —</option>
         <option v-for="t in templateList()" :key="t.id" :value="t.id">{{ t.name }}</option>

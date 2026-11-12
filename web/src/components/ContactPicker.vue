@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, useId } from 'vue'
 import { useMeshsatStore } from '@/stores/meshsat'
 
 // Typeahead contact combobox. The backend `?q=` filter does not exist
@@ -7,6 +7,9 @@ import { useMeshsatStore } from '@/stores/meshsat'
 // filter client-side. Field-kit directories are small (<100 contacts);
 // switch to a server-side search if that ever stops being true.
 // [MESHSAT-551]
+
+// The visible "To" label names the field; one id per picker. [MESHSAT-1843]
+const inputId = useId()
 
 const props = defineProps({
   modelValue: { type: Object, default: null },  // { id, display_name, addresses }
@@ -68,13 +71,13 @@ watch(() => props.modelValue, (c) => { if (c) query.value = c.display_name })
 
 <template>
   <div id="contact-picker" class="relative">
-    <label class="block text-[10px] font-medium text-gray-400 uppercase tracking-wide mb-1">
+    <label :for="inputId" class="block text-[10px] font-medium text-gray-400 uppercase tracking-wide mb-1">
       To
     </label>
-    <input type="text" v-model="query" @focus="onFocus" @keydown="onKey" autocomplete="off"
+    <input :id="inputId" type="text" v-model="query" @focus="onFocus" @keydown="onKey" autocomplete="off"
       class="w-full px-3 py-2 rounded bg-tactical-surface border border-tactical-border text-sm focus:outline-none focus:border-tactical-iridium min-h-[48px]"
       placeholder="Type a name or address…" />
-    <ul v-show="open && matches.length" role="listbox"
+    <ul v-show="open && matches.length" role="listbox" aria-label="Matching contacts"
       class="absolute left-0 right-0 mt-1 bg-tactical-surface border border-tactical-border rounded shadow-lg z-30 max-h-64 overflow-y-auto">
       <li v-for="(c, i) in matches" :key="c.id" @click="pick(c)"
         role="option" :aria-selected="i === active"

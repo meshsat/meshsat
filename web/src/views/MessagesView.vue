@@ -507,7 +507,7 @@ onUnmounted(() => {
           <div class="bg-gray-900 border border-gray-700 rounded-lg w-full max-w-2xl max-h-[85vh] overflow-y-auto m-4">
             <div class="sticky top-0 bg-gray-900 border-b border-gray-700 px-4 py-3 flex items-center justify-between">
               <h3 class="font-semibold text-sm text-teal-400">SBD ITEM #{{ sbdDetailItem.id }}</h3>
-              <button @click="sbdDetailModal = false" class="text-gray-500 hover:text-gray-300 text-lg">&times;</button>
+              <button type="button" @click="sbdDetailModal = false" aria-label="Close" class="text-gray-500 hover:text-gray-300 text-lg">&times;</button>
             </div>
             <div class="p-4 space-y-4">
               <div class="grid grid-cols-2 gap-1.5 text-[11px]">
@@ -555,9 +555,9 @@ onUnmounted(() => {
         <div class="bg-gray-800/40 rounded-lg border border-gray-700/50 p-3 mb-3">
           <div class="text-[11px] text-gray-500 mb-2">Quick Send SMS</div>
           <div class="flex gap-2">
-            <input v-model="smsTo" type="tel" inputmode="tel" placeholder="+31612345678"
+            <input v-model="smsTo" type="tel" inputmode="tel" aria-label="SMS recipient number" placeholder="+31612345678"
               class="w-40 px-2.5 py-1.5 rounded bg-gray-900/60 border border-gray-700 text-xs text-gray-200 focus:outline-none focus:border-teal-600" />
-            <input v-model="smsMsgText" type="text" enterkeyhint="send" placeholder="Message text..."
+            <input v-model="smsMsgText" type="text" enterkeyhint="send" aria-label="SMS text" placeholder="Message text..."
               class="flex-1 px-2.5 py-1.5 rounded bg-gray-900/60 border border-gray-700 text-xs text-gray-200 focus:outline-none focus:border-teal-600"
               @keydown.enter="doSendSMS" />
             <button @click="doSendSMS" :disabled="!smsTo || !smsMsgText"
@@ -688,7 +688,7 @@ onUnmounted(() => {
       <div class="flex items-center justify-between mb-3">
         <div class="flex items-center gap-2">
           <div class="text-[11px] text-gray-500">Cell Broadcast Alerts</div>
-          <select v-model="cbsFilter" class="px-2 py-1 text-[10px] rounded bg-gray-800 border border-gray-700 text-gray-300">
+          <select v-model="cbsFilter" aria-label="Show broadcasts" class="px-2 py-1 text-[10px] rounded bg-gray-800 border border-gray-700 text-gray-300">
             <option value="all">All</option>
             <option value="presidential">Presidential</option>
             <option value="alert">NL-Alert</option>
@@ -906,16 +906,16 @@ onUnmounted(() => {
         <h3 class="text-sm font-medium text-gray-200 mb-4">{{ editingPreset ? 'Edit Preset' : 'New Preset' }}</h3>
         <div class="space-y-3">
           <div>
-            <label class="block text-xs text-gray-500 mb-1">Name</label>
-            <input v-model="presetForm.name" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="I'm OK">
+            <label for="msg-presetform-name" class="block text-xs text-gray-500 mb-1">Name</label>
+            <input id="msg-presetform-name" v-model="presetForm.name" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="I'm OK">
           </div>
           <div>
-            <label class="block text-xs text-gray-500 mb-1">Text</label>
-            <textarea v-model="presetForm.text" rows="2" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="All good, checking in on schedule."></textarea>
+            <label for="msg-presetform-text" class="block text-xs text-gray-500 mb-1">Text</label>
+            <textarea id="msg-presetform-text" v-model="presetForm.text" rows="2" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="All good, checking in on schedule."></textarea>
           </div>
           <div>
-            <label class="block text-xs text-gray-500 mb-1">Destination</label>
-            <input v-model="presetForm.destination" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="broadcast">
+            <label for="msg-presetform-destination" class="block text-xs text-gray-500 mb-1">Destination</label>
+            <input id="msg-presetform-destination" v-model="presetForm.destination" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="broadcast">
           </div>
           <div class="flex gap-2 mt-4">
             <button @click="showPresetEditor = false" class="flex-1 py-2 rounded bg-gray-700 text-gray-300 text-sm hover:bg-gray-600">Cancel</button>
@@ -950,9 +950,9 @@ onUnmounted(() => {
       </div>
       <div class="flex items-center justify-between mt-2 px-0.5">
         <div class="flex gap-2">
-          <input v-model="sendTo" placeholder="To (broadcast)"
+          <input v-model="sendTo" aria-label="Send to (empty for broadcast)" placeholder="To (broadcast)"
             class="w-24 px-2 py-1 rounded bg-gray-900 border border-gray-700 text-[11px] text-gray-400 placeholder-gray-600 focus:border-teal-600 focus:outline-none">
-          <select v-model.number="sendChannel"
+          <select v-model.number="sendChannel" aria-label="Channel"
             class="px-2 py-1 rounded bg-gray-900 border border-gray-700 text-[11px] text-gray-400 focus:outline-none">
             <option :value="0">Ch 0</option>
             <option :value="1">Ch 1</option>
@@ -1059,7 +1059,7 @@ onUnmounted(() => {
         <div class="bg-gray-900 border border-gray-700 rounded-lg w-full max-w-lg max-h-[70vh] overflow-y-auto m-4">
           <div class="sticky top-0 bg-gray-900 border-b border-gray-700 px-4 py-3 flex items-center justify-between">
             <h3 class="font-semibold text-sm text-blue-400">Deliveries for {{ deliveryMsgRef }}</h3>
-            <button @click="deliveryModal = false" class="text-gray-500 hover:text-gray-300 text-lg">&times;</button>
+            <button type="button" @click="deliveryModal = false" aria-label="Close" class="text-gray-500 hover:text-gray-300 text-lg">&times;</button>
           </div>
           <div class="p-4">
             <div v-if="!deliveryItems.length" class="text-sm text-gray-500 text-center py-6">No deliveries found for this message.</div>

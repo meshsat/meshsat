@@ -234,11 +234,11 @@ async function onSend() {
     <!-- 4. Engineer-only override row -->
     <div v-show="store.isEngineer" class="grid grid-cols-2 gap-3 border border-dashed border-tactical-border rounded p-3">
       <div>
-        <label class="block text-[10px] font-medium text-gray-400 uppercase tracking-wide mb-1">
+        <label for="cmp-strategy" class="block text-[10px] font-medium text-gray-400 uppercase tracking-wide mb-1">
           Strategy (override)
           <FieldHelp text="PRIMARY_ONLY queues on the highest-ranked bearer only. ALL_BEARERS queues one delivery per bearer kind. ORDERED_FALLBACK tries the bearers one after another and needs delivery intents (MESHSAT_DELIVERY_INTENTS); without them the bridge refuses it. Empty = use the contact's stored policy." />
         </label>
-        <select v-model="strategy" class="w-full px-2 py-1.5 rounded bg-tactical-surface border border-tactical-border text-xs">
+        <select id="cmp-strategy" v-model="strategy" class="w-full px-2 py-1.5 rounded bg-tactical-surface border border-tactical-border text-xs">
           <option value="">Auto (policy)</option>
           <option value="PRIMARY_ONLY">Primary only</option>
           <option value="ALL_BEARERS">All bearers</option>
@@ -246,10 +246,10 @@ async function onSend() {
         </select>
       </div>
       <div>
-        <label class="block text-[10px] font-medium text-gray-400 uppercase tracking-wide mb-1">
+        <label for="cmp-beareroverride" class="block text-[10px] font-medium text-gray-400 uppercase tracking-wide mb-1">
           Force bearer
         </label>
-        <select v-model="bearerOverride" class="w-full px-2 py-1.5 rounded bg-tactical-surface border border-tactical-border text-xs">
+        <select id="cmp-beareroverride" v-model="bearerOverride" class="w-full px-2 py-1.5 rounded bg-tactical-surface border border-tactical-border text-xs">
           <option value="">No override</option>
           <option v-for="b in bearers" :key="b.kind" :value="b.kind">{{ b.kind }}</option>
         </select>
@@ -261,10 +261,10 @@ async function onSend() {
 
     <!-- 5. Body -->
     <div>
-      <label class="block text-[10px] font-medium text-gray-400 uppercase tracking-wide mb-1">
+      <label for="cmp-text" class="block text-[10px] font-medium text-gray-400 uppercase tracking-wide mb-1">
         Message
       </label>
-      <textarea v-model="text" rows="4" enterkeyhint="send"
+      <textarea id="cmp-text" v-model="text" rows="4" enterkeyhint="send"
         class="w-full px-3 py-2 rounded bg-tactical-surface border border-tactical-border text-sm focus:outline-none focus:border-tactical-iridium resize-y"
         placeholder="Type your message…"></textarea>
     </div>

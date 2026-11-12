@@ -69,12 +69,27 @@ const battery = computed(() => store.status?.battery?.percent ?? null)
 
 // Directory sync timestamp — arrives with MESHSAT-540.
 const directorySyncedAt = computed(() => store.status?.directory?.last_sync_at || null)
+
+// What each indicator says, for a screen reader: the groups are images of
+// their state (role="img"), named here. [MESHSAT-1843]
+const satLabel = computed(() => {
+  const bars = satBars.value >= 0 ? `${satBars.value} of 5 bars` : 'no reading'
+  const pass = nextPassInfo.value ? (nextPassInfo.value.label === 'NOW' ? ', satellite overhead now' : `, next pass in ${nextPassInfo.value.label}`) : ''
+  return `Satellite signal: ${bars}${pass}`
+})
+const meshLabel = computed(() => {
+  const snr = meshAvgSNR.value !== null ? `, average SNR ${meshAvgSNR.value.toFixed(0)} dB` : ''
+  return `Mesh: ${meshConnected.value ? 'connected' : 'not connected'}, radio ${deviceId.value}, ${nodeCount.value.active} of ${nodeCount.value.total} nodes heard in 2 hours${snr}`
+})
+const cellLabel = computed(() => cellBars.value >= 0
+  ? `Cellular signal: ${cellBars.value} of 5 bars, ${store.cellularStatus?.network_type || 'LTE'}`
+  : 'Cellular signal: no reading')
 </script>
 
 <template>
   <div class="flex items-center gap-3 shrink-0 text-[9px]">
     <!-- Iridium -->
-    <div class="flex items-center gap-1 md:gap-1.5" aria-label="Satellite signal">
+    <div class="flex items-center gap-1 md:gap-1.5" role="img" :aria-label="satLabel">
       <span class="hidden md:inline font-medium text-tactical-iridium/70">SAT</span>
       <div class="flex items-end gap-px h-3">
         <span v-for="i in 5" :key="i" class="w-[3px] rounded-[1px]"
@@ -89,7 +104,7 @@ const directorySyncedAt = computed(() => store.status?.directory?.last_sync_at |
     <span class="hidden md:block w-px h-4 bg-gray-700/50" />
 
     <!-- Mesh -->
-    <div class="flex items-center gap-1 md:gap-1.5" aria-label="Mesh status">
+    <div class="flex items-center gap-1 md:gap-1.5" role="img" :aria-label="meshLabel">
       <span class="hidden md:inline font-medium text-tactical-lora/70">MESH</span>
       <span class="w-1.5 h-1.5 rounded-full" :class="meshConnected ? 'bg-emerald-400' : 'bg-red-400'" />
       <span v-if="meshAvgSNR !== null" class="hidden md:inline font-mono"
@@ -103,7 +118,7 @@ const directorySyncedAt = computed(() => store.status?.directory?.last_sync_at |
     <span class="hidden md:block w-px h-4 bg-gray-700/50" />
 
     <!-- Cellular -->
-    <div class="flex items-center gap-1" aria-label="Cellular signal">
+    <div class="flex items-center gap-1" role="img" :aria-label="cellLabel">
       <span class="hidden md:inline font-medium text-sky-400/70">CELL</span>
       <template v-if="cellBars >= 0">
         <div class="flex items-end gap-px h-3">
@@ -117,13 +132,13 @@ const directorySyncedAt = computed(() => store.status?.directory?.last_sync_at |
     </div>
 
     <!-- Hub connection -->
-    <div class="flex items-center gap-1" aria-label="Hub status">
+    <div class="flex items-center gap-1" role="img" :aria-label="hubConnected ? 'Hub: connected' : 'Hub: not connected'">
       <span class="w-1.5 h-1.5 rounded-full" :class="hubConnected ? 'bg-violet-400' : 'bg-gray-600'" />
       <span class="hidden md:inline" :class="hubConnected ? 'text-violet-400/70' : 'text-gray-600'">HUB</span>
     </div>
 
     <!-- Battery (X1202 UPS — placeholder until endpoint lands) -->
-    <div v-if="battery !== null" class="flex items-center gap-1" aria-label="Battery">
+    <div v-if="battery !== null" class="flex items-center gap-1" role="img" :aria-label="`Battery: ${battery} percent`">
       <svg class="w-3 h-3" viewBox="0 0 24 14" fill="none" stroke="currentColor" stroke-width="2">
         <rect x="1" y="1" width="18" height="12" rx="1" />
         <path d="M20 4v6" />
@@ -134,7 +149,7 @@ const directorySyncedAt = computed(() => store.status?.directory?.last_sync_at |
     </div>
 
     <!-- GPS -->
-    <div class="flex items-center gap-1" aria-label="GPS fix">
+    <div class="flex items-center gap-1" role="img" :aria-label="gpsFix ? 'GPS: fix' : 'GPS: no fix'">
       <span class="w-1.5 h-1.5 rounded-full" :class="gpsFix ? 'bg-tactical-gps' : 'bg-gray-600'" />
       <span class="hidden md:inline" :class="gpsFix ? 'text-tactical-gps/70' : 'text-gray-600'">GPS</span>
     </div>

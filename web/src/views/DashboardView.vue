@@ -2431,7 +2431,7 @@ function widgetGridClass(id) {
         <!-- SIM PIN Unlock (when PIN is required) -->
         <div v-if="store.cellularStatus?.sim_state === 'PIN_REQUIRED'" class="mt-3 pt-2 border-t border-tactical-border">
           <div class="flex items-center gap-2">
-            <input type="password" v-model="pinInput" maxlength="8" inputmode="numeric" pattern="[0-9]*" placeholder="SIM PIN"
+            <input type="password" v-model="pinInput" aria-label="SIM PIN" maxlength="8" inputmode="numeric" pattern="[0-9]*" placeholder="SIM PIN"
               class="flex-1 bg-tactical-bg border border-tactical-border rounded px-2 py-1 text-[11px] text-gray-200 font-mono" />
             <button @click="unlockPIN" :disabled="pinUnlocking"
               class="text-[10px] px-2 py-1 rounded bg-sky-500/20 text-sky-400 hover:bg-sky-500/30 disabled:opacity-50">
@@ -2654,7 +2654,7 @@ function widgetGridClass(id) {
           </span>
         </div>
 
-        <div class="space-y-1 tactical-scroll max-h-[500px] overflow-y-auto flex-1">
+        <div class="space-y-1 tactical-scroll max-h-[500px] overflow-y-auto flex-1" tabindex="0" role="region" aria-label="SBD queue">
           <div v-for="item in unifiedQueue" :key="item._key"
             class="flex items-center gap-2 py-1.5 px-2 rounded bg-tactical-bg/50 cursor-pointer hover:bg-white/[0.04] transition-colors"
             :class="item._opacity"
@@ -3135,7 +3135,7 @@ fingerprint: ${store.aprsStatus.encryption.key_fingerprint || '(unresolved)'}`">
         <div class="bg-tactical-surface border border-tactical-border rounded-lg w-full max-w-full sm:max-w-2xl max-h-[85vh] overflow-y-auto m-4">
           <div class="sticky top-0 bg-tactical-surface border-b border-tactical-border px-4 py-3 flex items-center justify-between">
             <h3 class="font-display font-semibold text-sm text-tactical-iridium tracking-wide">{{ statsTitle }} — DIAGNOSTICS</h3>
-            <button @click="statsModal = false" class="text-gray-500 hover:text-gray-300 text-lg leading-none">&times;</button>
+            <button type="button" @click="statsModal = false" aria-label="Close" class="text-gray-500 hover:text-gray-300 text-lg leading-none">&times;</button>
           </div>
           <div class="p-4">
             <pre class="text-[11px] font-mono text-gray-300 whitespace-pre-wrap break-all bg-tactical-bg rounded p-3 max-h-[60vh] overflow-y-auto">{{ JSON.stringify(statsData, null, 2) }}</pre>
@@ -3154,7 +3154,7 @@ fingerprint: ${store.aprsStatus.encryption.key_fingerprint || '(unresolved)'}`">
               {{ queueDetailItem._type === 'sms' ? 'SMS' : queueDetailItem._type === 'sbd' ? 'SBD' : 'MESSAGE' }}
               #{{ queueDetailItem._raw?.id || '' }}
             </h3>
-            <button @click="queueDetailModal = false" class="text-gray-500 hover:text-gray-300 text-lg leading-none">&times;</button>
+            <button type="button" @click="queueDetailModal = false" aria-label="Close" class="text-gray-500 hover:text-gray-300 text-lg leading-none">&times;</button>
           </div>
           <div class="p-4 space-y-4">
 
@@ -3264,7 +3264,7 @@ fingerprint: ${store.aprsStatus.encryption.key_fingerprint || '(unresolved)'}`">
                 <span class="text-[10px] text-gray-500 font-mono">{{ shortId(nodeDetailData.user_id) }}</span>
               </div>
             </div>
-            <button @click="nodeDetailModal = false" class="text-gray-500 hover:text-gray-300 text-lg leading-none">&times;</button>
+            <button type="button" @click="nodeDetailModal = false" aria-label="Close" class="text-gray-500 hover:text-gray-300 text-lg leading-none">&times;</button>
           </div>
           <div class="p-4 space-y-4">
             <!-- Identity -->

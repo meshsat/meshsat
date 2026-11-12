@@ -1736,7 +1736,7 @@ onUnmounted(() => {
       <div v-if="!store.config" class="text-sm text-gray-500">Loading radio config...</div>
       <div v-else>
         <div class="flex gap-2 mb-4">
-          <select v-model="radioSection" class="px-3 py-2 rounded bg-gray-800 border border-gray-700 text-sm text-gray-200">
+          <select v-model="radioSection" aria-label="Radio settings section" class="px-3 py-2 rounded bg-gray-800 border border-gray-700 text-sm text-gray-200">
             <option value="lora">LoRa Radio</option>
             <option value="device">Device</option>
             <option value="position">Position</option>
@@ -1785,19 +1785,19 @@ onUnmounted(() => {
         <div v-if="editingChannel === ch.index" class="mt-3 space-y-3">
           <div class="grid grid-cols-2 gap-3">
             <div>
-              <label class="block text-xs text-gray-500 mb-1">Name</label>
-              <input v-model="channelForm.name" maxlength="11" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+              <label for="set-channelform-name" class="block text-xs text-gray-500 mb-1">Name</label>
+              <input id="set-channelform-name" v-model="channelForm.name" maxlength="11" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
             </div>
             <div>
-              <label class="block text-xs text-gray-500 mb-1">Role</label>
-              <select v-model="channelForm.role" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+              <label for="set-channelform-role" class="block text-xs text-gray-500 mb-1">Role</label>
+              <select id="set-channelform-role" v-model="channelForm.role" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
                 <option>PRIMARY</option><option>SECONDARY</option><option>DISABLED</option>
               </select>
             </div>
           </div>
           <div>
-            <label class="block text-xs text-gray-500 mb-1">PSK (base64)</label>
-            <input v-model="channelForm.psk" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200 font-mono">
+            <label for="set-channelform-psk" class="block text-xs text-gray-500 mb-1">PSK (base64)</label>
+            <input id="set-channelform-psk" v-model="channelForm.psk" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200 font-mono">
           </div>
           <div class="flex gap-4">
             <label class="flex items-center gap-1 text-xs text-gray-400"><input type="checkbox" v-model="channelForm.uplink_enabled" class="rounded bg-gray-900 border-gray-700"> Uplink</label>
@@ -1821,27 +1821,27 @@ onUnmounted(() => {
           </span>
         </div>
         <div>
-          <label class="block text-xs text-gray-500 mb-1">Broker URL</label>
-          <input v-model="mqttForm.broker_url" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="tcp://mosquitto:1883">
+          <label for="set-mqttform-broker-url" class="block text-xs text-gray-500 mb-1">Broker URL</label>
+          <input id="set-mqttform-broker-url" v-model="mqttForm.broker_url" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="tcp://mosquitto:1883">
         </div>
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <label class="block text-xs text-gray-500 mb-1">Username</label>
-            <input v-model="mqttForm.username" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+            <label for="set-mqttform-username" class="block text-xs text-gray-500 mb-1">Username</label>
+            <input id="set-mqttform-username" v-model="mqttForm.username" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
           </div>
           <div>
-            <label class="block text-xs text-gray-500 mb-1">Password</label>
-            <input v-model="mqttForm.password" type="password" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+            <label for="set-mqttform-password" class="block text-xs text-gray-500 mb-1">Password</label>
+            <input id="set-mqttform-password" v-model="mqttForm.password" type="password" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
           </div>
         </div>
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <label class="block text-xs text-gray-500 mb-1">Topic Prefix</label>
-            <input v-model="mqttForm.topic_prefix" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+            <label for="set-mqttform-topic-prefix" class="block text-xs text-gray-500 mb-1">Topic Prefix</label>
+            <input id="set-mqttform-topic-prefix" v-model="mqttForm.topic_prefix" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
           </div>
           <div>
-            <label class="block text-xs text-gray-500 mb-1">Channel Name</label>
-            <input v-model="mqttForm.channel_name" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+            <label for="set-mqttform-channel-name" class="block text-xs text-gray-500 mb-1">Channel Name</label>
+            <input id="set-mqttform-channel-name" v-model="mqttForm.channel_name" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
           </div>
         </div>
         <div class="flex items-center gap-2">
@@ -1864,8 +1864,8 @@ onUnmounted(() => {
 
         <!-- Mailbox Polling Mode -->
         <div>
-          <label class="block text-xs text-gray-500 mb-1">Mailbox Polling Mode</label>
-          <select v-model="iridiumForm.mailbox_mode" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+          <label for="set-iridiumform-mailbox-mode" class="block text-xs text-gray-500 mb-1">Mailbox Polling Mode</label>
+          <select id="set-iridiumform-mailbox-mode" v-model="iridiumForm.mailbox_mode" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
             <option value="ring_alert_only">Ring Alert Only (no periodic polling, saves credits)</option>
             <option value="scheduled">Scheduled (pass-aware periodic polling)</option>
             <option value="off">Off (no mailbox checking)</option>
@@ -1880,12 +1880,12 @@ onUnmounted(() => {
         <!-- Poll interval (only shown for scheduled mode) -->
         <div v-if="iridiumForm.mailbox_mode === 'scheduled'" class="grid grid-cols-2 gap-3">
           <div>
-            <label class="block text-xs text-gray-500 mb-1">Idle Poll Interval (sec)</label>
-            <input v-model.number="iridiumForm.idle_poll_sec" type="number" min="60" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+            <label for="set-iridiumform-idle-poll-sec" class="block text-xs text-gray-500 mb-1">Idle Poll Interval (sec)</label>
+            <input id="set-iridiumform-idle-poll-sec" v-model.number="iridiumForm.idle_poll_sec" type="number" min="60" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
           </div>
           <div>
-            <label class="block text-xs text-gray-500 mb-1">Active Poll Interval (sec)</label>
-            <input v-model.number="iridiumForm.active_poll_sec" type="number" min="10" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+            <label for="set-iridiumform-active-poll-sec" class="block text-xs text-gray-500 mb-1">Active Poll Interval (sec)</label>
+            <input id="set-iridiumform-active-poll-sec" v-model.number="iridiumForm.active_poll_sec" type="number" min="10" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
           </div>
         </div>
 
@@ -1900,33 +1900,33 @@ onUnmounted(() => {
 
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <label class="block text-xs text-gray-500 mb-1">Max Text Length</label>
-            <input v-model.number="iridiumForm.max_text_length" type="number" min="1" max="340" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+            <label for="set-iridiumform-max-text-length" class="block text-xs text-gray-500 mb-1">Max Text Length</label>
+            <input id="set-iridiumform-max-text-length" v-model.number="iridiumForm.max_text_length" type="number" min="1" max="340" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
           </div>
           <div>
-            <label class="block text-xs text-gray-500 mb-1">Min Signal Bars</label>
-            <input v-model.number="iridiumForm.min_signal_bars" type="number" min="0" max="5" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+            <label for="set-iridiumform-min-signal-bars" class="block text-xs text-gray-500 mb-1">Min Signal Bars</label>
+            <input id="set-iridiumform-min-signal-bars" v-model.number="iridiumForm.min_signal_bars" type="number" min="0" max="5" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
           </div>
         </div>
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <label class="block text-xs text-gray-500 mb-1">Min Elevation (°)</label>
-            <input v-model.number="iridiumForm.min_elev_deg" type="number" min="0" max="90" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+            <label for="set-iridiumform-min-elev-deg" class="block text-xs text-gray-500 mb-1">Min Elevation (°)</label>
+            <input id="set-iridiumform-min-elev-deg" v-model.number="iridiumForm.min_elev_deg" type="number" min="0" max="90" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
             <p class="text-[10px] text-gray-600 mt-0.5">Pass scheduler min elevation (5=clear sky, 40=urban, 60=canyon)</p>
           </div>
           <div>
-            <label class="block text-xs text-gray-500 mb-1">Critical Reserve (%)</label>
-            <input v-model.number="iridiumForm.critical_reserve" type="number" min="0" max="100" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+            <label for="set-iridiumform-critical-reserve" class="block text-xs text-gray-500 mb-1">Critical Reserve (%)</label>
+            <input id="set-iridiumform-critical-reserve" v-model.number="iridiumForm.critical_reserve" type="number" min="0" max="100" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
           </div>
         </div>
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <label class="block text-xs text-gray-500 mb-1">Daily Budget (0=unlimited)</label>
-            <input v-model.number="iridiumForm.daily_budget" type="number" min="0" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+            <label for="set-iridiumform-daily-budget" class="block text-xs text-gray-500 mb-1">Daily Budget (0=unlimited)</label>
+            <input id="set-iridiumform-daily-budget" v-model.number="iridiumForm.daily_budget" type="number" min="0" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
           </div>
           <div>
-            <label class="block text-xs text-gray-500 mb-1">Monthly Budget (0=unlimited)</label>
-            <input v-model.number="iridiumForm.monthly_budget" type="number" min="0" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+            <label for="set-iridiumform-monthly-budget" class="block text-xs text-gray-500 mb-1">Monthly Budget (0=unlimited)</label>
+            <input id="set-iridiumform-monthly-budget" v-model.number="iridiumForm.monthly_budget" type="number" min="0" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
           </div>
         </div>
         <div class="flex flex-wrap gap-4">
@@ -1970,12 +1970,12 @@ onUnmounted(() => {
         <p class="text-xs text-gray-500">Set daily and monthly SBD credit limits. Zero means unlimited.</p>
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <label class="block text-xs text-gray-500 mb-1">Daily Limit</label>
-            <input v-model.number="budgetForm.daily" type="number" min="0" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+            <label for="set-budgetform-daily" class="block text-xs text-gray-500 mb-1">Daily Limit</label>
+            <input id="set-budgetform-daily" v-model.number="budgetForm.daily" type="number" min="0" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
           </div>
           <div>
-            <label class="block text-xs text-gray-500 mb-1">Monthly Limit</label>
-            <input v-model.number="budgetForm.monthly" type="number" min="0" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+            <label for="set-budgetform-monthly" class="block text-xs text-gray-500 mb-1">Monthly Limit</label>
+            <input id="set-budgetform-monthly" v-model.number="budgetForm.monthly" type="number" min="0" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
           </div>
         </div>
         <div v-if="store.creditSummary" class="text-xs text-gray-500">
@@ -2017,7 +2017,7 @@ onUnmounted(() => {
       <div v-if="cell?.host?.installed" class="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-3">
         <h4 class="text-sm font-medium text-gray-200">Radio</h4>
         <p class="text-[11px] text-gray-500">The radio keys up only from here. The purpose goes into the kit's TX log before the first emission; the host refuses without the band checks, the Pluto on the cell image and the site attestation.</p>
-        <input v-model="cellPurpose" type="text" placeholder="Purpose of this emission (for the TX log)" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" />
+        <input v-model="cellPurpose" type="text" aria-label="Purpose of this emission, for the TX log" placeholder="Purpose of this emission (for the TX log)" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" />
         <div class="flex gap-2">
           <button :disabled="cellBusy || cellHost?.radio?.active" @click="cellRadio('start')" class="px-3 py-1.5 rounded bg-red-700 hover:bg-red-600 disabled:opacity-40 text-xs text-white">Key radio up</button>
           <button :disabled="cellBusy || !cellHost?.radio?.active" @click="cellRadio('stop')" class="px-3 py-1.5 rounded bg-gray-700 hover:bg-gray-600 disabled:opacity-40 text-xs text-gray-100">Key radio down</button>
@@ -2120,21 +2120,21 @@ onUnmounted(() => {
       <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-3 mb-4">
         <h4 class="text-sm font-medium text-gray-200">SMS Configuration</h4>
         <div>
-          <label class="block text-xs text-gray-500 mb-1">Destination Numbers (comma-separated)</label>
-          <input v-model="cellularForm.sms_destinations" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="+1234567890,+0987654321">
+          <label for="set-cellularform-sms-destinations" class="block text-xs text-gray-500 mb-1">Destination Numbers (comma-separated)</label>
+          <input id="set-cellularform-sms-destinations" v-model="cellularForm.sms_destinations" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="+1234567890,+0987654321">
         </div>
         <div>
-          <label class="block text-xs text-gray-500 mb-1">Allowed Senders (comma-separated, empty = all)</label>
-          <input v-model="cellularForm.allowed_senders" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="+1234567890">
+          <label for="set-cellularform-allowed-senders" class="block text-xs text-gray-500 mb-1">Allowed Senders (comma-separated, empty = all)</label>
+          <input id="set-cellularform-allowed-senders" v-model="cellularForm.allowed_senders" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="+1234567890">
         </div>
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <label class="block text-xs text-gray-500 mb-1">SMS Prefix</label>
-            <input v-model="cellularForm.sms_prefix" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+            <label for="set-cellularform-sms-prefix" class="block text-xs text-gray-500 mb-1">SMS Prefix</label>
+            <input id="set-cellularform-sms-prefix" v-model="cellularForm.sms_prefix" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
           </div>
           <div>
-            <label class="block text-xs text-gray-500 mb-1">Max Segments</label>
-            <input v-model.number="cellularForm.max_segments" type="number" min="1" max="10" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+            <label for="set-cellularform-max-segments" class="block text-xs text-gray-500 mb-1">Max Segments</label>
+            <input id="set-cellularform-max-segments" v-model.number="cellularForm.max_segments" type="number" min="1" max="10" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
           </div>
         </div>
       </div>
@@ -2143,8 +2143,8 @@ onUnmounted(() => {
       <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-3 mb-4">
         <h4 class="text-sm font-medium text-gray-200">Data Connection</h4>
         <div>
-          <label class="block text-xs text-gray-500 mb-1">APN</label>
-          <input v-model="cellularForm.apn" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="internet">
+          <label for="set-cellularform-apn" class="block text-xs text-gray-500 mb-1">APN</label>
+          <input id="set-cellularform-apn" v-model="cellularForm.apn" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="internet">
         </div>
         <div class="flex gap-4">
           <label class="flex items-center gap-1 text-xs text-gray-400">
@@ -2155,8 +2155,8 @@ onUnmounted(() => {
           </label>
         </div>
         <div>
-          <label class="block text-xs text-gray-500 mb-1">APN Failover List (comma-separated, tried in order if primary fails)</label>
-          <input v-model="cellularForm.apn_failover_list" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="internet,data,broadband">
+          <label for="set-cellularform-apn-failover-list" class="block text-xs text-gray-500 mb-1">APN Failover List (comma-separated, tried in order if primary fails)</label>
+          <input id="set-cellularform-apn-failover-list" v-model="cellularForm.apn_failover_list" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="internet,data,broadband">
         </div>
         <div class="flex gap-2">
           <button @click="store.connectCellularData(cellularForm.apn)" class="px-3 py-1.5 rounded bg-emerald-600 text-white text-xs hover:bg-emerald-500">Connect</button>
@@ -2168,19 +2168,19 @@ onUnmounted(() => {
       <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-3 mb-4">
         <h4 class="text-sm font-medium text-gray-200">Webhooks</h4>
         <div>
-          <label class="block text-xs text-gray-500 mb-1">Outbound URL</label>
-          <input v-model="cellularForm.webhook_url" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="https://example.com/webhook">
+          <label for="set-cellularform-webhook-url" class="block text-xs text-gray-500 mb-1">Outbound URL</label>
+          <input id="set-cellularform-webhook-url" v-model="cellularForm.webhook_url" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="https://example.com/webhook">
         </div>
         <div>
-          <label class="block text-xs text-gray-500 mb-1">Outbound Headers (JSON)</label>
-          <input v-model="cellularForm.webhook_headers" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200 font-mono" placeholder='{"Authorization": "Bearer ..."}'>
+          <label for="set-cellularform-webhook-headers" class="block text-xs text-gray-500 mb-1">Outbound Headers (JSON)</label>
+          <input id="set-cellularform-webhook-headers" v-model="cellularForm.webhook_headers" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200 font-mono" placeholder='{"Authorization": "Bearer ..."}'>
         </div>
         <div class="flex gap-4">
           <label class="flex items-center gap-1 text-xs text-gray-400"><input type="checkbox" v-model="cellularForm.inbound_webhook_enabled" class="rounded bg-gray-900 border-gray-700"> Inbound webhook</label>
         </div>
         <div v-if="cellularForm.inbound_webhook_enabled">
-          <label class="block text-xs text-gray-500 mb-1">Inbound Secret</label>
-          <input v-model="cellularForm.inbound_webhook_secret" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200 font-mono">
+          <label for="set-cellularform-inbound-webhook-secret" class="block text-xs text-gray-500 mb-1">Inbound Secret</label>
+          <input id="set-cellularform-inbound-webhook-secret" v-model="cellularForm.inbound_webhook_secret" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200 font-mono">
         </div>
       </div>
 
@@ -2189,8 +2189,8 @@ onUnmounted(() => {
         <h4 class="text-sm font-medium text-gray-200">Dynamic DNS</h4>
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <label class="block text-xs text-gray-500 mb-1">Provider</label>
-            <select v-model="cellularForm.dyndns_provider" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+            <label for="set-cellularform-dyndns-provider" class="block text-xs text-gray-500 mb-1">Provider</label>
+            <select id="set-cellularform-dyndns-provider" v-model="cellularForm.dyndns_provider" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
               <option value="none">None</option>
               <option value="duckdns">DuckDNS</option>
               <option value="noip">No-IP</option>
@@ -2200,22 +2200,22 @@ onUnmounted(() => {
             </select>
           </div>
           <div>
-            <label class="block text-xs text-gray-500 mb-1">Update Interval (sec)</label>
-            <input v-model.number="cellularForm.dyndns_interval" type="number" min="60" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+            <label for="set-cellularform-dyndns-interval" class="block text-xs text-gray-500 mb-1">Update Interval (sec)</label>
+            <input id="set-cellularform-dyndns-interval" v-model.number="cellularForm.dyndns_interval" type="number" min="60" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
           </div>
         </div>
         <div v-if="cellularForm.dyndns_provider !== 'none'">
           <div>
-            <label class="block text-xs text-gray-500 mb-1">Domain</label>
-            <input v-model="cellularForm.dyndns_domain" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" :placeholder="cellularForm.dyndns_provider === 'cloudflare' ? 'meshsat.example.com' : 'mydevice.duckdns.org'">
+            <label for="set-cellularform-dyndns-domain" class="block text-xs text-gray-500 mb-1">Domain</label>
+            <input id="set-cellularform-dyndns-domain" v-model="cellularForm.dyndns_domain" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" :placeholder="cellularForm.dyndns_provider === 'cloudflare' ? 'meshsat.example.com' : 'mydevice.duckdns.org'">
           </div>
           <div v-if="cellularForm.dyndns_provider === 'cloudflare'" class="mt-3">
-            <label class="block text-xs text-gray-500 mb-1">Zone ID</label>
-            <input v-model="cellularForm.dyndns_zone_id" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="Cloudflare Zone ID (from domain overview)">
+            <label for="set-cellularform-dyndns-zone-id" class="block text-xs text-gray-500 mb-1">Zone ID</label>
+            <input id="set-cellularform-dyndns-zone-id" v-model="cellularForm.dyndns_zone_id" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="Cloudflare Zone ID (from domain overview)">
           </div>
           <div class="mt-3">
-            <label class="block text-xs text-gray-500 mb-1">{{ cellularForm.dyndns_provider === 'cloudflare' ? 'API Token' : 'Token / Credentials' }}</label>
-            <input v-model="cellularForm.dyndns_token" type="password" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+            <label for="set-cellularform-dyndns-token" class="block text-xs text-gray-500 mb-1">{{ cellularForm.dyndns_provider === 'cloudflare' ? 'API Token' : 'Token / Credentials' }}</label>
+            <input id="set-cellularform-dyndns-token" v-model="cellularForm.dyndns_token" type="password" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
           </div>
         </div>
       </div>
@@ -2258,22 +2258,22 @@ onUnmounted(() => {
           </div>
           <div class="grid grid-cols-2 gap-2">
             <div>
-              <label class="block text-[10px] text-gray-500 mb-1">Label</label>
-              <input v-model="simForm.label" class="w-full px-2 py-1.5 rounded bg-gray-800 border border-gray-700 text-xs text-gray-200" placeholder="My SIM">
+              <label for="set-simform-label" class="block text-[10px] text-gray-500 mb-1">Label</label>
+              <input id="set-simform-label" v-model="simForm.label" class="w-full px-2 py-1.5 rounded bg-gray-800 border border-gray-700 text-xs text-gray-200" placeholder="My SIM">
             </div>
             <div>
-              <label class="block text-[10px] text-gray-500 mb-1">Phone Number</label>
-              <input v-model="simForm.phone" type="tel" inputmode="tel" class="w-full px-2 py-1.5 rounded bg-gray-800 border border-gray-700 text-xs text-gray-200 font-mono" placeholder="+31612345678">
+              <label for="set-simform-phone" class="block text-[10px] text-gray-500 mb-1">Phone Number</label>
+              <input id="set-simform-phone" v-model="simForm.phone" type="tel" inputmode="tel" class="w-full px-2 py-1.5 rounded bg-gray-800 border border-gray-700 text-xs text-gray-200 font-mono" placeholder="+31612345678">
             </div>
           </div>
           <div class="grid grid-cols-2 gap-2">
             <div>
-              <label class="block text-[10px] text-gray-500 mb-1">PIN Code</label>
-              <input v-model="simForm.pin" type="password" inputmode="numeric" pattern="[0-9]*" class="w-full px-2 py-1.5 rounded bg-gray-800 border border-gray-700 text-xs text-gray-200 font-mono" placeholder="1234">
+              <label for="set-simform-pin" class="block text-[10px] text-gray-500 mb-1">PIN Code</label>
+              <input id="set-simform-pin" v-model="simForm.pin" type="password" inputmode="numeric" pattern="[0-9]*" class="w-full px-2 py-1.5 rounded bg-gray-800 border border-gray-700 text-xs text-gray-200 font-mono" placeholder="1234">
             </div>
             <div>
-              <label class="block text-[10px] text-gray-500 mb-1">Notes</label>
-              <input v-model="simForm.notes" class="w-full px-2 py-1.5 rounded bg-gray-800 border border-gray-700 text-xs text-gray-200" placeholder="Optional">
+              <label for="set-simform-notes" class="block text-[10px] text-gray-500 mb-1">Notes</label>
+              <input id="set-simform-notes" v-model="simForm.notes" class="w-full px-2 py-1.5 rounded bg-gray-800 border border-gray-700 text-xs text-gray-200" placeholder="Optional">
             </div>
           </div>
           <div class="text-[9px] text-gray-600">PIN is stored locally for auto-unlock when this SIM is inserted.</div>
@@ -2315,17 +2315,17 @@ onUnmounted(() => {
         <div v-if="showContactForm" class="bg-gray-900 rounded p-3 border border-gray-700 space-y-2">
           <div class="grid grid-cols-2 gap-2">
             <div>
-              <label class="block text-[10px] text-gray-500 mb-1">Name</label>
-              <input v-model="contactForm.name" class="w-full px-2 py-1.5 rounded bg-gray-800 border border-gray-700 text-xs text-gray-200" placeholder="Alice">
+              <label for="set-contactform-name" class="block text-[10px] text-gray-500 mb-1">Name</label>
+              <input id="set-contactform-name" v-model="contactForm.name" class="w-full px-2 py-1.5 rounded bg-gray-800 border border-gray-700 text-xs text-gray-200" placeholder="Alice">
             </div>
             <div>
-              <label class="block text-[10px] text-gray-500 mb-1">Phone</label>
-              <input v-model="contactForm.phone" type="tel" inputmode="tel" class="w-full px-2 py-1.5 rounded bg-gray-800 border border-gray-700 text-xs text-gray-200 font-mono" placeholder="+1234567890">
+              <label for="set-contactform-phone" class="block text-[10px] text-gray-500 mb-1">Phone</label>
+              <input id="set-contactform-phone" v-model="contactForm.phone" type="tel" inputmode="tel" class="w-full px-2 py-1.5 rounded bg-gray-800 border border-gray-700 text-xs text-gray-200 font-mono" placeholder="+1234567890">
             </div>
           </div>
           <div>
-            <label class="block text-[10px] text-gray-500 mb-1">Notes</label>
-            <input v-model="contactForm.notes" class="w-full px-2 py-1.5 rounded bg-gray-800 border border-gray-700 text-xs text-gray-200" placeholder="Optional notes">
+            <label for="set-contactform-notes" class="block text-[10px] text-gray-500 mb-1">Notes</label>
+            <input id="set-contactform-notes" v-model="contactForm.notes" class="w-full px-2 py-1.5 rounded bg-gray-800 border border-gray-700 text-xs text-gray-200" placeholder="Optional notes">
           </div>
           <label class="flex items-center gap-1 text-xs text-gray-400">
             <input type="checkbox" v-model="contactForm.auto_fwd" class="rounded bg-gray-800 border-gray-600"> Auto-forward SMS from this contact to mesh
@@ -2371,32 +2371,32 @@ onUnmounted(() => {
         </div>
 
         <div>
-          <label class="block text-xs text-gray-500 mb-1">Serial Port</label>
-          <input v-model="zigbeeForm.serial_port" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="auto">
+          <label for="set-zigbeeform-serial-port" class="block text-xs text-gray-500 mb-1">Serial Port</label>
+          <input id="set-zigbeeform-serial-port" v-model="zigbeeForm.serial_port" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="auto">
           <p class="text-[10px] text-gray-600 mt-0.5">"auto" scans USB ports for CC2652P/CC2531 coordinator dongles</p>
         </div>
 
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <label class="block text-xs text-gray-500 mb-1">Default Dest Address</label>
-            <input v-model.number="zigbeeForm.default_dst_addr" type="number" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+            <label for="set-zigbeeform-default-dst-addr" class="block text-xs text-gray-500 mb-1">Default Dest Address</label>
+            <input id="set-zigbeeform-default-dst-addr" v-model.number="zigbeeForm.default_dst_addr" type="number" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
             <p class="text-[10px] text-gray-600 mt-0.5">65535 = broadcast (0xFFFF)</p>
           </div>
           <div>
-            <label class="block text-xs text-gray-500 mb-1">Default Endpoint</label>
-            <input v-model.number="zigbeeForm.default_dst_ep" type="number" min="1" max="240" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+            <label for="set-zigbeeform-default-dst-ep" class="block text-xs text-gray-500 mb-1">Default Endpoint</label>
+            <input id="set-zigbeeform-default-dst-ep" v-model.number="zigbeeForm.default_dst_ep" type="number" min="1" max="240" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
           </div>
         </div>
 
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <label class="block text-xs text-gray-500 mb-1">Default Cluster ID</label>
-            <input v-model.number="zigbeeForm.default_cluster" type="number" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+            <label for="set-zigbeeform-default-cluster" class="block text-xs text-gray-500 mb-1">Default Cluster ID</label>
+            <input id="set-zigbeeform-default-cluster" v-model.number="zigbeeForm.default_cluster" type="number" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
             <p class="text-[10px] text-gray-600 mt-0.5">6 = On/Off, 8 = Level Control</p>
           </div>
           <div>
-            <label class="block text-xs text-gray-500 mb-1">Inbound Mesh Channel</label>
-            <input v-model.number="zigbeeForm.inbound_channel" type="number" min="0" max="7" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+            <label for="set-zigbeeform-inbound-channel" class="block text-xs text-gray-500 mb-1">Inbound Mesh Channel</label>
+            <input id="set-zigbeeform-inbound-channel" v-model.number="zigbeeForm.inbound_channel" type="number" min="0" max="7" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
           </div>
         </div>
 
@@ -2426,8 +2426,8 @@ onUnmounted(() => {
         <p class="text-[10px] text-gray-600">Open the network to allow new ZigBee devices to pair with the coordinator.</p>
         <div class="flex items-center gap-3">
           <div class="flex-1">
-            <label class="block text-xs text-gray-500 mb-1">Duration (seconds)</label>
-            <input v-model.number="permitJoinDuration" type="number" min="1" max="254" :disabled="permitJoinActive"
+            <label for="set-permitjoinduration" class="block text-xs text-gray-500 mb-1">Duration (seconds)</label>
+            <input id="set-permitjoinduration" v-model.number="permitJoinDuration" type="number" min="1" max="254" :disabled="permitJoinActive"
               class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200 disabled:opacity-50">
           </div>
           <button @click="togglePermitJoin" class="mt-4 px-4 py-2 rounded text-sm text-white"
@@ -2474,16 +2474,16 @@ onUnmounted(() => {
         <p class="text-xs text-gray-500">Broadcast MeshSat's location as a position packet to the mesh.</p>
         <div class="grid grid-cols-3 gap-3">
           <div>
-            <label class="block text-xs text-gray-500 mb-1">Latitude</label>
-            <input v-model.number="posForm.latitude" type="number" step="0.000001" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+            <label for="set-posform-latitude" class="block text-xs text-gray-500 mb-1">Latitude</label>
+            <input id="set-posform-latitude" v-model.number="posForm.latitude" type="number" step="0.000001" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
           </div>
           <div>
-            <label class="block text-xs text-gray-500 mb-1">Longitude</label>
-            <input v-model.number="posForm.longitude" type="number" step="0.000001" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+            <label for="set-posform-longitude" class="block text-xs text-gray-500 mb-1">Longitude</label>
+            <input id="set-posform-longitude" v-model.number="posForm.longitude" type="number" step="0.000001" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
           </div>
           <div>
-            <label class="block text-xs text-gray-500 mb-1">Altitude (m)</label>
-            <input v-model.number="posForm.altitude" type="number" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+            <label for="set-posform-altitude" class="block text-xs text-gray-500 mb-1">Altitude (m)</label>
+            <input id="set-posform-altitude" v-model.number="posForm.altitude" type="number" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
           </div>
         </div>
         <div class="flex gap-2">
@@ -2511,8 +2511,8 @@ onUnmounted(() => {
           {{ cannedLoading ? 'Requesting...' : 'Request from Device' }}
         </button>
         <div>
-          <label class="block text-xs text-gray-500 mb-1">Messages (pipe-separated)</label>
-          <textarea v-model="cannedText" rows="4" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200 font-mono" placeholder="OK|Help|SOS|Returning to base|Position report"></textarea>
+          <label for="set-cannedtext" class="block text-xs text-gray-500 mb-1">Messages (pipe-separated)</label>
+          <textarea id="set-cannedtext" v-model="cannedText" rows="4" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200 font-mono" placeholder="OK|Help|SOS|Returning to base|Position report"></textarea>
         </div>
         <button @click="saveCannedMessages" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500">Save to Device</button>
       </div>
@@ -2571,22 +2571,22 @@ onUnmounted(() => {
             </label>
           </div>
           <div>
-            <label class="block text-xs text-gray-500 mb-1">Broker Address</label>
-            <input v-model="deviceMqttForm.address" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200 font-mono" placeholder="mqtt.meshtastic.org">
+            <label for="set-devicemqttform-address" class="block text-xs text-gray-500 mb-1">Broker Address</label>
+            <input id="set-devicemqttform-address" v-model="deviceMqttForm.address" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200 font-mono" placeholder="mqtt.meshtastic.org">
           </div>
           <div class="grid grid-cols-2 gap-3">
             <div>
-              <label class="block text-xs text-gray-500 mb-1">Username</label>
-              <input v-model="deviceMqttForm.username" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+              <label for="set-devicemqttform-username" class="block text-xs text-gray-500 mb-1">Username</label>
+              <input id="set-devicemqttform-username" v-model="deviceMqttForm.username" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
             </div>
             <div>
-              <label class="block text-xs text-gray-500 mb-1">Password</label>
-              <input v-model="deviceMqttForm.password" type="password" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+              <label for="set-devicemqttform-password" class="block text-xs text-gray-500 mb-1">Password</label>
+              <input id="set-devicemqttform-password" v-model="deviceMqttForm.password" type="password" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
             </div>
           </div>
           <div>
-            <label class="block text-xs text-gray-500 mb-1">Root Topic</label>
-            <input v-model="deviceMqttForm.root" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200 font-mono" placeholder="msh/US">
+            <label for="set-devicemqttform-root" class="block text-xs text-gray-500 mb-1">Root Topic</label>
+            <input id="set-devicemqttform-root" v-model="deviceMqttForm.root" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200 font-mono" placeholder="msh/US">
           </div>
           <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
             <label class="flex items-center gap-2 text-sm text-gray-300">
@@ -2613,12 +2613,12 @@ onUnmounted(() => {
         <p class="text-xs text-gray-500">Request missed messages from a Store & Forward server node. The S&F node must have the store_forward module enabled.</p>
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <label class="block text-xs text-gray-500 mb-1">S&F Server Node ID (decimal)</label>
-            <input v-model.number="sfForm.node_id" type="number" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="e.g. 1234567890">
+            <label for="set-sfform-node-id" class="block text-xs text-gray-500 mb-1">S&F Server Node ID (decimal)</label>
+            <input id="set-sfform-node-id" v-model.number="sfForm.node_id" type="number" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="e.g. 1234567890">
           </div>
           <div>
-            <label class="block text-xs text-gray-500 mb-1">History Window (seconds)</label>
-            <input v-model.number="sfForm.window" type="number" min="60" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+            <label for="set-sfform-window" class="block text-xs text-gray-500 mb-1">History Window (seconds)</label>
+            <input id="set-sfform-window" v-model.number="sfForm.window" type="number" min="60" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
           </div>
         </div>
         <button @click="doRequestSF" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500">Request History</button>
@@ -2633,12 +2633,12 @@ onUnmounted(() => {
         <p class="text-xs text-gray-500">Send a range test packet. Receiving nodes with Range Test enabled will log it.</p>
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <label class="block text-xs text-gray-500 mb-1">Text (optional)</label>
-            <input v-model="rtForm.text" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="auto-generated if empty">
+            <label for="set-rtform-text" class="block text-xs text-gray-500 mb-1">Text (optional)</label>
+            <input id="set-rtform-text" v-model="rtForm.text" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="auto-generated if empty">
           </div>
           <div>
-            <label class="block text-xs text-gray-500 mb-1">To Node (0 = broadcast)</label>
-            <input v-model.number="rtForm.to" type="number" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+            <label for="set-rtform-to" class="block text-xs text-gray-500 mb-1">To Node (0 = broadcast)</label>
+            <input id="set-rtform-to" v-model.number="rtForm.to" type="number" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
           </div>
         </div>
         <button @click="doSendRangeTest" :disabled="rtSending" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500 disabled:opacity-40">
@@ -2727,12 +2727,12 @@ onUnmounted(() => {
         </div>
         <div class="grid grid-cols-3 gap-3">
           <div class="col-span-2">
-            <label class="block text-xs text-gray-500 mb-1">Host</label>
-            <input v-model="takForm.tak_host" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="tak-server.local">
+            <label for="set-takform-tak-host" class="block text-xs text-gray-500 mb-1">Host</label>
+            <input id="set-takform-tak-host" v-model="takForm.tak_host" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="tak-server.local">
           </div>
           <div>
-            <label class="block text-xs text-gray-500 mb-1">Port</label>
-            <input v-model.number="takForm.tak_port" type="number" min="1" max="65535" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+            <label for="set-takform-tak-port" class="block text-xs text-gray-500 mb-1">Port</label>
+            <input id="set-takform-tak-port" v-model.number="takForm.tak_port" type="number" min="1" max="65535" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
           </div>
         </div>
         <div class="grid grid-cols-2 gap-3">
@@ -2741,8 +2741,8 @@ onUnmounted(() => {
             <label for="tak_ssl" class="text-xs text-gray-400">Use TLS/SSL</label>
           </div>
           <div>
-            <label class="block text-xs text-gray-500 mb-1">Protocol</label>
-            <select v-model="takForm.protocol" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+            <label for="set-takform-protocol" class="block text-xs text-gray-500 mb-1">Protocol</label>
+            <select id="set-takform-protocol" v-model="takForm.protocol" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
               <option value="xml">XML (CoT v2.0)</option>
               <option value="protobuf">Protobuf (TAK Protocol v1)</option>
             </select>
@@ -2750,31 +2750,31 @@ onUnmounted(() => {
         </div>
         <div v-if="takForm.tak_ssl" class="space-y-3">
           <div>
-            <label class="block text-xs text-gray-500 mb-1">Certificate File (PEM)</label>
-            <input v-model="takForm.cert_file" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200 font-mono" placeholder="/path/to/cert.pem">
+            <label for="set-takform-cert-file" class="block text-xs text-gray-500 mb-1">Certificate File (PEM)</label>
+            <input id="set-takform-cert-file" v-model="takForm.cert_file" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200 font-mono" placeholder="/path/to/cert.pem">
           </div>
           <div>
-            <label class="block text-xs text-gray-500 mb-1">Key File (PEM)</label>
-            <input v-model="takForm.key_file" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200 font-mono" placeholder="/path/to/key.pem">
+            <label for="set-takform-key-file" class="block text-xs text-gray-500 mb-1">Key File (PEM)</label>
+            <input id="set-takform-key-file" v-model="takForm.key_file" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200 font-mono" placeholder="/path/to/key.pem">
           </div>
           <div>
-            <label class="block text-xs text-gray-500 mb-1">CA File (optional)</label>
-            <input v-model="takForm.ca_file" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200 font-mono" placeholder="/path/to/ca.pem">
+            <label for="set-takform-ca-file" class="block text-xs text-gray-500 mb-1">CA File (optional)</label>
+            <input id="set-takform-ca-file" v-model="takForm.ca_file" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200 font-mono" placeholder="/path/to/ca.pem">
           </div>
         </div>
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <label class="block text-xs text-gray-500 mb-1">Callsign Prefix</label>
-            <input v-model="takForm.callsign_prefix" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="MESHSAT">
+            <label for="set-takform-callsign-prefix" class="block text-xs text-gray-500 mb-1">Callsign Prefix</label>
+            <input id="set-takform-callsign-prefix" v-model="takForm.callsign_prefix" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="MESHSAT">
           </div>
           <div>
-            <label class="block text-xs text-gray-500 mb-1">Coalesce (s)</label>
-            <input v-model.number="takForm.coalesce_seconds" type="number" min="1" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+            <label for="set-takform-coalesce-seconds" class="block text-xs text-gray-500 mb-1">Coalesce (s)</label>
+            <input id="set-takform-coalesce-seconds" v-model.number="takForm.coalesce_seconds" type="number" min="1" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
           </div>
         </div>
         <div>
-          <label class="block text-xs text-gray-500 mb-1">CoT Stale Seconds</label>
-          <input v-model.number="takForm.cot_stale_seconds" type="number" min="1" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+          <label for="set-takform-cot-stale-seconds" class="block text-xs text-gray-500 mb-1">CoT Stale Seconds</label>
+          <input id="set-takform-cot-stale-seconds" v-model.number="takForm.cot_stale_seconds" type="number" min="1" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
         </div>
         <div class="grid grid-cols-2 gap-3">
           <div class="flex items-center gap-2">
@@ -2782,8 +2782,8 @@ onUnmounted(() => {
             <label for="tak_mc" class="text-xs text-gray-400">Multicast SA (LAN)</label>
           </div>
           <div v-if="takForm.multicast">
-            <label class="block text-xs text-gray-500 mb-1">Interface (empty = all)</label>
-            <input v-model="takForm.multicast_iface" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="eth0">
+            <label for="set-takform-multicast-iface" class="block text-xs text-gray-500 mb-1">Interface (empty = all)</label>
+            <input id="set-takform-multicast-iface" v-model="takForm.multicast_iface" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="eth0">
           </div>
         </div>
         <div class="flex items-center gap-2">
@@ -2798,17 +2798,17 @@ onUnmounted(() => {
           <p class="text-xs text-gray-500 mb-2">Auto-enroll with a TAK Server to get client certificates (port 8446).</p>
           <div class="grid grid-cols-2 gap-3">
             <div>
-              <label class="block text-xs text-gray-500 mb-1">Enrollment URL</label>
-              <input v-model="takEnrollUrl" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200 font-mono" placeholder="https://tak-server:8446">
+              <label for="set-takenrollurl" class="block text-xs text-gray-500 mb-1">Enrollment URL</label>
+              <input id="set-takenrollurl" v-model="takEnrollUrl" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200 font-mono" placeholder="https://tak-server:8446">
             </div>
             <div>
-              <label class="block text-xs text-gray-500 mb-1">Username</label>
-              <input v-model="takEnrollUser" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+              <label for="set-takenrolluser" class="block text-xs text-gray-500 mb-1">Username</label>
+              <input id="set-takenrolluser" v-model="takEnrollUser" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
             </div>
           </div>
           <div class="mt-2">
-            <label class="block text-xs text-gray-500 mb-1">Password</label>
-            <input v-model="takEnrollPass" type="password" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
+            <label for="set-takenrollpass" class="block text-xs text-gray-500 mb-1">Password</label>
+            <input id="set-takenrollpass" v-model="takEnrollPass" type="password" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
           </div>
           <div class="flex items-center gap-3 mt-2">
             <button @click="doTAKEnroll" :disabled="takEnrolling" class="px-4 py-2 rounded bg-violet-600 text-white text-sm hover:bg-violet-500 disabled:opacity-40">
@@ -3018,12 +3018,12 @@ onUnmounted(() => {
             <input id="oob_enabled" type="checkbox" v-model="oobConfigDraft.enabled" class="rounded bg-gray-900 border-gray-700">
           </div>
           <div>
-            <label class="block text-[10px] text-gray-500 mb-1">Reply budget (per peer, per hour)</label>
-            <input v-model="oobConfigDraft.reply_budget" type="number" min="1" max="120" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-xs text-gray-200">
+            <label for="set-oobconfigdraft-reply-budget" class="block text-[10px] text-gray-500 mb-1">Reply budget (per peer, per hour)</label>
+            <input id="set-oobconfigdraft-reply-budget" v-model="oobConfigDraft.reply_budget" type="number" min="1" max="120" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-xs text-gray-200">
           </div>
           <div>
-            <label class="block text-[10px] text-gray-500 mb-1">Host agent socket</label>
-            <input v-model="oobConfigDraft.host_socket" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-xs text-gray-200 font-mono" placeholder="/run/meshsat-oob/agent.sock">
+            <label for="set-oobconfigdraft-host-socket" class="block text-[10px] text-gray-500 mb-1">Host agent socket</label>
+            <input id="set-oobconfigdraft-host-socket" v-model="oobConfigDraft.host_socket" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-xs text-gray-200 font-mono" placeholder="/run/meshsat-oob/agent.sock">
           </div>
         </div>
         <div class="flex items-center gap-2">
@@ -3042,12 +3042,12 @@ onUnmounted(() => {
         <div v-if="showOOBPeerForm" class="bg-gray-900 rounded p-3 border border-gray-700 space-y-2">
           <div class="grid grid-cols-2 gap-2">
             <div>
-              <label class="block text-[10px] text-gray-500 mb-1">Alias</label>
-              <input v-model="oobPeerForm.alias" :disabled="!!editingOOBPeer" class="w-full px-2 py-1.5 rounded bg-gray-800 border border-gray-700 text-xs text-gray-200 disabled:opacity-60" placeholder="parallax">
+              <label for="set-oobpeerform-alias" class="block text-[10px] text-gray-500 mb-1">Alias</label>
+              <input id="set-oobpeerform-alias" v-model="oobPeerForm.alias" :disabled="!!editingOOBPeer" class="w-full px-2 py-1.5 rounded bg-gray-800 border border-gray-700 text-xs text-gray-200 disabled:opacity-60" placeholder="parallax">
             </div>
             <div>
-              <label class="block text-[10px] text-gray-500 mb-1">Role</label>
-              <select v-model="oobPeerForm.role" class="w-full px-2 py-1.5 rounded bg-gray-800 border border-gray-700 text-xs text-gray-200">
+              <label for="set-oobpeerform-role" class="block text-[10px] text-gray-500 mb-1">Role</label>
+              <select id="set-oobpeerform-role" v-model="oobPeerForm.role" class="w-full px-2 py-1.5 rounded bg-gray-800 border border-gray-700 text-xs text-gray-200">
                 <option value="readonly">readonly (PING, STATUS-NET, LOG)</option>
                 <option value="control">control (everything)</option>
               </select>
@@ -3055,21 +3055,21 @@ onUnmounted(() => {
           </div>
           <div v-if="!editingOOBPeer" class="grid grid-cols-2 gap-2">
             <div>
-              <label class="block text-[10px] text-gray-500 mb-1">Key source</label>
-              <select v-model="oobPeerForm.source" class="w-full px-2 py-1.5 rounded bg-gray-800 border border-gray-700 text-xs text-gray-200">
+              <label for="set-oobpeerform-source" class="block text-[10px] text-gray-500 mb-1">Key source</label>
+              <select id="set-oobpeerform-source" v-model="oobPeerForm.source" class="w-full px-2 py-1.5 rounded bg-gray-800 border border-gray-700 text-xs text-gray-200">
                 <option value="random">random key, issued as a QR bundle</option>
                 <option value="ecdh">derived from the peer's announce (kits only)</option>
               </select>
             </div>
             <div v-if="oobPeerForm.source === 'ecdh'">
-              <label class="block text-[10px] text-gray-500 mb-1">Trusted peer signer id</label>
-              <input v-model="oobPeerForm.signer_id" class="w-full px-2 py-1.5 rounded bg-gray-800 border border-gray-700 text-xs text-gray-200 font-mono" placeholder="Ed25519 hex from Devices">
+              <label for="set-oobpeerform-signer-id" class="block text-[10px] text-gray-500 mb-1">Trusted peer signer id</label>
+              <input id="set-oobpeerform-signer-id" v-model="oobPeerForm.signer_id" class="w-full px-2 py-1.5 rounded bg-gray-800 border border-gray-700 text-xs text-gray-200 font-mono" placeholder="Ed25519 hex from Devices">
             </div>
           </div>
           <div class="grid grid-cols-1 md:grid-cols-3 gap-2">
             <div v-for="b in oobBearers" :key="b">
-              <label class="block text-[10px] text-gray-500 mb-1">{{ b }} address</label>
-              <input v-model="oobPeerForm.addresses[b]" class="w-full px-2 py-1.5 rounded bg-gray-800 border border-gray-700 text-xs text-gray-200 font-mono"
+              <label for="set-oobpeerform-addresses-b" class="block text-[10px] text-gray-500 mb-1">{{ b }} address</label>
+              <input id="set-oobpeerform-addresses-b" v-model="oobPeerForm.addresses[b]" class="w-full px-2 py-1.5 rounded bg-gray-800 border border-gray-700 text-xs text-gray-200 font-mono"
                      :placeholder="b === 'cellular_0' ? '+31612345678' : (b === 'aprs_0' ? 'PD0XYZ-7' : '!aabbccdd')">
               <label class="flex items-center gap-1 text-[10px] text-gray-400 mt-1">
                 <input type="checkbox" v-model="oobPeerForm.enc_policy[b]" class="rounded bg-gray-800 border-gray-600"> encrypt requests on {{ b }}
@@ -3126,21 +3126,21 @@ onUnmounted(() => {
         <h4 class="text-sm font-medium text-gray-200">Send command</h4>
         <div class="grid grid-cols-2 md:grid-cols-4 gap-2">
           <div>
-            <label class="block text-[10px] text-gray-500 mb-1">Peer</label>
-            <select v-model="oobSend.peer_id" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-xs text-gray-200">
+            <label for="set-oobsend-peer-id" class="block text-[10px] text-gray-500 mb-1">Peer</label>
+            <select id="set-oobsend-peer-id" v-model="oobSend.peer_id" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-xs text-gray-200">
               <option value="">select</option>
               <option v-for="p in store.oobPeers" :key="p.peer_id" :value="p.peer_id">{{ p.alias }}</option>
             </select>
           </div>
           <div>
-            <label class="block text-[10px] text-gray-500 mb-1">Bearer</label>
-            <select v-model="oobSend.via" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-xs text-gray-200">
+            <label for="set-oobsend-via" class="block text-[10px] text-gray-500 mb-1">Bearer</label>
+            <select id="set-oobsend-via" v-model="oobSend.via" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-xs text-gray-200">
               <option v-for="b in oobPeerVia" :key="b" :value="b">{{ b }}</option>
             </select>
           </div>
           <div>
-            <label class="block text-[10px] text-gray-500 mb-1">Command</label>
-            <select v-model="oobSend.cmd" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-xs text-gray-200">
+            <label for="set-oobsend-cmd" class="block text-[10px] text-gray-500 mb-1">Command</label>
+            <select id="set-oobsend-cmd" v-model="oobSend.cmd" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-xs text-gray-200">
               <option v-for="c in (store.oobTargets.commands || [])" :key="c.code" :value="c.name">{{ c.name }}</option>
             </select>
           </div>
@@ -3150,38 +3150,38 @@ onUnmounted(() => {
             </label>
           </div>
           <div v-if="oobCmdNeeds.delay">
-            <label class="block text-[10px] text-gray-500 mb-1">Delay (s)</label>
-            <input v-model="oobSend.args.delay" type="number" min="0" max="3600" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-xs text-gray-200">
+            <label for="set-oobsend-args-delay" class="block text-[10px] text-gray-500 mb-1">Delay (s)</label>
+            <input id="set-oobsend-args-delay" v-model="oobSend.args.delay" type="number" min="0" max="3600" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-xs text-gray-200">
           </div>
           <div v-if="oobCmdNeeds.target">
-            <label class="block text-[10px] text-gray-500 mb-1">Target</label>
-            <select v-model="oobSend.args.target" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-xs text-gray-200">
+            <label for="set-oobsend-args-target" class="block text-[10px] text-gray-500 mb-1">Target</label>
+            <select id="set-oobsend-args-target" v-model="oobSend.args.target" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-xs text-gray-200">
               <option v-for="t in oobTargetsForCmd" :key="t.code" :value="t.name">{{ t.name }}</option>
             </select>
           </div>
           <div v-if="oobCmdNeeds.level">
-            <label class="block text-[10px] text-gray-500 mb-1">Level (1 soft, 2 device, 3 hard)</label>
-            <select v-model="oobSend.args.level" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-xs text-gray-200">
+            <label for="set-oobsend-args-level" class="block text-[10px] text-gray-500 mb-1">Level (1 soft, 2 device, 3 hard)</label>
+            <select id="set-oobsend-args-level" v-model="oobSend.args.level" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-xs text-gray-200">
               <option v-for="l in oobLevelsForTarget" :key="l" :value="l">{{ l }}{{ l === 3 && oobSelectedTarget?.power_cycle ? ' (port power cycle)' : '' }}</option>
             </select>
             <p v-if="oobSelectedTarget?.power_cycle" class="mt-1 text-[10px] text-emerald-300" data-testid="oob-power-cycle-hint">level 3 cuts USB power on port {{ oobSelectedTarget.hub_port }}</p>
           </div>
           <div v-if="oobCmdNeeds.state">
-            <label class="block text-[10px] text-gray-500 mb-1">State</label>
-            <select v-model="oobSend.args.state" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-xs text-gray-200">
+            <label for="set-oobsend-args-state" class="block text-[10px] text-gray-500 mb-1">State</label>
+            <select id="set-oobsend-args-state" v-model="oobSend.args.state" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-xs text-gray-200">
               <option value="off">off</option>
               <option value="on">on</option>
             </select>
           </div>
           <div v-if="oobCmdNeeds.unit">
-            <label class="block text-[10px] text-gray-500 mb-1">Unit</label>
-            <select v-model="oobSend.args.unit" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-xs text-gray-200">
+            <label for="set-oobsend-args-unit" class="block text-[10px] text-gray-500 mb-1">Unit</label>
+            <select id="set-oobsend-args-unit" v-model="oobSend.args.unit" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-xs text-gray-200">
               <option v-for="u in (store.oobTargets.units || [])" :key="u" :value="u">{{ u }}</option>
             </select>
           </div>
           <div v-if="oobCmdNeeds.lines">
-            <label class="block text-[10px] text-gray-500 mb-1">Lines (1 to 20)</label>
-            <input v-model="oobSend.args.lines" type="number" min="1" max="20" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-xs text-gray-200">
+            <label for="set-oobsend-args-lines" class="block text-[10px] text-gray-500 mb-1">Lines (1 to 20)</label>
+            <input id="set-oobsend-args-lines" v-model="oobSend.args.lines" type="number" min="1" max="20" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-xs text-gray-200">
           </div>
         </div>
         <div class="flex items-center gap-3">
@@ -3232,13 +3232,13 @@ onUnmounted(() => {
           <h3 class="text-sm font-medium text-gray-200 mb-3">TCP Interface</h3>
           <div class="grid grid-cols-2 gap-3 mb-3">
             <div>
-              <label class="text-[10px] text-gray-500 block mb-1">Listen Port</label>
-              <input type="number" v-model.number="routingForm.listen_port" min="1024" max="65535"
+              <label for="set-routingform-listen-port" class="text-[10px] text-gray-500 block mb-1">Listen Port</label>
+              <input id="set-routingform-listen-port" type="number" v-model.number="routingForm.listen_port" min="1024" max="65535"
                 class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200">
             </div>
             <div>
-              <label class="text-[10px] text-gray-500 block mb-1">Announce Interval (sec)</label>
-              <input type="number" v-model.number="routingForm.announce_interval" min="30" max="3600"
+              <label for="set-routingform-announce-interval" class="text-[10px] text-gray-500 block mb-1">Announce Interval (sec)</label>
+              <input id="set-routingform-announce-interval" type="number" v-model.number="routingForm.announce_interval" min="30" max="3600"
                 class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200">
             </div>
           </div>
@@ -3260,7 +3260,7 @@ onUnmounted(() => {
         <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
           <h3 class="text-sm font-medium text-gray-200 mb-3">TCP Peers</h3>
           <div class="flex gap-2 mb-3">
-            <input type="text" v-model="newPeerAddr" placeholder="host:port (e.g. 192.168.1.10:4242)"
+            <input type="text" v-model="newPeerAddr" aria-label="TCP peer address (host:port)" placeholder="host:port (e.g. 192.168.1.10:4242)"
               @keyup.enter="addPeer"
               class="flex-1 bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 placeholder-gray-600">
             <button @click="addPeer" :disabled="!newPeerAddr"
@@ -3321,8 +3321,8 @@ onUnmounted(() => {
           <div v-if="dynFormOpen" class="mt-3 bg-gray-900 rounded p-3 border border-gray-700 space-y-2">
             <div class="grid grid-cols-2 gap-2">
               <div>
-                <label class="text-[10px] text-gray-500 block mb-1">Type</label>
-                <select v-model="dynForm.type" :disabled="!!dynEditingId" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 disabled:opacity-60">
+                <label for="set-dynform-type" class="text-[10px] text-gray-500 block mb-1">Type</label>
+                <select id="set-dynform-type" v-model="dynForm.type" :disabled="!!dynEditingId" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 disabled:opacity-60">
                   <option v-for="(label, t) in dynTypeLabels" :key="t" :value="t">{{ label }}</option>
                 </select>
               </div>
@@ -3332,8 +3332,8 @@ onUnmounted(() => {
             <template v-if="dynForm.type === 'rnode'">
               <div class="grid grid-cols-2 gap-2">
                 <div>
-                  <label class="text-[10px] text-gray-500 block mb-1">Connection</label>
-                  <input type="text" v-model="dynForm.rnode.port" list="rnode-ports" placeholder="auto, usb_serial:<sn>, /dev/..., tcp://host, ble://name"
+                  <label for="set-dynform-rnode-port" class="text-[10px] text-gray-500 block mb-1">Connection</label>
+                  <input id="set-dynform-rnode-port" type="text" v-model="dynForm.rnode.port" list="rnode-ports" placeholder="auto, usb_serial:<sn>, /dev/..., tcp://host, ble://name"
                     class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono placeholder-gray-600">
                   <datalist id="rnode-ports">
                     <option v-for="p in dynPorts" :key="p.value" :value="p.value">{{ p.label }}{{ p.in_use ? ' (in use)' : '' }}</option>
@@ -3341,54 +3341,54 @@ onUnmounted(() => {
                   <span class="text-[9px] text-gray-600 mt-0.5 block">usb_serial: survives re-enumeration; ports marked in use belong to another driver.</span>
                 </div>
                 <div>
-                  <label class="text-[10px] text-gray-500 block mb-1">Preset</label>
-                  <select v-model="dynForm.rnode.preset" @change="applyDynPreset" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200">
+                  <label for="set-dynform-rnode-preset" class="text-[10px] text-gray-500 block mb-1">Preset</label>
+                  <select id="set-dynform-rnode-preset" v-model="dynForm.rnode.preset" @change="applyDynPreset" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200">
                     <option value="">custom</option>
                     <option v-for="p in dynPresets" :key="p.id" :value="p.id">{{ p.label }}</option>
                   </select>
                 </div>
               </div>
               <div class="grid grid-cols-5 gap-2">
-                <div><label class="text-[10px] text-gray-500 block mb-1">Frequency (Hz)</label><input type="number" v-model.number="dynForm.rnode.frequency" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200"></div>
-                <div><label class="text-[10px] text-gray-500 block mb-1">Bandwidth (Hz)</label><input type="number" v-model.number="dynForm.rnode.bandwidth" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200"></div>
-                <div><label class="text-[10px] text-gray-500 block mb-1">SF</label><input type="number" v-model.number="dynForm.rnode.spreadingfactor" min="5" max="12" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200"></div>
-                <div><label class="text-[10px] text-gray-500 block mb-1">CR</label><input type="number" v-model.number="dynForm.rnode.codingrate" min="5" max="8" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200"></div>
-                <div><label class="text-[10px] text-gray-500 block mb-1">TX (dBm)</label><input type="number" v-model.number="dynForm.rnode.txpower" min="0" max="37" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200"></div>
+                <div><label for="set-dynform-rnode-frequency" class="text-[10px] text-gray-500 block mb-1">Frequency (Hz)</label><input id="set-dynform-rnode-frequency" type="number" v-model.number="dynForm.rnode.frequency" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200"></div>
+                <div><label for="set-dynform-rnode-bandwidth" class="text-[10px] text-gray-500 block mb-1">Bandwidth (Hz)</label><input id="set-dynform-rnode-bandwidth" type="number" v-model.number="dynForm.rnode.bandwidth" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200"></div>
+                <div><label for="set-dynform-rnode-spreadingfactor" class="text-[10px] text-gray-500 block mb-1">SF</label><input id="set-dynform-rnode-spreadingfactor" type="number" v-model.number="dynForm.rnode.spreadingfactor" min="5" max="12" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200"></div>
+                <div><label for="set-dynform-rnode-codingrate" class="text-[10px] text-gray-500 block mb-1">CR</label><input id="set-dynform-rnode-codingrate" type="number" v-model.number="dynForm.rnode.codingrate" min="5" max="8" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200"></div>
+                <div><label for="set-dynform-rnode-txpower" class="text-[10px] text-gray-500 block mb-1">TX (dBm)</label><input id="set-dynform-rnode-txpower" type="number" v-model.number="dynForm.rnode.txpower" min="0" max="37" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200"></div>
               </div>
               <div class="grid grid-cols-4 gap-2">
-                <div><label class="text-[10px] text-gray-500 block mb-1">Airtime short (%)</label><input type="number" v-model.number="dynForm.rnode.airtime_limit_short" min="0" max="100" step="0.1" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200"></div>
-                <div><label class="text-[10px] text-gray-500 block mb-1">Airtime long (%)</label><input type="number" v-model.number="dynForm.rnode.airtime_limit_long" min="0" max="100" step="0.1" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200"></div>
-                <div><label class="text-[10px] text-gray-500 block mb-1">ID callsign</label><input type="text" v-model="dynForm.rnode.id_callsign" placeholder="none" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono placeholder-gray-600"></div>
-                <div><label class="text-[10px] text-gray-500 block mb-1">ID every (min)</label><input type="number" v-model.number="dynForm.rnode.id_interval_min" min="1" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200"></div>
+                <div><label for="set-dynform-rnode-airtime-limit-short" class="text-[10px] text-gray-500 block mb-1">Airtime short (%)</label><input id="set-dynform-rnode-airtime-limit-short" type="number" v-model.number="dynForm.rnode.airtime_limit_short" min="0" max="100" step="0.1" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200"></div>
+                <div><label for="set-dynform-rnode-airtime-limit-long" class="text-[10px] text-gray-500 block mb-1">Airtime long (%)</label><input id="set-dynform-rnode-airtime-limit-long" type="number" v-model.number="dynForm.rnode.airtime_limit_long" min="0" max="100" step="0.1" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200"></div>
+                <div><label for="set-dynform-rnode-id-callsign" class="text-[10px] text-gray-500 block mb-1">ID callsign</label><input id="set-dynform-rnode-id-callsign" type="text" v-model="dynForm.rnode.id_callsign" placeholder="none" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono placeholder-gray-600"></div>
+                <div><label for="set-dynform-rnode-id-interval-min" class="text-[10px] text-gray-500 block mb-1">ID every (min)</label><input id="set-dynform-rnode-id-interval-min" type="number" v-model.number="dynForm.rnode.id_interval_min" min="1" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200"></div>
               </div>
               <label class="flex items-center gap-2 text-xs text-gray-300"><input type="checkbox" v-model="dynForm.rnode.flow_control"> Flow control (wait for READY between frames)</label>
             </template>
 
             <template v-else-if="dynForm.type === 'udp'">
               <div class="grid grid-cols-3 gap-2">
-                <div><label class="text-[10px] text-gray-500 block mb-1">Device (derives addresses)</label><input type="text" v-model="dynForm.udp.device" placeholder="eth0" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono placeholder-gray-600"></div>
-                <div><label class="text-[10px] text-gray-500 block mb-1">Listen</label><input type="text" v-model="dynForm.udp.listen_addr" placeholder="0.0.0.0:4242" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono placeholder-gray-600"></div>
-                <div><label class="text-[10px] text-gray-500 block mb-1">Forward (broadcast)</label><input type="text" v-model="dynForm.udp.forward_addr" placeholder="10.41.255.255:4242" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono placeholder-gray-600"></div>
+                <div><label for="set-dynform-udp-device" class="text-[10px] text-gray-500 block mb-1">Device (derives addresses)</label><input id="set-dynform-udp-device" type="text" v-model="dynForm.udp.device" placeholder="eth0" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono placeholder-gray-600"></div>
+                <div><label for="set-dynform-udp-listen-addr" class="text-[10px] text-gray-500 block mb-1">Listen</label><input id="set-dynform-udp-listen-addr" type="text" v-model="dynForm.udp.listen_addr" placeholder="0.0.0.0:4242" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono placeholder-gray-600"></div>
+                <div><label for="set-dynform-udp-forward-addr" class="text-[10px] text-gray-500 block mb-1">Forward (broadcast)</label><input id="set-dynform-udp-forward-addr" type="text" v-model="dynForm.udp.forward_addr" placeholder="10.41.255.255:4242" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono placeholder-gray-600"></div>
               </div>
               <span class="text-[9px] text-gray-600 block">One raw Reticulum packet per datagram. A Haven / OpenMANET node uses listen 0.0.0.0:4242, forward 10.41.255.255:4242.</span>
             </template>
 
             <template v-else-if="dynForm.type === 'auto'">
               <div class="grid grid-cols-2 gap-2">
-                <div><label class="text-[10px] text-gray-500 block mb-1">Group id</label><input type="text" v-model="dynForm.auto.group_id" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono"></div>
-                <div><label class="text-[10px] text-gray-500 block mb-1">Devices (comma separated)</label><input type="text" v-model="dynForm.auto.devices" placeholder="eth0" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono placeholder-gray-600"></div>
+                <div><label for="set-dynform-auto-group-id" class="text-[10px] text-gray-500 block mb-1">Group id</label><input id="set-dynform-auto-group-id" type="text" v-model="dynForm.auto.group_id" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono"></div>
+                <div><label for="set-dynform-auto-devices" class="text-[10px] text-gray-500 block mb-1">Devices (comma separated)</label><input id="set-dynform-auto-devices" type="text" v-model="dynForm.auto.devices" placeholder="eth0" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono placeholder-gray-600"></div>
               </div>
               <span class="text-[9px] text-gray-600 block">IPv6 link-local discovery on the named devices, as rnsd, Sideband and CrossTalk do. The device only needs to be up.</span>
             </template>
 
             <template v-else>
               <div class="grid grid-cols-3 gap-2">
-                <div><label class="text-[10px] text-gray-500 block mb-1">Port</label><input type="text" v-model="dynForm.kiss.port" placeholder="/dev/serial/by-id/... or tcp://host:8100" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono placeholder-gray-600"></div>
-                <div><label class="text-[10px] text-gray-500 block mb-1">Baud</label><input type="number" v-model.number="dynForm.kiss.baud" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200"></div>
-                <div><label class="text-[10px] text-gray-500 block mb-1">TX delay (ms)</label><input type="number" v-model.number="dynForm.kiss.preamble_ms" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200"></div>
-                <div><label class="text-[10px] text-gray-500 block mb-1">TX tail (ms)</label><input type="number" v-model.number="dynForm.kiss.txtail_ms" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200"></div>
-                <div><label class="text-[10px] text-gray-500 block mb-1">Persistence</label><input type="number" v-model.number="dynForm.kiss.persistence" min="0" max="255" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200"></div>
-                <div><label class="text-[10px] text-gray-500 block mb-1">Slot time (ms)</label><input type="number" v-model.number="dynForm.kiss.slottime_ms" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200"></div>
+                <div><label for="set-dynform-kiss-port" class="text-[10px] text-gray-500 block mb-1">Port</label><input id="set-dynform-kiss-port" type="text" v-model="dynForm.kiss.port" placeholder="/dev/serial/by-id/... or tcp://host:8100" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono placeholder-gray-600"></div>
+                <div><label for="set-dynform-kiss-baud" class="text-[10px] text-gray-500 block mb-1">Baud</label><input id="set-dynform-kiss-baud" type="number" v-model.number="dynForm.kiss.baud" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200"></div>
+                <div><label for="set-dynform-kiss-preamble-ms" class="text-[10px] text-gray-500 block mb-1">TX delay (ms)</label><input id="set-dynform-kiss-preamble-ms" type="number" v-model.number="dynForm.kiss.preamble_ms" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200"></div>
+                <div><label for="set-dynform-kiss-txtail-ms" class="text-[10px] text-gray-500 block mb-1">TX tail (ms)</label><input id="set-dynform-kiss-txtail-ms" type="number" v-model.number="dynForm.kiss.txtail_ms" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200"></div>
+                <div><label for="set-dynform-kiss-persistence" class="text-[10px] text-gray-500 block mb-1">Persistence</label><input id="set-dynform-kiss-persistence" type="number" v-model.number="dynForm.kiss.persistence" min="0" max="255" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200"></div>
+                <div><label for="set-dynform-kiss-slottime-ms" class="text-[10px] text-gray-500 block mb-1">Slot time (ms)</label><input id="set-dynform-kiss-slottime-ms" type="number" v-model.number="dynForm.kiss.slottime_ms" class="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200"></div>
               </div>
               <label class="flex items-center gap-2 text-xs text-gray-300"><input type="checkbox" v-model="dynForm.kiss.flow_control"> Flow control (TNC sends READY)</label>
               <span class="text-[9px] text-gray-600 block">Raw Reticulum packets as KISS data frames, no AX.25. A Mercury HF modem listens on tcp://host:8100.</span>
@@ -3407,42 +3407,42 @@ onUnmounted(() => {
           <p class="text-xs text-gray-500 mb-3">Paste the MQTT credentials from the Hub Fleet page to connect this bridge via WSS (port 443).</p>
           <div class="space-y-2 mb-3">
             <div>
-              <label class="text-[10px] text-gray-500 block mb-1">MQTT URL</label>
-              <input type="text" v-model="hubForm.url" placeholder="wss://hub.meshsat.net/mqtt"
+              <label for="set-hubform-url" class="text-[10px] text-gray-500 block mb-1">MQTT URL</label>
+              <input id="set-hubform-url" type="text" v-model="hubForm.url" placeholder="wss://hub.meshsat.net/mqtt"
                 class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono placeholder-gray-600">
               <span class="text-[9px] text-gray-600 mt-0.5 block">Supports tcp://, ssl://, ws://, wss:// schemes</span>
             </div>
             <div class="grid grid-cols-2 gap-2">
               <div>
-                <label class="text-[10px] text-gray-500 block mb-1">Bridge ID</label>
-                <input type="text" v-model="hubForm.bridge_id" placeholder="rocket01"
+                <label for="set-hubform-bridge-id" class="text-[10px] text-gray-500 block mb-1">Bridge ID</label>
+                <input id="set-hubform-bridge-id" type="text" v-model="hubForm.bridge_id" placeholder="rocket01"
                   class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono placeholder-gray-600">
               </div>
               <div>
-                <label class="text-[10px] text-gray-500 block mb-1">Username</label>
-                <input type="text" v-model="hubForm.username" placeholder="rocket01"
+                <label for="set-hubform-username" class="text-[10px] text-gray-500 block mb-1">Username</label>
+                <input id="set-hubform-username" type="text" v-model="hubForm.username" placeholder="rocket01"
                   class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono placeholder-gray-600">
               </div>
             </div>
             <div>
-              <label class="text-[10px] text-gray-500 block mb-1">Password</label>
-              <input type="password" v-model="hubForm.password" placeholder="paste from Fleet page (shown only once)"
+              <label for="set-hubform-password" class="text-[10px] text-gray-500 block mb-1">Password</label>
+              <input id="set-hubform-password" type="password" v-model="hubForm.password" placeholder="paste from Fleet page (shown only once)"
                 class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono placeholder-gray-600">
             </div>
             <div>
-              <label class="text-[10px] text-gray-500 block mb-1">Topic root <span class="text-gray-600">(mqtt_topic_prefix in the Hub's bundle)</span></label>
-              <input type="text" v-model="hubForm.mqtt_topic_prefix" placeholder="meshsat"
+              <label for="set-hubform-mqtt-topic-prefix" class="text-[10px] text-gray-500 block mb-1">Topic root <span class="text-gray-600">(mqtt_topic_prefix in the Hub's bundle)</span></label>
+              <input id="set-hubform-mqtt-topic-prefix" type="text" v-model="hubForm.mqtt_topic_prefix" placeholder="meshsat"
                 class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono placeholder-gray-600">
               <span class="text-[9px] text-gray-600 mt-0.5 block">Empty for the Hub's own tenant; meshsat/&lt;tenant&gt; for an organisation's</span>
             </div>
             <div>
-              <label class="text-[10px] text-gray-500 block mb-1">Client Certificate PEM <span class="text-gray-600">(from Fleet > Issue TLS Certificate)</span></label>
-              <textarea v-model="hubForm.tls_cert_pem" rows="3" placeholder="-----BEGIN CERTIFICATE-----"
+              <label for="set-hubform-tls-cert-pem" class="text-[10px] text-gray-500 block mb-1">Client Certificate PEM <span class="text-gray-600">(from Fleet > Issue TLS Certificate)</span></label>
+              <textarea id="set-hubform-tls-cert-pem" v-model="hubForm.tls_cert_pem" rows="3" placeholder="-----BEGIN CERTIFICATE-----"
                 class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono placeholder-gray-600 resize-y"></textarea>
             </div>
             <div>
-              <label class="text-[10px] text-gray-500 block mb-1">Client Private Key PEM</label>
-              <textarea v-model="hubForm.tls_key_pem" rows="3" placeholder="-----BEGIN EC PRIVATE KEY-----"
+              <label for="set-hubform-tls-key-pem" class="text-[10px] text-gray-500 block mb-1">Client Private Key PEM</label>
+              <textarea id="set-hubform-tls-key-pem" v-model="hubForm.tls_key_pem" rows="3" placeholder="-----BEGIN EC PRIVATE KEY-----"
                 class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono placeholder-gray-600 resize-y"></textarea>
             </div>
             <span v-if="hubForm.has_cert" class="text-[10px] text-emerald-400">mTLS certificate configured</span>
@@ -3500,12 +3500,12 @@ onUnmounted(() => {
                 </span>
                 <span class="text-[10px] text-gray-500">{{ link.policy.dests.length ? `open to ${link.policy.dests.length}` : 'closed' }}</span>
               </div>
-              <textarea v-if="paidDrafts[link.id]" v-model="paidDrafts[link.id].dests" rows="3" spellcheck="false"
+              <textarea v-if="paidDrafts[link.id]" v-model="paidDrafts[link.id].dests" aria-label="Destination hashes this link may carry, one per line" rows="3" spellcheck="false"
                 placeholder="destination hashes, 32 hex each, one per line"
                 class="w-full bg-gray-950 border border-gray-700 rounded px-2 py-1 text-[11px] font-mono text-gray-200"></textarea>
               <div class="flex items-center gap-2 mt-2">
                 <span class="text-[10px] text-gray-500">at most once per</span>
-                <input v-if="paidDrafts[link.id]" v-model.number="paidDrafts[link.id].minutes" type="number" min="1"
+                <input v-if="paidDrafts[link.id]" v-model.number="paidDrafts[link.id].minutes" aria-label="At most once per this many minutes" type="number" min="1"
                   class="w-16 bg-gray-950 border border-gray-700 rounded px-2 py-0.5 text-[11px] text-gray-200">
                 <span class="text-[10px] text-gray-500">min, count as</span>
                 <input v-if="paidDrafts[link.id]" v-model.number="paidDrafts[link.id].hops" type="number" min="0" max="32"
@@ -3552,8 +3552,8 @@ onUnmounted(() => {
           <!-- Scan control -->
           <div class="flex items-center gap-3 mb-3">
             <div class="flex-1 flex items-center gap-2">
-              <label class="text-[10px] text-gray-500">Scan (s)</label>
-              <input v-model.number="btScanDurationSec" type="number" min="3" max="60" :disabled="btScanBusy"
+              <label for="set-btscandurationsec" class="text-[10px] text-gray-500">Scan (s)</label>
+              <input id="set-btscandurationsec" v-model.number="btScanDurationSec" type="number" min="3" max="60" :disabled="btScanBusy"
                 class="w-16 bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 disabled:opacity-40">
               <span v-if="btScanBusy" class="text-[10px] text-amber-400 animate-pulse">
                 scanning — {{ btScanRemaining }}s
@@ -3743,13 +3743,13 @@ onUnmounted(() => {
           </p>
           <div class="space-y-2">
             <div>
-              <label class="text-[10px] text-gray-500 block mb-1">SSID</label>
-              <input v-model="wifiConnectForm.ssid"
+              <label for="set-wificonnectform-ssid" class="text-[10px] text-gray-500 block mb-1">SSID</label>
+              <input id="set-wificonnectform-ssid" v-model="wifiConnectForm.ssid"
                 class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono">
             </div>
             <div>
-              <label class="text-[10px] text-gray-500 block mb-1">Password <span class="text-gray-600">(leave empty for open networks)</span></label>
-              <input v-model="wifiConnectForm.password" type="password"
+              <label for="set-wificonnectform-password" class="text-[10px] text-gray-500 block mb-1">Password <span class="text-gray-600">(leave empty for open networks)</span></label>
+              <input id="set-wificonnectform-password" v-model="wifiConnectForm.password" type="password"
                 @keyup.enter="doWifiConnect"
                 class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono">
             </div>
@@ -3940,13 +3940,13 @@ onUnmounted(() => {
           </div>
           <div class="grid grid-cols-2 gap-2 mb-2">
             <div>
-              <label class="text-[10px] text-gray-500 block mb-1">Cell SSID</label>
-              <input v-model="ibssForm.ssid"
+              <label for="set-ibssform-ssid" class="text-[10px] text-gray-500 block mb-1">Cell SSID</label>
+              <input id="set-ibssform-ssid" v-model="ibssForm.ssid"
                 class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono">
             </div>
             <div>
-              <label class="text-[10px] text-gray-500 block mb-1">Freq (MHz)</label>
-              <input v-model.number="ibssForm.freq" type="number" min="2412" max="5825"
+              <label for="set-ibssform-freq" class="text-[10px] text-gray-500 block mb-1">Freq (MHz)</label>
+              <input id="set-ibssform-freq" v-model.number="ibssForm.freq" type="number" min="2412" max="5825"
                 class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 font-mono">
               <span class="text-[9px] text-gray-600">2412=ch1, 2437=ch6, 2462=ch11</span>
             </div>
@@ -3997,7 +3997,7 @@ onUnmounted(() => {
         <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
           <h3 class="text-sm font-medium text-gray-200 mb-3">Import Config</h3>
           <p class="text-xs text-gray-500 mb-3">Paste a YAML config to import. This will merge/overwrite current interface and rule configuration.</p>
-          <textarea v-model="importText" rows="2" placeholder="Paste YAML config here..."
+          <textarea v-model="importText" aria-label="YAML config to import" rows="2" placeholder="Paste YAML config here..."
             class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-xs text-gray-200 font-mono mb-3 resize-y sm:resize-none sm:min-h-[12em]"></textarea>
           <button @click="doImportConfig" :disabled="importing || !importText.trim()"
             class="px-4 py-2 rounded bg-amber-600 text-white text-sm hover:bg-amber-500 disabled:opacity-50">
