@@ -2247,9 +2247,9 @@ onUnmounted(() => {
         <!-- Add/Edit form -->
         <div v-if="showSimForm" class="bg-gray-900 rounded p-3 border border-gray-700 space-y-2">
           <div>
-            <label class="block text-[10px] text-gray-500 mb-1">ICCID</label>
+            <label for="set-simform-iccid" class="block text-[10px] text-gray-500 mb-1">ICCID</label>
             <div class="flex gap-2">
-              <input v-model="simForm.iccid" class="flex-1 px-2 py-1.5 rounded bg-gray-800 border border-gray-700 text-xs text-gray-200 font-mono" placeholder="8931..." :disabled="!!editingSim">
+              <input id="set-simform-iccid" v-model="simForm.iccid" class="flex-1 px-2 py-1.5 rounded bg-gray-800 border border-gray-700 text-xs text-gray-200 font-mono" placeholder="8931..." :disabled="!!editingSim">
               <button v-if="!editingSim" @click="readCurrentICCID" :disabled="simReadingICCID"
                 class="px-2 py-1.5 rounded bg-gray-700 text-gray-300 text-[10px] hover:bg-gray-600 disabled:opacity-40 whitespace-nowrap">
                 {{ simReadingICCID ? 'Reading...' : 'Read from Modem' }}
@@ -3068,8 +3068,8 @@ onUnmounted(() => {
           </div>
           <div class="grid grid-cols-1 md:grid-cols-3 gap-2">
             <div v-for="b in oobBearers" :key="b">
-              <label for="set-oobpeerform-addresses-b" class="block text-[10px] text-gray-500 mb-1">{{ b }} address</label>
-              <input id="set-oobpeerform-addresses-b" v-model="oobPeerForm.addresses[b]" class="w-full px-2 py-1.5 rounded bg-gray-800 border border-gray-700 text-xs text-gray-200 font-mono"
+              <label :for="`set-oobpeerform-addresses-${b}`" class="block text-[10px] text-gray-500 mb-1">{{ b }} address</label>
+              <input :id="`set-oobpeerform-addresses-${b}`" v-model="oobPeerForm.addresses[b]" class="w-full px-2 py-1.5 rounded bg-gray-800 border border-gray-700 text-xs text-gray-200 font-mono"
                      :placeholder="b === 'cellular_0' ? '+31612345678' : (b === 'aprs_0' ? 'PD0XYZ-7' : '!aabbccdd')">
               <label class="flex items-center gap-1 text-[10px] text-gray-400 mt-1">
                 <input type="checkbox" v-model="oobPeerForm.enc_policy[b]" class="rounded bg-gray-800 border-gray-600"> encrypt requests on {{ b }}

@@ -3138,7 +3138,7 @@ fingerprint: ${store.aprsStatus.encryption.key_fingerprint || '(unresolved)'}`">
             <button type="button" @click="statsModal = false" aria-label="Close" class="text-gray-500 hover:text-gray-300 text-lg leading-none">&times;</button>
           </div>
           <div class="p-4">
-            <pre class="text-[11px] font-mono text-gray-300 whitespace-pre-wrap break-all bg-tactical-bg rounded p-3 max-h-[60vh] overflow-y-auto">{{ JSON.stringify(statsData, null, 2) }}</pre>
+            <pre tabindex="0" role="region" aria-label="Widget diagnostics" class="text-[11px] font-mono text-gray-300 whitespace-pre-wrap break-all bg-tactical-bg rounded p-3 max-h-[60vh] overflow-y-auto">{{ JSON.stringify(statsData, null, 2) }}</pre>
           </div>
         </div>
       </div>
@@ -3241,7 +3241,7 @@ fingerprint: ${store.aprsStatus.encryption.key_fingerprint || '(unresolved)'}`">
             <!-- Raw JSON (all types) -->
             <div>
               <h4 class="text-[10px] text-gray-500 uppercase tracking-wide mb-2">Raw JSON</h4>
-              <pre class="text-[10px] font-mono text-gray-400 whitespace-pre-wrap break-all bg-tactical-bg rounded p-3 max-h-[200px] overflow-y-auto select-all">{{ JSON.stringify(queueDetailItem._raw, null, 2) }}</pre>
+              <pre tabindex="0" role="region" aria-label="Raw queue item" class="text-[10px] font-mono text-gray-400 whitespace-pre-wrap break-all bg-tactical-bg rounded p-3 max-h-[200px] overflow-y-auto select-all">{{ JSON.stringify(queueDetailItem._raw, null, 2) }}</pre>
             </div>
           </div>
         </div>
@@ -3370,7 +3370,7 @@ fingerprint: ${store.aprsStatus.encryption.key_fingerprint || '(unresolved)'}`">
             <!-- Raw JSON -->
             <div>
               <h4 class="text-[10px] text-gray-500 uppercase tracking-wide mb-2">Raw Data</h4>
-              <pre class="text-[10px] font-mono text-gray-400 whitespace-pre-wrap break-all bg-tactical-bg rounded p-3 max-h-[200px] overflow-y-auto select-all">{{ JSON.stringify(nodeDetailData, null, 2) }}</pre>
+              <pre tabindex="0" role="region" aria-label="Raw node data" class="text-[10px] font-mono text-gray-400 whitespace-pre-wrap break-all bg-tactical-bg rounded p-3 max-h-[200px] overflow-y-auto select-all">{{ JSON.stringify(nodeDetailData, null, 2) }}</pre>
             </div>
           </div>
         </div>

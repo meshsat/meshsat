@@ -657,10 +657,10 @@ onUnmounted(() => {
                 {{ smsDecryptedTexts[sms.id] || sms.text || '(empty)' }}
               </div>
               <div class="text-[9px] mt-1 flex items-center gap-2"
-                :class="sms.direction === 'tx' ? 'text-sky-400/40' : 'text-gray-600'">
+                :class="sms.direction === 'tx' ? 'text-sky-400/80' : 'text-gray-600'">
                 <span>{{ formatTimestamp(sms.created_at) }}</span>
-                <span v-if="looksEncrypted(sms.text) && !smsDecryptedTexts[sms.id]" class="text-amber-400/40" title="Encrypted — add key to decrypt">locked</span>
-                <span v-if="smsDecryptedTexts[sms.id]" class="text-emerald-400/40" title="Decrypted with conversation key">decrypted</span>
+                <span v-if="looksEncrypted(sms.text) && !smsDecryptedTexts[sms.id]" class="text-amber-400/80" title="Encrypted — add key to decrypt">locked</span>
+                <span v-if="smsDecryptedTexts[sms.id]" class="text-emerald-400/80" title="Decrypted with conversation key">decrypted</span>
                 <span class="font-mono">{{ sms.status }}</span>
               </div>
             </div>
@@ -670,7 +670,7 @@ onUnmounted(() => {
 
         <!-- Compose bar -->
         <div class="flex gap-2 pt-2 border-t border-gray-700/50 shrink-0">
-          <input v-model="smsMsgText" type="text" enterkeyhint="send" placeholder="Type a message..."
+          <input v-model="smsMsgText" type="text" enterkeyhint="send" aria-label="Reply text" placeholder="Type a message..."
             class="flex-1 px-2.5 py-1.5 rounded bg-gray-900/60 border border-gray-700 text-xs text-gray-200 focus:outline-none focus:border-sky-600"
             @keydown.enter="doSendSMS" />
           <button @click="doSendSMS" :disabled="!smsMsgText"
@@ -934,14 +934,14 @@ onUnmounted(() => {
           <path stroke-linecap="round" stroke-linejoin="round" d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
         </svg>
         <span>{{ displayName(replyTo.from_node) }}</span>
-        <button @click="cancelReply" class="ml-auto text-blue-500 hover:text-blue-300">
+        <button type="button" @click="cancelReply" aria-label="Cancel reply" class="ml-auto text-blue-500 hover:text-blue-300">
           <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
           </svg>
         </button>
       </div>
       <div class="flex gap-2">
-        <input v-model="sendText" @keyup.enter="send" placeholder="Type a message..."
+        <input v-model="sendText" @keyup.enter="send" aria-label="Message text" placeholder="Type a message..."
           class="flex-1 px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200 placeholder-gray-600 focus:border-teal-600 focus:outline-none">
         <button @click="send" :disabled="!sendText.trim()"
           class="px-4 py-2 rounded bg-teal-600 text-white text-sm font-medium hover:bg-teal-700 disabled:opacity-30 disabled:cursor-not-allowed transition-colors">
