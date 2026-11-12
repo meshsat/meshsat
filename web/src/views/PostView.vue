@@ -191,7 +191,7 @@ onUnmounted(() => { if (timer) clearInterval(timer) })
             <span v-if="p.class === 'emergency'" class="ml-2 px-1.5 py-0.5 rounded bg-red-800 text-red-100 font-semibold">EMERGENCY</span></div>
           <div class="text-sm text-gray-100 mt-2 break-words">{{ p.text }}</div>
           <div class="grid grid-cols-2 gap-2 mt-3">
-            <button class="py-3 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white font-semibold disabled:opacity-50"
+            <button class="py-3 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white font-semibold disabled:opacity-50"
                     :disabled="busy === p.code" @click="decide(p.code, 'approve')">Send</button>
             <button class="py-3 rounded-lg bg-gray-700 hover:bg-gray-600 text-gray-100 font-semibold disabled:opacity-50"
                     :disabled="busy === p.code" @click="decide(p.code, 'refuse')">Refuse</button>

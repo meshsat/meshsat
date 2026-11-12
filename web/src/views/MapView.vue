@@ -490,10 +490,10 @@ function updateMap() {
     // The marker is a button (Leaflet makes it focusable); its title names it. [MESHSAT-1843]
     const m = L.marker([node.latitude, node.longitude], { icon, title: `Node ${node.long_name || callsign}`, alt: `Node ${node.long_name || callsign}` })
     let html = `<strong>${node.long_name || node.short_name || node._id}</strong>`
-    html += `<br><span style="color:#888;font-size:11px">${cotType}</span>`
+    html += `<br><span style="color:#595959;font-size:11px">${cotType}</span>`
     if (node.battery != null) html += `<br>Battery: ${Math.round(node.battery)}%`
     if (node.snr != null) html += `<br>SNR: ${Number(node.snr).toFixed(1)} dB`
-    if (stale && lastSeen) html += `<br><span style="color:#f59e0b">Stale (${Math.floor((Date.now() - lastSeen.getTime()) / 60000)}m ago)</span>`
+    if (stale && lastSeen) html += `<br><span style="color:#92400e">Stale (${Math.floor((Date.now() - lastSeen.getTime()) / 60000)}m ago)</span>`
     m.bindPopup(html)
     markerLayer.addLayer(m)
   }
@@ -542,11 +542,11 @@ function updateMap() {
 
       const time = msg.created_at ? new Date(msg.created_at).toLocaleString() : ''
       let popup = `<div style="max-width:200px"><strong>${pos.name}</strong><br>`
-      popup += `<span style="font-size:11px;color:#888">${time}</span><br>`
+      popup += `<span style="font-size:11px;color:#595959">${time}</span><br>`
       if (msg.decoded_text) {
         popup += `<span style="font-family:monospace;font-size:12px">${msg.decoded_text.slice(0, 120)}</span>`
       } else {
-        popup += `<em style="color:#888">${msg.portnum_name || 'portnum ' + msg.portnum}</em>`
+        popup += `<em style="color:#595959">${msg.portnum_name || 'portnum ' + msg.portnum}</em>`
       }
       popup += '</div>'
       m.bindPopup(popup)
@@ -599,7 +599,7 @@ function updateMap() {
           color: '#f59e0b',
           weight: 1.5
         })
-        m.bindPopup(`<strong>${loc.name}</strong><br><span style="font-size:11px;color:#888">${loc.builtin ? 'Built-in' : 'Custom'}</span>`)
+        m.bindPopup(`<strong>${loc.name}</strong><br><span style="font-size:11px;color:#595959">${loc.builtin ? 'Built-in' : 'Custom'}</span>`)
         locationLayer.addLayer(m)
       }
     }
@@ -630,7 +630,7 @@ function updateMap() {
         const timeStr = new Date(p.timestamp * 1000).toLocaleTimeString()
         let popup = `<strong>Iridium Pass #${passes.length - i}</strong><br>`
         popup += `<span style="font-family:monospace;font-size:11px">${p.lat.toFixed(3)}, ${p.lon.toFixed(3)}</span>`
-        popup += `<br><span style="font-size:11px;color:#888">${timeStr}</span>`
+        popup += `<br><span style="font-size:11px;color:#595959">${timeStr}</span>`
         popup += `<br>Accuracy: ~200 km (satellite sub-point)`
         if (p.satellite_id) popup += `<br>Sat: ${p.satellite_id}`
         m.bindPopup(popup)
@@ -903,7 +903,7 @@ onUnmounted(() => {
       <div class="flex items-center gap-2">
         <button @click="toggleAutoRefresh"
           class="px-3 py-1.5 text-xs rounded transition-colors"
-          :class="autoRefresh ? 'bg-teal-600 text-white hover:bg-teal-500' : 'bg-gray-800 text-gray-300 hover:text-white'"
+          :class="autoRefresh ? 'bg-teal-600 text-white hover:bg-teal-700' : 'bg-gray-800 text-gray-300 hover:text-white'"
           title="Auto-refresh every 30s">
           {{ autoRefresh ? 'Auto: ON' : 'Auto: OFF' }}
         </button>
@@ -1115,7 +1115,7 @@ onUnmounted(() => {
             class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-xs text-gray-200 font-mono" />
           <div class="flex gap-2">
             <button @click="createGeofenceZone" :disabled="geofenceCreating || !newZone.name"
-              class="flex-1 px-3 py-1.5 rounded bg-teal-600 text-white text-xs font-medium hover:bg-teal-500 disabled:opacity-40">
+              class="flex-1 px-3 py-1.5 rounded bg-teal-600 text-white text-xs font-medium hover:bg-teal-700 disabled:opacity-40">
               {{ geofenceCreating ? 'Creating...' : 'Create Zone' }}
             </button>
             <button @click="showNewZoneForm = false; resetNewZone()"

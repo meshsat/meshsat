@@ -81,6 +81,18 @@ export default {
           sos: '#ef4444',
           power: '#10b981'
         }
+      },
+      // Secondary text on the dark surfaces meets WCAG 2.1 AA (4.5:1). Only
+      // TEXT and PLACEHOLDER greys are lifted; backgrounds and borders keep the
+      // scale above. 400 stays above 500 so the order of emphasis holds.
+      // Contrast on gray-700 (the lightest surface text sits on): 400 6.4:1,
+      // 500 5.5:1, 600 and 700 4.9:1. Guarded by tests/ui/theme-contrast.test.js.
+      // [MESHSAT-1843]
+      textColor: {
+        gray: { 400: '#A6A6B0', 500: '#999AA5', 600: '#91919C', 700: '#91919C' }
+      },
+      placeholderColor: {
+        gray: { 400: '#A6A6B0', 500: '#999AA5', 600: '#91919C', 700: '#91919C' }
       }
     }
   },

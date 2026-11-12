@@ -8,578 +8,208 @@
   "wcag21aa"
  ],
  "measured": {
-  "commit": "b17698aa89f54c8cc24afe5d6f66ae87a8afb361",
+  "commit": "007f46aebec55815b1ac8a02b0c134dcc53e99a3",
   "date": "2026-11-12",
-  "total": 2406
+  "total": 0
  },
  "notes": [],
  "states": {
-  "desktop-engineer/empty/compose:main": {
-   "color-contrast": 3
-  },
-  "desktop-engineer/empty/compose:picker": {
-   "color-contrast": 3
-  },
-  "desktop-engineer/empty/dashboard:customize": {
-   "color-contrast": 58
-  },
-  "desktop-engineer/empty/dashboard:main": {
-   "color-contrast": 51
-  },
-  "desktop-engineer/empty/inbox:main": {
-   "color-contrast": 1
-  },
-  "desktop-engineer/empty/map:geofence": {
-   "color-contrast": 8
-  },
-  "desktop-engineer/empty/map:main": {
-   "color-contrast": 8
-  },
-  "desktop-engineer/empty/messages:broadcasts": {
-   "color-contrast": 7
-  },
-  "desktop-engineer/empty/messages:mesh": {
-   "color-contrast": 16
-  },
-  "desktop-engineer/empty/messages:sbd": {
-   "color-contrast": 5
-  },
-  "desktop-engineer/empty/messages:sms": {
-   "color-contrast": 7
-  },
-  "desktop-engineer/empty/messages:webhooks": {
-   "color-contrast": 8
-  },
-  "desktop-engineer/empty/settings:about": {
-   "color-contrast": 7
-  },
-  "desktop-engineer/empty/settings:aprs": {
-   "color-contrast": 8
-  },
-  "desktop-engineer/empty/settings:canned": {
-   "color-contrast": 2
-  },
-  "desktop-engineer/empty/settings:cell": {
-   "color-contrast": 12
-  },
-  "desktop-engineer/empty/settings:cellular": {
-   "color-contrast": 21
-  },
+  "desktop-engineer/empty/compose:main": {},
+  "desktop-engineer/empty/compose:picker": {},
+  "desktop-engineer/empty/dashboard:customize": {},
+  "desktop-engineer/empty/dashboard:main": {},
+  "desktop-engineer/empty/inbox:main": {},
+  "desktop-engineer/empty/map:geofence": {},
+  "desktop-engineer/empty/map:main": {},
+  "desktop-engineer/empty/messages:broadcasts": {},
+  "desktop-engineer/empty/messages:mesh": {},
+  "desktop-engineer/empty/messages:sbd": {},
+  "desktop-engineer/empty/messages:sms": {},
+  "desktop-engineer/empty/messages:webhooks": {},
+  "desktop-engineer/empty/settings:about": {},
+  "desktop-engineer/empty/settings:aprs": {},
+  "desktop-engineer/empty/settings:canned": {},
+  "desktop-engineer/empty/settings:cell": {},
+  "desktop-engineer/empty/settings:cellular": {},
   "desktop-engineer/empty/settings:channels": {},
-  "desktop-engineer/empty/settings:config_mgmt": {
-   "color-contrast": 2
-  },
-  "desktop-engineer/empty/settings:credentials": {
-   "color-contrast": 2
-  },
-  "desktop-engineer/empty/settings:deadman": {
-   "color-contrast": 4
-  },
-  "desktop-engineer/empty/settings:device_mqtt": {
-   "color-contrast": 5
-  },
-  "desktop-engineer/empty/settings:devices": {
-   "color-contrast": 2
-  },
-  "desktop-engineer/empty/settings:iridium": {
-   "color-contrast": 17
-  },
-  "desktop-engineer/empty/settings:media_hop": {
-   "color-contrast": 5
-  },
-  "desktop-engineer/empty/settings:mqtt": {
-   "color-contrast": 5
-  },
-  "desktop-engineer/empty/settings:network": {
-   "color-contrast": 6
-  },
-  "desktop-engineer/empty/settings:position": {
-   "color-contrast": 5
-  },
+  "desktop-engineer/empty/settings:config_mgmt": {},
+  "desktop-engineer/empty/settings:credentials": {},
+  "desktop-engineer/empty/settings:deadman": {},
+  "desktop-engineer/empty/settings:device_mqtt": {},
+  "desktop-engineer/empty/settings:devices": {},
+  "desktop-engineer/empty/settings:iridium": {},
+  "desktop-engineer/empty/settings:media_hop": {},
+  "desktop-engineer/empty/settings:mqtt": {},
+  "desktop-engineer/empty/settings:network": {},
+  "desktop-engineer/empty/settings:position": {},
   "desktop-engineer/empty/settings:radio": {},
-  "desktop-engineer/empty/settings:range_test": {
-   "color-contrast": 4
-  },
-  "desktop-engineer/empty/settings:remote_mgmt": {
-   "color-contrast": 8
-  },
-  "desktop-engineer/empty/settings:routing": {
-   "color-contrast": 34
-  },
-  "desktop-engineer/empty/settings:store_forward": {
-   "color-contrast": 4
-  },
-  "desktop-engineer/empty/settings:tak": {
-   "color-contrast": 11
-  },
+  "desktop-engineer/empty/settings:range_test": {},
+  "desktop-engineer/empty/settings:remote_mgmt": {},
+  "desktop-engineer/empty/settings:routing": {},
+  "desktop-engineer/empty/settings:store_forward": {},
+  "desktop-engineer/empty/settings:tak": {},
   "desktop-engineer/empty/settings:tetra": {},
-  "desktop-engineer/empty/settings:zigbee": {
-   "color-contrast": 13
-  },
-  "desktop-engineer/empty/shell:header": {
-   "color-contrast": 23
-  },
-  "desktop-engineer/empty/shell:power": {
-   "color-contrast": 23
-  },
-  "desktop-engineer/rich/compose:main": {
-   "color-contrast": 3
-  },
-  "desktop-engineer/rich/compose:picker": {
-   "color-contrast": 4
-  },
-  "desktop-engineer/rich/dashboard:customize": {
-   "color-contrast": 134
-  },
-  "desktop-engineer/rich/dashboard:main": {
-   "color-contrast": 130
-  },
-  "desktop-engineer/rich/inbox:main": {
-   "color-contrast": 3
-  },
-  "desktop-engineer/rich/map:geofence": {
-   "color-contrast": 10
-  },
-  "desktop-engineer/rich/map:main": {
-   "color-contrast": 10
-  },
-  "desktop-engineer/rich/map:popup": {
-   "color-contrast": 12
-  },
-  "desktop-engineer/rich/messages:broadcasts": {
-   "color-contrast": 7
-  },
-  "desktop-engineer/rich/messages:mesh": {
-   "color-contrast": 46
-  },
-  "desktop-engineer/rich/messages:sbd": {
-   "color-contrast": 5
-  },
-  "desktop-engineer/rich/messages:sms": {
-   "color-contrast": 15
-  },
-  "desktop-engineer/rich/messages:webhooks": {
-   "color-contrast": 8
-  },
-  "desktop-engineer/rich/settings:about": {
-   "color-contrast": 7
-  },
-  "desktop-engineer/rich/settings:aprs": {
-   "color-contrast": 8
-  },
-  "desktop-engineer/rich/settings:canned": {
-   "color-contrast": 2
-  },
-  "desktop-engineer/rich/settings:cell": {
-   "color-contrast": 12
-  },
-  "desktop-engineer/rich/settings:cellular": {
-   "color-contrast": 24
-  },
+  "desktop-engineer/empty/settings:zigbee": {},
+  "desktop-engineer/empty/shell:header": {},
+  "desktop-engineer/empty/shell:power": {},
+  "desktop-engineer/rich/compose:main": {},
+  "desktop-engineer/rich/compose:picker": {},
+  "desktop-engineer/rich/dashboard:customize": {},
+  "desktop-engineer/rich/dashboard:main": {},
+  "desktop-engineer/rich/inbox:main": {},
+  "desktop-engineer/rich/map:geofence": {},
+  "desktop-engineer/rich/map:main": {},
+  "desktop-engineer/rich/map:popup": {},
+  "desktop-engineer/rich/messages:broadcasts": {},
+  "desktop-engineer/rich/messages:mesh": {},
+  "desktop-engineer/rich/messages:sbd": {},
+  "desktop-engineer/rich/messages:sms": {},
+  "desktop-engineer/rich/messages:webhooks": {},
+  "desktop-engineer/rich/settings:about": {},
+  "desktop-engineer/rich/settings:aprs": {},
+  "desktop-engineer/rich/settings:canned": {},
+  "desktop-engineer/rich/settings:cell": {},
+  "desktop-engineer/rich/settings:cellular": {},
   "desktop-engineer/rich/settings:channels": {},
-  "desktop-engineer/rich/settings:config_mgmt": {
-   "color-contrast": 2
-  },
-  "desktop-engineer/rich/settings:credentials": {
-   "color-contrast": 2
-  },
-  "desktop-engineer/rich/settings:deadman": {
-   "color-contrast": 4
-  },
-  "desktop-engineer/rich/settings:device_mqtt": {
-   "color-contrast": 5
-  },
-  "desktop-engineer/rich/settings:devices": {
-   "color-contrast": 2
-  },
-  "desktop-engineer/rich/settings:iridium": {
-   "color-contrast": 16
-  },
-  "desktop-engineer/rich/settings:media_hop": {
-   "color-contrast": 5
-  },
-  "desktop-engineer/rich/settings:mqtt": {
-   "color-contrast": 5
-  },
-  "desktop-engineer/rich/settings:network": {
-   "color-contrast": 6
-  },
-  "desktop-engineer/rich/settings:position": {
-   "color-contrast": 5
-  },
+  "desktop-engineer/rich/settings:config_mgmt": {},
+  "desktop-engineer/rich/settings:credentials": {},
+  "desktop-engineer/rich/settings:deadman": {},
+  "desktop-engineer/rich/settings:device_mqtt": {},
+  "desktop-engineer/rich/settings:devices": {},
+  "desktop-engineer/rich/settings:iridium": {},
+  "desktop-engineer/rich/settings:media_hop": {},
+  "desktop-engineer/rich/settings:mqtt": {},
+  "desktop-engineer/rich/settings:network": {},
+  "desktop-engineer/rich/settings:position": {},
   "desktop-engineer/rich/settings:radio": {},
-  "desktop-engineer/rich/settings:range_test": {
-   "color-contrast": 4
-  },
-  "desktop-engineer/rich/settings:remote_mgmt": {
-   "color-contrast": 14
-  },
-  "desktop-engineer/rich/settings:routing": {
-   "color-contrast": 64
-  },
-  "desktop-engineer/rich/settings:store_forward": {
-   "color-contrast": 4
-  },
-  "desktop-engineer/rich/settings:tak": {
-   "color-contrast": 11
-  },
+  "desktop-engineer/rich/settings:range_test": {},
+  "desktop-engineer/rich/settings:remote_mgmt": {},
+  "desktop-engineer/rich/settings:routing": {},
+  "desktop-engineer/rich/settings:store_forward": {},
+  "desktop-engineer/rich/settings:tak": {},
   "desktop-engineer/rich/settings:tetra": {},
-  "desktop-engineer/rich/settings:zigbee": {
-   "color-contrast": 13
-  },
-  "desktop-engineer/rich/shell:header": {
-   "color-contrast": 22
-  },
-  "desktop-engineer/rich/shell:power": {
-   "color-contrast": 22
-  },
-  "kiosk-engineer/empty/compose:main": {
-   "color-contrast": 3
-  },
-  "kiosk-engineer/empty/compose:picker": {
-   "color-contrast": 3
-  },
-  "kiosk-engineer/empty/dashboard:customize": {
-   "color-contrast": 58
-  },
-  "kiosk-engineer/empty/dashboard:main": {
-   "color-contrast": 51
-  },
-  "kiosk-engineer/empty/inbox:main": {
-   "color-contrast": 1
-  },
-  "kiosk-engineer/empty/map:geofence": {
-   "color-contrast": 8
-  },
-  "kiosk-engineer/empty/map:main": {
-   "color-contrast": 7
-  },
-  "kiosk-engineer/empty/messages:broadcasts": {
-   "color-contrast": 7
-  },
-  "kiosk-engineer/empty/messages:mesh": {
-   "color-contrast": 16
-  },
-  "kiosk-engineer/empty/messages:sbd": {
-   "color-contrast": 5
-  },
-  "kiosk-engineer/empty/messages:sms": {
-   "color-contrast": 7
-  },
-  "kiosk-engineer/empty/messages:webhooks": {
-   "color-contrast": 8
-  },
-  "kiosk-engineer/empty/settings:about": {
-   "color-contrast": 7
-  },
-  "kiosk-engineer/empty/settings:aprs": {
-   "color-contrast": 8
-  },
-  "kiosk-engineer/empty/settings:canned": {
-   "color-contrast": 2
-  },
-  "kiosk-engineer/empty/settings:cell": {
-   "color-contrast": 12
-  },
-  "kiosk-engineer/empty/settings:cellular": {
-   "color-contrast": 21
-  },
+  "desktop-engineer/rich/settings:zigbee": {},
+  "desktop-engineer/rich/shell:header": {},
+  "desktop-engineer/rich/shell:power": {},
+  "kiosk-engineer/empty/compose:main": {},
+  "kiosk-engineer/empty/compose:picker": {},
+  "kiosk-engineer/empty/dashboard:customize": {},
+  "kiosk-engineer/empty/dashboard:main": {},
+  "kiosk-engineer/empty/inbox:main": {},
+  "kiosk-engineer/empty/map:geofence": {},
+  "kiosk-engineer/empty/map:main": {},
+  "kiosk-engineer/empty/messages:broadcasts": {},
+  "kiosk-engineer/empty/messages:mesh": {},
+  "kiosk-engineer/empty/messages:sbd": {},
+  "kiosk-engineer/empty/messages:sms": {},
+  "kiosk-engineer/empty/messages:webhooks": {},
+  "kiosk-engineer/empty/settings:about": {},
+  "kiosk-engineer/empty/settings:aprs": {},
+  "kiosk-engineer/empty/settings:canned": {},
+  "kiosk-engineer/empty/settings:cell": {},
+  "kiosk-engineer/empty/settings:cellular": {},
   "kiosk-engineer/empty/settings:channels": {},
-  "kiosk-engineer/empty/settings:config_mgmt": {
-   "color-contrast": 2
-  },
-  "kiosk-engineer/empty/settings:credentials": {
-   "color-contrast": 2
-  },
-  "kiosk-engineer/empty/settings:deadman": {
-   "color-contrast": 4
-  },
-  "kiosk-engineer/empty/settings:device_mqtt": {
-   "color-contrast": 5
-  },
-  "kiosk-engineer/empty/settings:devices": {
-   "color-contrast": 2
-  },
-  "kiosk-engineer/empty/settings:iridium": {
-   "color-contrast": 17
-  },
-  "kiosk-engineer/empty/settings:media_hop": {
-   "color-contrast": 5
-  },
-  "kiosk-engineer/empty/settings:mqtt": {
-   "color-contrast": 5
-  },
-  "kiosk-engineer/empty/settings:network": {
-   "color-contrast": 6
-  },
-  "kiosk-engineer/empty/settings:position": {
-   "color-contrast": 5
-  },
+  "kiosk-engineer/empty/settings:config_mgmt": {},
+  "kiosk-engineer/empty/settings:credentials": {},
+  "kiosk-engineer/empty/settings:deadman": {},
+  "kiosk-engineer/empty/settings:device_mqtt": {},
+  "kiosk-engineer/empty/settings:devices": {},
+  "kiosk-engineer/empty/settings:iridium": {},
+  "kiosk-engineer/empty/settings:media_hop": {},
+  "kiosk-engineer/empty/settings:mqtt": {},
+  "kiosk-engineer/empty/settings:network": {},
+  "kiosk-engineer/empty/settings:position": {},
   "kiosk-engineer/empty/settings:radio": {},
-  "kiosk-engineer/empty/settings:range_test": {
-   "color-contrast": 4
-  },
-  "kiosk-engineer/empty/settings:remote_mgmt": {
-   "color-contrast": 8
-  },
-  "kiosk-engineer/empty/settings:routing": {
-   "color-contrast": 34
-  },
-  "kiosk-engineer/empty/settings:store_forward": {
-   "color-contrast": 4
-  },
-  "kiosk-engineer/empty/settings:tak": {
-   "color-contrast": 11
-  },
+  "kiosk-engineer/empty/settings:range_test": {},
+  "kiosk-engineer/empty/settings:remote_mgmt": {},
+  "kiosk-engineer/empty/settings:routing": {},
+  "kiosk-engineer/empty/settings:store_forward": {},
+  "kiosk-engineer/empty/settings:tak": {},
   "kiosk-engineer/empty/settings:tetra": {},
-  "kiosk-engineer/empty/settings:zigbee": {
-   "color-contrast": 13
-  },
-  "kiosk-engineer/empty/shell:header": {
-   "color-contrast": 11
-  },
-  "kiosk-engineer/empty/shell:power": {
-   "color-contrast": 11
-  },
-  "kiosk-engineer/rich/compose:main": {
-   "color-contrast": 3
-  },
-  "kiosk-engineer/rich/compose:picker": {
-   "color-contrast": 4
-  },
-  "kiosk-engineer/rich/dashboard:customize": {
-   "color-contrast": 133
-  },
-  "kiosk-engineer/rich/dashboard:main": {
-   "color-contrast": 129
-  },
-  "kiosk-engineer/rich/inbox:main": {
-   "color-contrast": 3
-  },
-  "kiosk-engineer/rich/map:geofence": {
-   "color-contrast": 10
-  },
-  "kiosk-engineer/rich/map:main": {
-   "color-contrast": 9
-  },
-  "kiosk-engineer/rich/map:popup": {
-   "color-contrast": 11
-  },
-  "kiosk-engineer/rich/messages:broadcasts": {
-   "color-contrast": 7
-  },
-  "kiosk-engineer/rich/messages:mesh": {
-   "color-contrast": 36
-  },
-  "kiosk-engineer/rich/messages:sbd": {
-   "color-contrast": 5
-  },
-  "kiosk-engineer/rich/messages:sms": {
-   "color-contrast": 15
-  },
-  "kiosk-engineer/rich/messages:webhooks": {
-   "color-contrast": 8
-  },
-  "kiosk-engineer/rich/settings:about": {
-   "color-contrast": 7
-  },
-  "kiosk-engineer/rich/settings:aprs": {
-   "color-contrast": 8
-  },
-  "kiosk-engineer/rich/settings:canned": {
-   "color-contrast": 2
-  },
-  "kiosk-engineer/rich/settings:cell": {
-   "color-contrast": 12
-  },
-  "kiosk-engineer/rich/settings:cellular": {
-   "color-contrast": 24
-  },
+  "kiosk-engineer/empty/settings:zigbee": {},
+  "kiosk-engineer/empty/shell:header": {},
+  "kiosk-engineer/empty/shell:power": {},
+  "kiosk-engineer/rich/compose:main": {},
+  "kiosk-engineer/rich/compose:picker": {},
+  "kiosk-engineer/rich/dashboard:customize": {},
+  "kiosk-engineer/rich/dashboard:main": {},
+  "kiosk-engineer/rich/inbox:main": {},
+  "kiosk-engineer/rich/map:geofence": {},
+  "kiosk-engineer/rich/map:main": {},
+  "kiosk-engineer/rich/map:popup": {},
+  "kiosk-engineer/rich/messages:broadcasts": {},
+  "kiosk-engineer/rich/messages:mesh": {},
+  "kiosk-engineer/rich/messages:sbd": {},
+  "kiosk-engineer/rich/messages:sms": {},
+  "kiosk-engineer/rich/messages:webhooks": {},
+  "kiosk-engineer/rich/settings:about": {},
+  "kiosk-engineer/rich/settings:aprs": {},
+  "kiosk-engineer/rich/settings:canned": {},
+  "kiosk-engineer/rich/settings:cell": {},
+  "kiosk-engineer/rich/settings:cellular": {},
   "kiosk-engineer/rich/settings:channels": {},
-  "kiosk-engineer/rich/settings:config_mgmt": {
-   "color-contrast": 2
-  },
-  "kiosk-engineer/rich/settings:credentials": {
-   "color-contrast": 2
-  },
-  "kiosk-engineer/rich/settings:deadman": {
-   "color-contrast": 4
-  },
-  "kiosk-engineer/rich/settings:device_mqtt": {
-   "color-contrast": 5
-  },
-  "kiosk-engineer/rich/settings:devices": {
-   "color-contrast": 2
-  },
-  "kiosk-engineer/rich/settings:iridium": {
-   "color-contrast": 16
-  },
-  "kiosk-engineer/rich/settings:media_hop": {
-   "color-contrast": 5
-  },
-  "kiosk-engineer/rich/settings:mqtt": {
-   "color-contrast": 5
-  },
-  "kiosk-engineer/rich/settings:network": {
-   "color-contrast": 6
-  },
-  "kiosk-engineer/rich/settings:position": {
-   "color-contrast": 5
-  },
+  "kiosk-engineer/rich/settings:config_mgmt": {},
+  "kiosk-engineer/rich/settings:credentials": {},
+  "kiosk-engineer/rich/settings:deadman": {},
+  "kiosk-engineer/rich/settings:device_mqtt": {},
+  "kiosk-engineer/rich/settings:devices": {},
+  "kiosk-engineer/rich/settings:iridium": {},
+  "kiosk-engineer/rich/settings:media_hop": {},
+  "kiosk-engineer/rich/settings:mqtt": {},
+  "kiosk-engineer/rich/settings:network": {},
+  "kiosk-engineer/rich/settings:position": {},
   "kiosk-engineer/rich/settings:radio": {},
-  "kiosk-engineer/rich/settings:range_test": {
-   "color-contrast": 4
-  },
-  "kiosk-engineer/rich/settings:remote_mgmt": {
-   "color-contrast": 14
-  },
-  "kiosk-engineer/rich/settings:routing": {
-   "color-contrast": 64
-  },
-  "kiosk-engineer/rich/settings:store_forward": {
-   "color-contrast": 4
-  },
-  "kiosk-engineer/rich/settings:tak": {
-   "color-contrast": 11
-  },
+  "kiosk-engineer/rich/settings:range_test": {},
+  "kiosk-engineer/rich/settings:remote_mgmt": {},
+  "kiosk-engineer/rich/settings:routing": {},
+  "kiosk-engineer/rich/settings:store_forward": {},
+  "kiosk-engineer/rich/settings:tak": {},
   "kiosk-engineer/rich/settings:tetra": {},
-  "kiosk-engineer/rich/settings:zigbee": {
-   "color-contrast": 13
-  },
-  "kiosk-engineer/rich/shell:header": {
-   "color-contrast": 11
-  },
-  "kiosk-engineer/rich/shell:power": {
-   "color-contrast": 11
-  },
-  "kiosk-operator/empty/compose:main": {
-   "color-contrast": 3
-  },
-  "kiosk-operator/empty/compose:picker": {
-   "color-contrast": 3
-  },
-  "kiosk-operator/empty/dashboard:main": {
-   "color-contrast": 17
-  },
-  "kiosk-operator/empty/inbox:main": {
-   "color-contrast": 1
-  },
-  "kiosk-operator/empty/map:geofence": {
-   "color-contrast": 8
-  },
-  "kiosk-operator/empty/map:main": {
-   "color-contrast": 7
-  },
-  "kiosk-operator/empty/messages:broadcasts": {
-   "color-contrast": 7
-  },
-  "kiosk-operator/empty/messages:mesh": {
-   "color-contrast": 16
-  },
-  "kiosk-operator/empty/messages:sbd": {
-   "color-contrast": 5
-  },
-  "kiosk-operator/empty/messages:sms": {
-   "color-contrast": 7
-  },
-  "kiosk-operator/empty/messages:webhooks": {
-   "color-contrast": 8
-  },
-  "kiosk-operator/empty/settings:cell": {
-   "color-contrast": 13
-  },
-  "kiosk-operator/empty/settings:cellular": {
-   "color-contrast": 22
-  },
-  "kiosk-operator/empty/settings:channels": {
-   "color-contrast": 1
-  },
-  "kiosk-operator/empty/settings:iridium": {
-   "color-contrast": 18
-  },
-  "kiosk-operator/empty/settings:position": {
-   "color-contrast": 6
-  },
-  "kiosk-operator/empty/settings:radio": {
-   "color-contrast": 1
-  },
-  "kiosk-operator/empty/settings:tetra": {
-   "color-contrast": 1
-  },
-  "kiosk-operator/empty/shell:header": {
-   "color-contrast": 7
-  },
-  "kiosk-operator/empty/shell:more": {
-   "color-contrast": 7
-  },
-  "kiosk-operator/empty/shell:power": {
-   "color-contrast": 7
-  },
-  "kiosk-operator/rich/compose:main": {
-   "color-contrast": 3
-  },
-  "kiosk-operator/rich/compose:picker": {
-   "color-contrast": 4
-  },
-  "kiosk-operator/rich/dashboard:main": {
-   "color-contrast": 17
-  },
-  "kiosk-operator/rich/inbox:main": {
-   "color-contrast": 3
-  },
-  "kiosk-operator/rich/map:geofence": {
-   "color-contrast": 10
-  },
-  "kiosk-operator/rich/map:main": {
-   "color-contrast": 9
-  },
-  "kiosk-operator/rich/map:popup": {
-   "color-contrast": 11
-  },
-  "kiosk-operator/rich/messages:broadcasts": {
-   "color-contrast": 7
-  },
-  "kiosk-operator/rich/messages:mesh": {
-   "color-contrast": 37
-  },
-  "kiosk-operator/rich/messages:sbd": {
-   "color-contrast": 5
-  },
-  "kiosk-operator/rich/messages:sms": {
-   "color-contrast": 15
-  },
-  "kiosk-operator/rich/messages:webhooks": {
-   "color-contrast": 8
-  },
-  "kiosk-operator/rich/settings:cell": {
-   "color-contrast": 13
-  },
-  "kiosk-operator/rich/settings:cellular": {
-   "color-contrast": 25
-  },
-  "kiosk-operator/rich/settings:channels": {
-   "color-contrast": 1
-  },
-  "kiosk-operator/rich/settings:iridium": {
-   "color-contrast": 17
-  },
-  "kiosk-operator/rich/settings:position": {
-   "color-contrast": 6
-  },
-  "kiosk-operator/rich/settings:radio": {
-   "color-contrast": 1
-  },
-  "kiosk-operator/rich/settings:tetra": {
-   "color-contrast": 1
-  },
-  "kiosk-operator/rich/shell:header": {
-   "color-contrast": 7
-  },
-  "kiosk-operator/rich/shell:more": {
-   "color-contrast": 7
-  },
-  "kiosk-operator/rich/shell:power": {
-   "color-contrast": 7
-  }
+  "kiosk-engineer/rich/settings:zigbee": {},
+  "kiosk-engineer/rich/shell:header": {},
+  "kiosk-engineer/rich/shell:power": {},
+  "kiosk-operator/empty/compose:main": {},
+  "kiosk-operator/empty/compose:picker": {},
+  "kiosk-operator/empty/dashboard:main": {},
+  "kiosk-operator/empty/inbox:main": {},
+  "kiosk-operator/empty/map:geofence": {},
+  "kiosk-operator/empty/map:main": {},
+  "kiosk-operator/empty/messages:broadcasts": {},
+  "kiosk-operator/empty/messages:mesh": {},
+  "kiosk-operator/empty/messages:sbd": {},
+  "kiosk-operator/empty/messages:sms": {},
+  "kiosk-operator/empty/messages:webhooks": {},
+  "kiosk-operator/empty/settings:cell": {},
+  "kiosk-operator/empty/settings:cellular": {},
+  "kiosk-operator/empty/settings:channels": {},
+  "kiosk-operator/empty/settings:iridium": {},
+  "kiosk-operator/empty/settings:position": {},
+  "kiosk-operator/empty/settings:radio": {},
+  "kiosk-operator/empty/settings:tetra": {},
+  "kiosk-operator/empty/shell:header": {},
+  "kiosk-operator/empty/shell:more": {},
+  "kiosk-operator/empty/shell:power": {},
+  "kiosk-operator/rich/compose:main": {},
+  "kiosk-operator/rich/compose:picker": {},
+  "kiosk-operator/rich/dashboard:main": {},
+  "kiosk-operator/rich/inbox:main": {},
+  "kiosk-operator/rich/map:geofence": {},
+  "kiosk-operator/rich/map:main": {},
+  "kiosk-operator/rich/map:popup": {},
+  "kiosk-operator/rich/messages:broadcasts": {},
+  "kiosk-operator/rich/messages:mesh": {},
+  "kiosk-operator/rich/messages:sbd": {},
+  "kiosk-operator/rich/messages:sms": {},
+  "kiosk-operator/rich/messages:webhooks": {},
+  "kiosk-operator/rich/settings:cell": {},
+  "kiosk-operator/rich/settings:cellular": {},
+  "kiosk-operator/rich/settings:channels": {},
+  "kiosk-operator/rich/settings:iridium": {},
+  "kiosk-operator/rich/settings:position": {},
+  "kiosk-operator/rich/settings:radio": {},
+  "kiosk-operator/rich/settings:tetra": {},
+  "kiosk-operator/rich/shell:header": {},
+  "kiosk-operator/rich/shell:more": {},
+  "kiosk-operator/rich/shell:power": {}
  }
 }

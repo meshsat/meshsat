@@ -1752,7 +1752,7 @@ onUnmounted(() => {
         </div>
         <div v-if="radioEditing">
           <textarea v-model="radioJSON" rows="2" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200 font-mono resize-y sm:resize-none sm:min-h-[12em]" placeholder="{ ... }"></textarea>
-          <button @click="saveRadioConfig" class="mt-2 px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500">Apply</button>
+          <button @click="saveRadioConfig" class="mt-2 px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-700">Apply</button>
         </div>
         <div v-else-if="currentSectionData.length > 0" class="bg-gray-900 rounded-lg border border-gray-700 overflow-hidden">
           <div v-for="(field, i) in currentSectionData" :key="field.key"
@@ -1848,7 +1848,7 @@ onUnmounted(() => {
           <input type="checkbox" v-model="mqttEnabled" id="mqtt_en" class="rounded bg-gray-900 border-gray-700">
           <label for="mqtt_en" class="text-xs text-gray-400">Enable MQTT gateway</label>
         </div>
-        <button @click="saveMQTT" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500">Save MQTT Config</button>
+        <button @click="saveMQTT" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-700">Save MQTT Config</button>
       </div>
     </div>
 
@@ -1961,7 +1961,7 @@ onUnmounted(() => {
           <input type="checkbox" v-model="iridiumEnabled" id="iridium_en" class="rounded bg-gray-900 border-gray-700">
           <label for="iridium_en" class="text-xs text-gray-400">Enable Iridium gateway</label>
         </div>
-        <button @click="saveIridium" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500">Save Iridium Config</button>
+        <button @click="saveIridium" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-700">Save Iridium Config</button>
       </div>
 
       <!-- Credit Budget (dedicated API) -->
@@ -1981,7 +1981,7 @@ onUnmounted(() => {
         <div v-if="store.creditSummary" class="text-xs text-gray-500">
           Used today: {{ store.creditSummary.today }} | This month: {{ store.creditSummary.month }} | All time: {{ store.creditSummary.all_time }}
         </div>
-        <button @click="saveBudget" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500">Save Budget</button>
+        <button @click="saveBudget" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-700">Save Budget</button>
       </div>
     </div>
 
@@ -2109,7 +2109,7 @@ onUnmounted(() => {
           <input type="password" v-model="settingsPinInput" maxlength="8" inputmode="numeric" pattern="[0-9]*" placeholder="SIM PIN"
             class="flex-1 px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200 font-mono" />
           <button @click="unlockSettingsPIN" :disabled="settingsPinUnlocking"
-            class="px-4 py-2 rounded bg-amber-600 text-white text-sm hover:bg-amber-500 disabled:opacity-50">
+            class="px-4 py-2 rounded bg-amber-700 text-white text-sm hover:bg-amber-800 disabled:opacity-50">
             {{ settingsPinUnlocking ? 'Unlocking...' : 'Unlock SIM' }}
           </button>
         </div>
@@ -2159,7 +2159,7 @@ onUnmounted(() => {
           <input id="set-cellularform-apn-failover-list" v-model="cellularForm.apn_failover_list" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="internet,data,broadband">
         </div>
         <div class="flex gap-2">
-          <button @click="store.connectCellularData(cellularForm.apn)" class="px-3 py-1.5 rounded bg-emerald-600 text-white text-xs hover:bg-emerald-500">Connect</button>
+          <button @click="store.connectCellularData(cellularForm.apn)" class="px-3 py-1.5 rounded bg-emerald-700 text-white text-xs hover:bg-emerald-800">Connect</button>
           <button @click="store.disconnectCellularData()" class="px-3 py-1.5 rounded bg-gray-700 text-gray-300 text-xs hover:bg-gray-600">Disconnect</button>
         </div>
       </div>
@@ -2226,14 +2226,14 @@ onUnmounted(() => {
           <input type="checkbox" v-model="cellularEnabled" id="cellular_en" class="rounded bg-gray-900 border-gray-700">
           <label for="cellular_en" class="text-xs text-gray-400">Enable Cellular gateway</label>
         </div>
-        <button @click="saveCellular" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500">Save Cellular Config</button>
+        <button @click="saveCellular" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-700">Save Cellular Config</button>
       </div>
 
       <!-- SIM Cards -->
       <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-3 mt-4">
         <div class="flex items-center justify-between">
           <h4 class="text-sm font-medium text-gray-200">SIM Cards</h4>
-          <button @click="showSimForm = true" class="px-3 py-1 rounded bg-teal-600 text-white text-xs hover:bg-teal-500">+ Add</button>
+          <button @click="showSimForm = true" class="px-3 py-1 rounded bg-teal-600 text-white text-xs hover:bg-teal-700">+ Add</button>
         </div>
 
         <!-- Current SIM indicator -->
@@ -2278,7 +2278,7 @@ onUnmounted(() => {
           </div>
           <div class="text-[9px] text-gray-600">PIN is stored locally for auto-unlock when this SIM is inserted.</div>
           <div class="flex gap-2">
-            <button @click="saveSim" :disabled="!simForm.iccid" class="px-3 py-1.5 rounded bg-teal-600 text-white text-xs hover:bg-teal-500 disabled:opacity-40">
+            <button @click="saveSim" :disabled="!simForm.iccid" class="px-3 py-1.5 rounded bg-teal-600 text-white text-xs hover:bg-teal-700 disabled:opacity-40">
               {{ editingSim ? 'Update' : 'Add' }}
             </button>
             <button @click="cancelSim" class="px-3 py-1.5 rounded bg-gray-700 text-gray-300 text-xs hover:bg-gray-600">Cancel</button>
@@ -2308,7 +2308,7 @@ onUnmounted(() => {
       <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-3 mt-4">
         <div class="flex items-center justify-between">
           <h4 class="text-sm font-medium text-gray-200">SMS Contacts</h4>
-          <button @click="showContactForm = true" class="px-3 py-1 rounded bg-teal-600 text-white text-xs hover:bg-teal-500">+ Add</button>
+          <button @click="showContactForm = true" class="px-3 py-1 rounded bg-teal-600 text-white text-xs hover:bg-teal-700">+ Add</button>
         </div>
 
         <!-- Add/Edit form -->
@@ -2331,7 +2331,7 @@ onUnmounted(() => {
             <input type="checkbox" v-model="contactForm.auto_fwd" class="rounded bg-gray-800 border-gray-600"> Auto-forward SMS from this contact to mesh
           </label>
           <div class="flex gap-2">
-            <button @click="saveContact" class="px-3 py-1.5 rounded bg-teal-600 text-white text-xs hover:bg-teal-500">
+            <button @click="saveContact" class="px-3 py-1.5 rounded bg-teal-600 text-white text-xs hover:bg-teal-700">
               {{ editingContact ? 'Update' : 'Add' }}
             </button>
             <button @click="cancelContact" class="px-3 py-1.5 rounded bg-gray-700 text-gray-300 text-xs hover:bg-gray-600">Cancel</button>
@@ -2411,7 +2411,7 @@ onUnmounted(() => {
           <input type="checkbox" v-model="zigbeeEnabled" id="zigbee_en" class="rounded bg-gray-900 border-gray-700">
           <label for="zigbee_en" class="text-xs text-gray-400">Enable ZigBee gateway</label>
         </div>
-        <button @click="saveZigBee" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500">Save ZigBee Config</button>
+        <button @click="saveZigBee" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-700">Save ZigBee Config</button>
       </div>
 
       <!-- Permit Join -->
@@ -2487,7 +2487,7 @@ onUnmounted(() => {
           </div>
         </div>
         <div class="flex gap-2">
-          <button @click="doSendPosition" :disabled="positionSending" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500 disabled:opacity-40">
+          <button @click="doSendPosition" :disabled="positionSending" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-700 disabled:opacity-40">
             {{ positionSending ? 'Sending...' : 'Send Position' }}
           </button>
         </div>
@@ -2496,7 +2496,7 @@ onUnmounted(() => {
         <h4 class="text-sm font-medium text-gray-200">Fixed Position</h4>
         <p class="text-xs text-gray-500">Set a fixed GPS position on the device (disables GPS module, uses this position).</p>
         <div class="flex gap-2">
-          <button @click="doSetFixedPosition" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500">Set Fixed Position</button>
+          <button @click="doSetFixedPosition" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-700">Set Fixed Position</button>
           <button @click="doRemoveFixedPosition" class="px-4 py-2 rounded bg-gray-700 text-gray-300 text-sm hover:bg-gray-600">Remove Fixed</button>
         </div>
       </div>
@@ -2514,7 +2514,7 @@ onUnmounted(() => {
           <label for="set-cannedtext" class="block text-xs text-gray-500 mb-1">Messages (pipe-separated)</label>
           <textarea id="set-cannedtext" v-model="cannedText" rows="4" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200 font-mono" placeholder="OK|Help|SOS|Returning to base|Position report"></textarea>
         </div>
-        <button @click="saveCannedMessages" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500">Save to Device</button>
+        <button @click="saveCannedMessages" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-700">Save to Device</button>
       </div>
     </div>
 
@@ -2621,7 +2621,7 @@ onUnmounted(() => {
             <input id="set-sfform-window" v-model.number="sfForm.window" type="number" min="60" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
           </div>
         </div>
-        <button @click="doRequestSF" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500">Request History</button>
+        <button @click="doRequestSF" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-700">Request History</button>
         <p class="text-[10px] text-gray-600">Responses will appear as messages in the Messages view via SSE events.</p>
       </div>
     </div>
@@ -2641,7 +2641,7 @@ onUnmounted(() => {
             <input id="set-rtform-to" v-model.number="rtForm.to" type="number" class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200">
           </div>
         </div>
-        <button @click="doSendRangeTest" :disabled="rtSending" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500 disabled:opacity-40">
+        <button @click="doSendRangeTest" :disabled="rtSending" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-700 disabled:opacity-40">
           {{ rtSending ? 'Sending...' : 'Send Range Test' }}
         </button>
       </div>
@@ -2710,7 +2710,7 @@ onUnmounted(() => {
 
         <!-- Save button -->
         <button @click="saveDeadman" :disabled="deadmanSaving"
-          class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500 disabled:opacity-40">
+          class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-700 disabled:opacity-40">
           {{ deadmanSaving ? 'Saving...' : 'Save' }}
         </button>
       </div>
@@ -2790,7 +2790,7 @@ onUnmounted(() => {
           <input type="checkbox" v-model="takEnabled" id="tak_en" class="rounded bg-gray-900 border-gray-700">
           <label for="tak_en" class="text-xs text-gray-400">Enable TAK gateway</label>
         </div>
-        <button @click="saveTAK" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500">Save TAK Config</button>
+        <button @click="saveTAK" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-700">Save TAK Config</button>
 
         <!-- Certificate enrollment -->
         <div class="border-t border-gray-700 pt-3 mt-3">
@@ -2874,7 +2874,7 @@ onUnmounted(() => {
           <button v-if="!aprsEncryptEnabled"
                   @click="aprsEnableEncryption"
                   :disabled="aprsSaving"
-                  class="px-4 py-2 rounded bg-amber-600 text-white text-sm hover:bg-amber-500 disabled:opacity-40">
+                  class="px-4 py-2 rounded bg-amber-700 text-white text-sm hover:bg-amber-800 disabled:opacity-40">
             {{ aprsSaving ? 'Enabling…' : 'Enable encryption' }}
           </button>
           <button v-else
@@ -2930,7 +2930,7 @@ onUnmounted(() => {
         <!-- Upload -->
         <div class="border border-dashed border-gray-600 rounded-lg p-4 text-center">
           <input type="file" ref="credFileInput" accept=".zip,.pem,.crt,.key,.cer" @change="onCredFileSelected" class="hidden">
-          <button @click="$refs.credFileInput.click()" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500">
+          <button @click="$refs.credFileInput.click()" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-700">
             Select ZIP or PEM File
           </button>
           <p v-if="credFileName" class="text-xs text-gray-400 mt-2">{{ credFileName }}</p>
@@ -2947,7 +2947,7 @@ onUnmounted(() => {
             </select>
             <input v-model="credName" placeholder="Label" class="px-2 py-1 rounded bg-gray-900 border border-gray-700 text-xs text-gray-200 w-32">
             <button @click="doUploadCred" :disabled="credUploading || !credProvider"
-              class="px-3 py-1 rounded bg-emerald-600 text-white text-xs hover:bg-emerald-500 disabled:opacity-40">
+              class="px-3 py-1 rounded bg-emerald-700 text-white text-xs hover:bg-emerald-800 disabled:opacity-40">
               {{ credUploading ? 'Uploading...' : 'Upload' }}
             </button>
           </div>
@@ -3027,7 +3027,7 @@ onUnmounted(() => {
           </div>
         </div>
         <div class="flex items-center gap-2">
-          <button @click="saveOOBConfig" :disabled="oobSaving" class="px-3 py-1.5 rounded bg-teal-600 text-white text-xs hover:bg-teal-500 disabled:opacity-50">{{ oobSaving ? 'Saving...' : 'Save OOB Config' }}</button>
+          <button @click="saveOOBConfig" :disabled="oobSaving" class="px-3 py-1.5 rounded bg-teal-600 text-white text-xs hover:bg-teal-700 disabled:opacity-50">{{ oobSaving ? 'Saving...' : 'Save OOB Config' }}</button>
           <span v-if="(store.oobTargets.reverts || []).length" class="text-[10px] text-amber-300">revert armed: {{ store.oobTargets.reverts.join(', ') }}</span>
         </div>
       </div>
@@ -3036,7 +3036,7 @@ onUnmounted(() => {
       <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 space-y-3">
         <div class="flex items-center justify-between">
           <h4 class="text-sm font-medium text-gray-200">Peers</h4>
-          <button @click="showOOBPeerForm = true" class="px-3 py-1 rounded bg-teal-600 text-white text-xs hover:bg-teal-500">+ Add</button>
+          <button @click="showOOBPeerForm = true" class="px-3 py-1 rounded bg-teal-600 text-white text-xs hover:bg-teal-700">+ Add</button>
         </div>
 
         <div v-if="showOOBPeerForm" class="bg-gray-900 rounded p-3 border border-gray-700 space-y-2">
@@ -3077,7 +3077,7 @@ onUnmounted(() => {
             </div>
           </div>
           <div class="flex gap-2">
-            <button @click="saveOOBPeer" class="px-3 py-1.5 rounded bg-teal-600 text-white text-xs hover:bg-teal-500">{{ editingOOBPeer ? 'Update' : 'Add' }}</button>
+            <button @click="saveOOBPeer" class="px-3 py-1.5 rounded bg-teal-600 text-white text-xs hover:bg-teal-700">{{ editingOOBPeer ? 'Update' : 'Add' }}</button>
             <button @click="cancelOOBPeer" class="px-3 py-1.5 rounded bg-gray-700 text-gray-300 text-xs hover:bg-gray-600">Cancel</button>
           </div>
         </div>
@@ -3185,7 +3185,7 @@ onUnmounted(() => {
           </div>
         </div>
         <div class="flex items-center gap-3">
-          <button @click="doOOBSend" :disabled="!oobSend.peer_id || !store.oobConfig.enabled" class="px-3 py-1.5 rounded bg-teal-600 text-white text-xs hover:bg-teal-500 disabled:opacity-50 flex items-center gap-1">
+          <button @click="doOOBSend" :disabled="!oobSend.peer_id || !store.oobConfig.enabled" class="px-3 py-1.5 rounded bg-teal-600 text-white text-xs hover:bg-teal-700 disabled:opacity-50 flex items-center gap-1">
             <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>
             Send
           </button>
@@ -3980,7 +3980,7 @@ onUnmounted(() => {
           <p class="text-xs text-gray-500 mb-3">Download the current interface configuration as YAML (Cisco-style running-config format).</p>
           <div class="flex gap-2 mb-3">
             <button @click="doExportConfig" :disabled="exporting"
-              class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500 disabled:opacity-50">
+              class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-700 disabled:opacity-50">
               {{ exporting ? 'Exporting...' : 'Export Config' }}
             </button>
             <button v-if="exportedConfig" @click="downloadConfig"
@@ -4000,7 +4000,7 @@ onUnmounted(() => {
           <textarea v-model="importText" aria-label="YAML config to import" rows="2" placeholder="Paste YAML config here..."
             class="w-full px-3 py-2 rounded bg-gray-900 border border-gray-700 text-xs text-gray-200 font-mono mb-3 resize-y sm:resize-none sm:min-h-[12em]"></textarea>
           <button @click="doImportConfig" :disabled="importing || !importText.trim()"
-            class="px-4 py-2 rounded bg-amber-600 text-white text-sm hover:bg-amber-500 disabled:opacity-50">
+            class="px-4 py-2 rounded bg-amber-700 text-white text-sm hover:bg-amber-800 disabled:opacity-50">
             {{ importing ? 'Importing...' : 'Import Config' }}
           </button>
           <div v-if="importResult" class="mt-3 p-3 rounded text-sm"
@@ -4141,7 +4141,7 @@ onUnmounted(() => {
             <input v-model="factoryResetNodeId" placeholder="Node ID (decimal)" type="number"
               class="flex-1 px-3 py-2 rounded bg-gray-900 border border-red-700/40 text-sm text-gray-200 font-mono" />
             <button @click="doFactoryReset" :disabled="!factoryResetNodeId"
-              class="px-4 py-2 rounded bg-red-600 text-white text-xs hover:bg-red-500 disabled:opacity-40">
+              class="px-4 py-2 rounded bg-red-600 text-white text-xs hover:bg-red-700 disabled:opacity-40">
               Confirm Reset
             </button>
             <button @click="factoryResetConfirm = false"

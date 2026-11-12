@@ -1684,7 +1684,7 @@ function widgetGridClass(id) {
           <button type="button" @click.prevent="toggleSOS" :disabled="sosArming"
             class="flex-1 rounded-lg border-2 font-display font-bold tracking-widest text-2xl transition-colors"
             :class="sosActive
-              ? 'border-red-500 bg-red-600 text-white hover:bg-red-500'
+              ? 'border-red-500 bg-red-600 text-white hover:bg-red-700'
               : 'border-red-500/60 bg-red-950/30 text-red-300 hover:bg-red-900/40'">
             {{ sosActive ? 'CANCEL SOS' : 'ACTIVATE SOS' }}
           </button>
@@ -1902,7 +1902,7 @@ function widgetGridClass(id) {
           class="px-3 py-1 rounded text-[11px] text-gray-400 border border-gray-700 hover:text-gray-200 hover:border-gray-500 transition-colors">Reset to default</button>
         <button type="button" @click="toggleCustomize" :aria-pressed="dashCustomizing" data-testid="dash-customize"
           class="px-3 py-1 rounded text-[11px] font-medium border transition-colors"
-          :class="dashCustomizing ? 'bg-teal-600 border-teal-500 text-white hover:bg-teal-500' : 'border-gray-700 text-gray-300 hover:border-teal-500 hover:text-teal-300'">
+          :class="dashCustomizing ? 'bg-teal-600 border-teal-500 text-white hover:bg-teal-700' : 'border-gray-700 text-gray-300 hover:border-teal-500 hover:text-teal-300'">
           {{ dashCustomizing ? 'Done' : 'Customize' }}
         </button>
       </div>
@@ -2217,7 +2217,7 @@ function widgetGridClass(id) {
             <span class="text-[9px] font-mono text-gray-600 shrink-0">{{ shortId(node.user_id) }}</span>
             <span v-if="node.other_mesh" class="text-[9px] text-gray-500 shrink-0" title="Heard on the same frequency, but on another channel key: this bridge cannot read its frames">other mesh</span>
             <span v-else-if="node.snr != null && Math.abs(node.snr) < 100" class="text-[9px] font-mono shrink-0"
-              :class="node.snr >= 0 ? 'text-emerald-400/60' : node.snr >= -10 ? 'text-amber-400/60' : 'text-red-400/60'">
+              :class="node.snr >= 0 ? 'text-emerald-400/80' : node.snr >= -10 ? 'text-amber-400/60' : 'text-red-400/60'">
               {{ Number(node.snr).toFixed(0) }}dB
             </span>
             <span class="text-[9px] text-gray-600 shrink-0">{{ formatLastHeard(node.last_heard) }}</span>
@@ -2242,7 +2242,7 @@ function widgetGridClass(id) {
 
         <div class="flex items-center justify-between mt-2 pt-2 border-t border-tactical-border">
           <div class="flex gap-3">
-            <router-link to="/nodes" class="text-[10px] text-tactical-lora/60 hover:text-tactical-lora transition-colors">
+            <router-link to="/nodes" class="text-[10px] text-tactical-lora/80 hover:text-tactical-lora transition-colors">
               View All Nodes
             </router-link>
             <router-link v-if="staleCount > 0" to="/nodes" class="text-[10px] text-amber-400/60 hover:text-amber-400 transition-colors">
@@ -2608,7 +2608,7 @@ function widgetGridClass(id) {
             </div>
             <span v-if="dashCellInfo?.cell_id" class="text-gray-300 font-mono text-[10px]">
               {{ dashCellInfo.mcc }}/{{ dashCellInfo.mnc }} CID={{ dashCellInfo.cell_id }}
-              <span v-if="dashCellInfo.network_type" class="text-sky-400/60 ml-1">{{ dashCellInfo.network_type }}</span>
+              <span v-if="dashCellInfo.network_type" class="text-sky-400/80 ml-1">{{ dashCellInfo.network_type }}</span>
             </span>
             <span v-else class="text-gray-600 font-mono text-[10px]">No data</span>
           </div>
@@ -2630,10 +2630,10 @@ function widgetGridClass(id) {
         </div>
 
         <div class="flex gap-3 mt-2">
-          <router-link to="/map" class="text-[10px] text-tactical-gps/60 hover:text-tactical-gps transition-colors">
+          <router-link to="/map" class="text-[10px] text-tactical-gps/80 hover:text-tactical-gps transition-colors">
             Open Map
           </router-link>
-          <router-link to="/passes" class="text-[10px] text-teal-400/60 hover:text-teal-400 transition-colors">
+          <router-link to="/passes" class="text-[10px] text-teal-400 hover:text-teal-400 transition-colors">
             Pass Predictor
           </router-link>
         </div>
@@ -2722,7 +2722,7 @@ fingerprint: ${store.aprsStatus.encryption.key_fingerprint || '(unresolved)'}`">
             <span class="text-red-200/80 font-mono">{{ store.aprsStatus.encryption.summary || 'aes-256-gcm' }}</span>
           </div>
           <div class="flex items-center justify-between text-[9.5px]">
-            <span class="text-red-300/60 font-mono">{{ store.aprsStatus.encryption.key_ref || '—' }}</span>
+            <span class="text-red-300/80 font-mono">{{ store.aprsStatus.encryption.key_ref || '—' }}</span>
             <span class="text-red-200/80 font-mono">
               <template v-if="store.aprsStatus.encryption.key_fingerprint">fp {{ store.aprsStatus.encryption.key_fingerprint }}</template>
               <template v-else>no-key</template>
@@ -3029,7 +3029,7 @@ fingerprint: ${store.aprsStatus.encryption.key_fingerprint || '(unresolved)'}`">
 
         <button v-if="store.burstStatus.pending > 0"
           @click="doBurstFlush" :disabled="burstFlushing"
-          class="w-full px-3 py-2 rounded bg-teal-600 text-white text-xs font-medium hover:bg-teal-500 transition-colors disabled:opacity-40">
+          class="w-full px-3 py-2 rounded bg-teal-600 text-white text-xs font-medium hover:bg-teal-700 transition-colors disabled:opacity-40">
           {{ burstFlushing ? 'Flushing...' : 'Flush Now' }}
         </button>
         <div v-else class="text-[11px] text-gray-600 text-center py-2">

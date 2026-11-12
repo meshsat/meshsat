@@ -41,7 +41,7 @@ const tone = computed(() => {
   if (shape.value === 'failed') return 'text-red-400'
   if (props.read && shape.value === 'double') return 'text-tactical-iridium'
   if (shape.value === 'double') return 'text-emerald-400/70'
-  if (shape.value === 'single') return 'text-emerald-400/60'
+  if (shape.value === 'single') return 'text-emerald-400/80'
   return 'text-gray-500'
 })
 </script>

@@ -461,7 +461,7 @@ onMounted(async () => {
           </div>
         </div>
         <button @click="saveIdentity" :disabled="saving.identity"
-          class="px-4 py-1.5 bg-teal-600 hover:bg-teal-500 disabled:opacity-50 rounded text-sm font-medium text-white">
+          class="px-4 py-1.5 bg-teal-600 hover:bg-teal-700 disabled:opacity-50 rounded text-sm font-medium text-white">
           {{ saving.identity ? 'Saving...' : 'Save' }}
         </button>
       </div>
@@ -514,7 +514,7 @@ onMounted(async () => {
           </label>
         </div>
         <button @click="saveLora" :disabled="saving.lora"
-          class="px-4 py-1.5 bg-teal-600 hover:bg-teal-500 disabled:opacity-50 rounded text-sm font-medium text-white">
+          class="px-4 py-1.5 bg-teal-600 hover:bg-teal-700 disabled:opacity-50 rounded text-sm font-medium text-white">
           {{ saving.lora ? 'Saving...' : 'Save' }}
         </button>
       </div>
@@ -559,7 +559,7 @@ onMounted(async () => {
             </label>
           </div>
           <button @click="saveChannel(ch)" :disabled="saving[`channel_${ch.index}`]"
-            class="px-3 py-1 bg-teal-600 hover:bg-teal-500 disabled:opacity-50 rounded text-xs font-medium text-white">
+            class="px-3 py-1 bg-teal-600 hover:bg-teal-700 disabled:opacity-50 rounded text-xs font-medium text-white">
             {{ saving[`channel_${ch.index}`] ? 'Saving...' : 'Save Channel' }}
           </button>
         </div>
@@ -611,7 +611,7 @@ onMounted(async () => {
         </div>
         <div class="flex flex-wrap gap-2">
           <button @click="savePosition" :disabled="saving.position"
-            class="px-4 py-1.5 bg-teal-600 hover:bg-teal-500 disabled:opacity-50 rounded text-sm font-medium text-white">
+            class="px-4 py-1.5 bg-teal-600 hover:bg-teal-700 disabled:opacity-50 rounded text-sm font-medium text-white">
             {{ saving.position ? 'Saving...' : 'Save' }}
           </button>
           <button v-if="position.fixed_position" @click="setFixed" :disabled="saving.fixed"
@@ -667,7 +667,7 @@ onMounted(async () => {
           </div>
         </div>
         <button @click="savePower" :disabled="saving.power"
-          class="px-4 py-1.5 bg-teal-600 hover:bg-teal-500 disabled:opacity-50 rounded text-sm font-medium text-white">
+          class="px-4 py-1.5 bg-teal-600 hover:bg-teal-700 disabled:opacity-50 rounded text-sm font-medium text-white">
           {{ saving.power ? 'Saving...' : 'Save' }}
         </button>
       </div>
@@ -709,7 +709,7 @@ onMounted(async () => {
           </label>
         </div>
         <button @click="saveDisplay" :disabled="saving.display"
-          class="px-4 py-1.5 bg-teal-600 hover:bg-teal-500 disabled:opacity-50 rounded text-sm font-medium text-white">
+          class="px-4 py-1.5 bg-teal-600 hover:bg-teal-700 disabled:opacity-50 rounded text-sm font-medium text-white">
           {{ saving.display ? 'Saving...' : 'Save' }}
         </button>
       </div>
@@ -738,7 +738,7 @@ onMounted(async () => {
             class="w-full bg-gray-900 border border-gray-600 rounded px-3 py-1.5 text-sm text-gray-200 focus:border-teal-500 focus:outline-none" />
         </div>
         <button @click="saveBluetooth" :disabled="saving.bluetooth"
-          class="px-4 py-1.5 bg-teal-600 hover:bg-teal-500 disabled:opacity-50 rounded text-sm font-medium text-white">
+          class="px-4 py-1.5 bg-teal-600 hover:bg-teal-700 disabled:opacity-50 rounded text-sm font-medium text-white">
           {{ saving.bluetooth ? 'Saving...' : 'Save' }}
         </button>
       </div>
@@ -771,7 +771,7 @@ onMounted(async () => {
             class="w-full bg-gray-900 border border-gray-600 rounded px-3 py-1.5 text-sm text-gray-200 focus:border-teal-500 focus:outline-none" />
         </div>
         <button @click="saveNetwork" :disabled="saving.network"
-          class="px-4 py-1.5 bg-teal-600 hover:bg-teal-500 disabled:opacity-50 rounded text-sm font-medium text-white">
+          class="px-4 py-1.5 bg-teal-600 hover:bg-teal-700 disabled:opacity-50 rounded text-sm font-medium text-white">
           {{ saving.network ? 'Saving...' : 'Save' }}
         </button>
       </div>
@@ -809,7 +809,7 @@ onMounted(async () => {
               <span class="text-xs text-gray-300">Environment Measurement Enabled</span>
             </label>
             <button @click="saveModule('telemetry')" :disabled="saving.mod_telemetry"
-              class="px-3 py-1 bg-teal-600 hover:bg-teal-500 disabled:opacity-50 rounded text-xs font-medium text-white">
+              class="px-3 py-1 bg-teal-600 hover:bg-teal-700 disabled:opacity-50 rounded text-xs font-medium text-white">
               {{ saving.mod_telemetry ? 'Saving...' : 'Save' }}
             </button>
           </div>
@@ -848,7 +848,7 @@ onMounted(async () => {
               </div>
             </div>
             <button @click="saveModule('store_forward')" :disabled="saving.mod_store_forward"
-              class="px-3 py-1 bg-teal-600 hover:bg-teal-500 disabled:opacity-50 rounded text-xs font-medium text-white">
+              class="px-3 py-1 bg-teal-600 hover:bg-teal-700 disabled:opacity-50 rounded text-xs font-medium text-white">
               {{ saving.mod_store_forward ? 'Saving...' : 'Save' }}
             </button>
           </div>
@@ -875,7 +875,7 @@ onMounted(async () => {
               <span class="text-xs text-gray-300">Save to CSV</span>
             </label>
             <button @click="saveModule('range_test')" :disabled="saving.mod_range_test"
-              class="px-3 py-1 bg-teal-600 hover:bg-teal-500 disabled:opacity-50 rounded text-xs font-medium text-white">
+              class="px-3 py-1 bg-teal-600 hover:bg-teal-700 disabled:opacity-50 rounded text-xs font-medium text-white">
               {{ saving.mod_range_test ? 'Saving...' : 'Save' }}
             </button>
           </div>
@@ -898,7 +898,7 @@ onMounted(async () => {
                 class="w-full bg-gray-800 border border-gray-600 rounded px-3 py-1.5 text-sm text-gray-200 focus:border-teal-500 focus:outline-none" />
             </div>
             <button @click="saveModule('neighbor_info')" :disabled="saving.mod_neighbor_info"
-              class="px-3 py-1 bg-teal-600 hover:bg-teal-500 disabled:opacity-50 rounded text-xs font-medium text-white">
+              class="px-3 py-1 bg-teal-600 hover:bg-teal-700 disabled:opacity-50 rounded text-xs font-medium text-white">
               {{ saving.mod_neighbor_info ? 'Saving...' : 'Save' }}
             </button>
           </div>
@@ -925,7 +925,7 @@ onMounted(async () => {
               <span class="text-xs text-gray-300">Active (buzzer/LED on)</span>
             </label>
             <button @click="saveModule('external_notification')" :disabled="saving.mod_external_notification"
-              class="px-3 py-1 bg-teal-600 hover:bg-teal-500 disabled:opacity-50 rounded text-xs font-medium text-white">
+              class="px-3 py-1 bg-teal-600 hover:bg-teal-700 disabled:opacity-50 rounded text-xs font-medium text-white">
               {{ saving.mod_external_notification ? 'Saving...' : 'Save' }}
             </button>
           </div>
@@ -952,7 +952,7 @@ onMounted(async () => {
                 class="w-full bg-gray-900 border border-gray-600 rounded px-3 py-1.5 text-sm text-gray-200 focus:border-teal-500 focus:outline-none" />
             </div>
             <button @click="doReboot" :disabled="saving.reboot"
-              class="px-4 py-1.5 bg-amber-600 hover:bg-amber-500 disabled:opacity-50 rounded text-sm font-medium text-white">
+              class="px-4 py-1.5 bg-amber-700 hover:bg-amber-800 disabled:opacity-50 rounded text-sm font-medium text-white">
               {{ saving.reboot ? 'Rebooting...' : 'Reboot' }}
             </button>
           </div>
@@ -967,7 +967,7 @@ onMounted(async () => {
             <span class="text-sm text-gray-300">I understand this will erase all radio settings</span>
           </label>
           <button @click="doFactoryReset" :disabled="!admin.factory_reset_confirm || saving.factory_reset"
-            class="px-4 py-1.5 bg-red-600 hover:bg-red-500 disabled:opacity-50 disabled:cursor-not-allowed rounded text-sm font-medium text-white">
+            class="px-4 py-1.5 bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed rounded text-sm font-medium text-white">
             {{ saving.factory_reset ? 'Resetting...' : 'Factory Reset' }}
           </button>
         </div>
@@ -982,7 +982,7 @@ onMounted(async () => {
                 class="w-full bg-gray-900 border border-gray-600 rounded px-3 py-1.5 text-sm text-gray-200 focus:border-teal-500 focus:outline-none" />
             </div>
             <button @click="doRemoveNode" :disabled="!admin.remove_node_num || saving.remove_node"
-              class="px-4 py-1.5 bg-red-600 hover:bg-red-500 disabled:opacity-50 disabled:cursor-not-allowed rounded text-sm font-medium text-white">
+              class="px-4 py-1.5 bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed rounded text-sm font-medium text-white">
               {{ saving.remove_node ? 'Removing...' : 'Remove' }}
             </button>
           </div>

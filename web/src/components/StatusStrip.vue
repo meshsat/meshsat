@@ -126,7 +126,7 @@ const cellLabel = computed(() => cellBars.value >= 0
             :class="cellBars >= i ? 'bg-sky-400' : 'bg-gray-700/50'"
             :style="{ height: `${3 + i * 2}px` }" />
         </div>
-        <span class="hidden md:inline text-sky-400/60 font-mono">{{ store.cellularStatus?.network_type || 'LTE' }}</span>
+        <span class="hidden md:inline text-sky-400/80 font-mono">{{ store.cellularStatus?.network_type || 'LTE' }}</span>
       </template>
       <span v-else class="text-gray-600 font-mono">--</span>
     </div>

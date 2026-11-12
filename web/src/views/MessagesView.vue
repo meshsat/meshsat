@@ -795,7 +795,7 @@ onUnmounted(() => {
           <span class="text-[10px] text-gray-600">/ {{ store.messageStats?.today || 0 }} total</span>
         </div>
         <div class="flex items-center gap-1.5 mt-0.5">
-          <span class="text-[10px] text-emerald-400/60">{{ store.messageStats?.by_transport?.radio || 0 }} radio</span>
+          <span class="text-[10px] text-emerald-400/80">{{ store.messageStats?.by_transport?.radio || 0 }} radio</span>
           <span v-if="store.messageStats?.by_transport?.iridium" class="text-[10px] text-blue-400/60">{{ store.messageStats.by_transport.iridium }} sat</span>
           <span v-if="store.messageStats?.by_transport?.mqtt" class="text-[10px] text-purple-400/60">{{ store.messageStats.by_transport.mqtt }} mqtt</span>
         </div>
@@ -808,9 +808,9 @@ onUnmounted(() => {
             class="text-[10px] text-gray-600 hover:text-red-400 transition-colors">clear old</button>
         </div>
         <div v-if="store.messageStats?.by_portnum" class="flex items-center gap-1.5 mt-0.5 flex-wrap">
-          <span v-if="store.messageStats.by_portnum['TEXT_MESSAGE_APP']" class="text-[10px] text-emerald-400/60">{{ store.messageStats.by_portnum['TEXT_MESSAGE_APP'] }} text</span>
+          <span v-if="store.messageStats.by_portnum['TEXT_MESSAGE_APP']" class="text-[10px] text-emerald-400/80">{{ store.messageStats.by_portnum['TEXT_MESSAGE_APP'] }} text</span>
           <span v-if="store.messageStats.by_portnum['TELEMETRY_APP']" class="text-[10px] text-amber-400/60">{{ store.messageStats.by_portnum['TELEMETRY_APP'] }} telem</span>
-          <span v-if="store.messageStats.by_portnum['POSITION_APP']" class="text-[10px] text-cyan-400/60">{{ store.messageStats.by_portnum['POSITION_APP'] }} pos</span>
+          <span v-if="store.messageStats.by_portnum['POSITION_APP']" class="text-[10px] text-cyan-400/80">{{ store.messageStats.by_portnum['POSITION_APP'] }} pos</span>
           <span v-if="store.messageStats.by_portnum['NODEINFO_APP']" class="text-[10px] text-gray-500">{{ store.messageStats.by_portnum['NODEINFO_APP'] }} node</span>
         </div>
       </div>
@@ -842,7 +842,7 @@ onUnmounted(() => {
         </button>
         <!-- Compose toggle -->
         <button @click="showCompose = !showCompose"
-          class="px-3 py-1 rounded text-xs font-medium bg-teal-600 text-white hover:bg-teal-500 transition-colors">
+          class="px-3 py-1 rounded text-xs font-medium bg-teal-600 text-white hover:bg-teal-700 transition-colors">
           + Message
         </button>
       </div>
@@ -919,7 +919,7 @@ onUnmounted(() => {
           </div>
           <div class="flex gap-2 mt-4">
             <button @click="showPresetEditor = false" class="flex-1 py-2 rounded bg-gray-700 text-gray-300 text-sm hover:bg-gray-600">Cancel</button>
-            <button @click="savePresetForm" class="flex-1 py-2 rounded bg-teal-600 text-white text-sm font-medium hover:bg-teal-500">
+            <button @click="savePresetForm" class="flex-1 py-2 rounded bg-teal-600 text-white text-sm font-medium hover:bg-teal-700">
               {{ editingPreset ? 'Update' : 'Create' }}
             </button>
           </div>
@@ -944,7 +944,7 @@ onUnmounted(() => {
         <input v-model="sendText" @keyup.enter="send" placeholder="Type a message..."
           class="flex-1 px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200 placeholder-gray-600 focus:border-teal-600 focus:outline-none">
         <button @click="send" :disabled="!sendText.trim()"
-          class="px-4 py-2 rounded bg-teal-600 text-white text-sm font-medium hover:bg-teal-500 disabled:opacity-30 disabled:cursor-not-allowed transition-colors">
+          class="px-4 py-2 rounded bg-teal-600 text-white text-sm font-medium hover:bg-teal-700 disabled:opacity-30 disabled:cursor-not-allowed transition-colors">
           Send
         </button>
       </div>

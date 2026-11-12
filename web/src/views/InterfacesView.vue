@@ -643,7 +643,7 @@ onUnmounted(() => {
       <div class="flex items-center justify-between mb-4">
         <span class="text-sm text-gray-400">{{ (store.interfaces || []).length }} interfaces</span>
         <button @click="showCreateIface = !showCreateIface"
-          class="px-3 py-1.5 rounded bg-teal-600 text-white text-xs hover:bg-teal-500">
+          class="px-3 py-1.5 rounded bg-teal-600 text-white text-xs hover:bg-teal-700">
           {{ showCreateIface ? 'Cancel' : '+ New Interface' }}
         </button>
       </div>
@@ -660,7 +660,7 @@ onUnmounted(() => {
             <input type="checkbox" v-model="ifaceForm.enabled" class="rounded" /> Enabled
           </label>
         </div>
-        <button @click="saveInterface" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500">Create</button>
+        <button @click="saveInterface" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-700">Create</button>
       </div>
 
       <!-- Interface list -->
@@ -753,7 +753,7 @@ onUnmounted(() => {
       <div class="flex items-center justify-between mb-4">
         <span class="text-sm text-gray-400">{{ (store.accessRules || []).length }} access rules</span>
         <button @click="openNewRule"
-          class="px-3 py-1.5 rounded bg-teal-600 text-white text-xs hover:bg-teal-500">
+          class="px-3 py-1.5 rounded bg-teal-600 text-white text-xs hover:bg-teal-700">
           + New Rule
         </button>
       </div>
@@ -992,7 +992,7 @@ onUnmounted(() => {
 
         <div class="flex gap-2">
           <button @click="saveRule" :disabled="forwardsToLXMF && ruleForm.lxmf_destinations.length === 0"
-            class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500 disabled:opacity-40 disabled:hover:bg-teal-600">
+            class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-700 disabled:opacity-40 disabled:hover:bg-teal-600">
             {{ editingRule ? 'Update' : 'Create' }}
           </button>
           <button @click="showCreateRule = false" class="px-4 py-2 rounded bg-gray-700 text-gray-300 text-sm hover:bg-gray-600">Cancel</button>
@@ -1124,7 +1124,7 @@ onUnmounted(() => {
       <div class="flex items-center justify-between mb-4">
         <span class="text-sm text-gray-400">{{ (store.objectGroups || []).length }} object groups</span>
         <button @click="openNewGroup"
-          class="px-3 py-1.5 rounded bg-teal-600 text-white text-xs hover:bg-teal-500">
+          class="px-3 py-1.5 rounded bg-teal-600 text-white text-xs hover:bg-teal-700">
           + New Group
         </button>
       </div>
@@ -1185,7 +1185,7 @@ onUnmounted(() => {
           </div>
         </div>
         <div class="flex gap-2">
-          <button @click="saveGroup" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500">
+          <button @click="saveGroup" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-700">
             {{ editingGroup ? 'Update' : 'Create' }}
           </button>
           <button @click="showCreateGroup = false" class="px-4 py-2 rounded bg-gray-700 text-gray-300 text-sm hover:bg-gray-600">Cancel</button>
@@ -1218,7 +1218,7 @@ onUnmounted(() => {
       <div class="flex items-center justify-between mb-4">
         <span class="text-sm text-gray-400">{{ (store.failoverGroups || []).length }} failover groups</span>
         <button @click="openNewFailover"
-          class="px-3 py-1.5 rounded bg-teal-600 text-white text-xs hover:bg-teal-500">
+          class="px-3 py-1.5 rounded bg-teal-600 text-white text-xs hover:bg-teal-700">
           + New Failover Group
         </button>
       </div>
@@ -1262,7 +1262,7 @@ onUnmounted(() => {
         <button @click="addFailoverMember" class="text-xs text-teal-400 hover:text-teal-300 mb-3">+ Add member</button>
 
         <div class="flex gap-2">
-          <button @click="saveFailover" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500">Create</button>
+          <button @click="saveFailover" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-700">Create</button>
           <button @click="showCreateFailover = false" class="px-4 py-2 rounded bg-gray-700 text-gray-300 text-sm hover:bg-gray-600">Cancel</button>
         </div>
       </div>

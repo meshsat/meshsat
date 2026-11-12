@@ -185,7 +185,7 @@ onUnmounted(() => clearInterval(timer))
         </label>
       </div>
       <div class="flex items-center gap-3">
-        <button :disabled="saving" @click="save" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500 disabled:opacity-40" data-testid="tetra-save">Save TETRA settings</button>
+        <button :disabled="saving" @click="save" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-700 disabled:opacity-40" data-testid="tetra-save">Save TETRA settings</button>
         <span v-if="saveMsg" class="text-[11px] text-amber-300">{{ saveMsg }}</span>
       </div>
     </div>
@@ -198,7 +198,7 @@ onUnmounted(() => clearInterval(timer))
         <input v-model="sendText" type="text" placeholder="Text" class="md:col-span-3 px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" data-testid="tetra-text" @keyup.enter="send" />
       </div>
       <div class="flex items-center gap-3">
-        <button :disabled="sending || !connected || !sendText.trim()" @click="send" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500 disabled:opacity-40" data-testid="tetra-send">Send over TETRA</button>
+        <button :disabled="sending || !connected || !sendText.trim()" @click="send" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-700 disabled:opacity-40" data-testid="tetra-send">Send over TETRA</button>
         <span v-if="sendText" class="text-[11px] text-gray-500">{{ textBytes }} bytes{{ parts > 1 ? ', about ' + parts + ' SDS' : ', one SDS' }}</span>
         <span v-if="sendMsg" class="text-[11px] text-amber-300" data-testid="tetra-send-msg">{{ sendMsg }}</span>
       </div>

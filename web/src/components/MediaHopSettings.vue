@@ -140,7 +140,7 @@ onUnmounted(() => {
         </label>
       </div>
       <div class="flex items-center gap-3">
-        <button :disabled="saving || chosen === mode" @click="save" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-500 disabled:opacity-40" data-testid="hop-save">Save</button>
+        <button :disabled="saving || chosen === mode" @click="save" class="px-4 py-2 rounded bg-teal-600 text-white text-sm hover:bg-teal-700 disabled:opacity-40" data-testid="hop-save">Save</button>
         <button v-if="edited" :disabled="saving" @click="cancel" class="px-4 py-2 rounded bg-gray-700 text-gray-200 text-sm hover:bg-gray-600 disabled:opacity-40" data-testid="hop-cancel">Cancel</button>
         <span v-if="edited" class="text-[11px] text-gray-400" data-testid="hop-unsaved">Not saved yet: still {{ mode }}.</span>
         <span v-if="saveMsg" class="text-[11px] text-amber-300" data-testid="hop-save-msg">{{ saveMsg }}</span>

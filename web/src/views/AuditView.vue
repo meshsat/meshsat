@@ -109,7 +109,7 @@ onMounted(() => {
           Signer
         </button>
         <button @click="doVerify" :disabled="verifying"
-          class="px-3 py-1.5 rounded text-xs bg-teal-600 text-white hover:bg-teal-500 disabled:opacity-50">
+          class="px-3 py-1.5 rounded text-xs bg-teal-600 text-white hover:bg-teal-700 disabled:opacity-50">
           {{ verifying ? 'Verifying...' : 'Verify Chain' }}
         </button>
         <button @click="refresh" :disabled="loading"

@@ -485,7 +485,7 @@ onMounted(async () => {
           <input v-model="newLoc.lon" type="number" step="any" inputmode="decimal" class="w-full px-2 py-1.5 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200" placeholder="4.49">
         </div>
         <div class="flex items-end">
-          <button @click="addLocation" class="px-4 py-1.5 rounded bg-teal-600 text-white text-sm hover:bg-teal-500 w-full">Add</button>
+          <button @click="addLocation" class="px-4 py-1.5 rounded bg-teal-600 text-white text-sm hover:bg-teal-700 w-full">Add</button>
         </div>
       </div>
     </div>

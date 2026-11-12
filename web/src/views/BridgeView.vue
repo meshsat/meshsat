@@ -429,7 +429,7 @@ onUnmounted(() => {
     <div v-if="activeTab === 'outbound'">
       <div class="flex items-center justify-between mb-3">
         <p class="text-xs text-gray-500">Mesh messages forwarded to external channels</p>
-        <a href="#/interfaces" class="px-3 py-1.5 rounded bg-teal-600 text-white text-xs font-medium hover:bg-teal-500">
+        <a href="#/interfaces" class="px-3 py-1.5 rounded bg-teal-600 text-white text-xs font-medium hover:bg-teal-700">
           Manage in Interfaces
         </a>
       </div>
@@ -456,7 +456,7 @@ onUnmounted(() => {
     <div v-if="activeTab === 'inbound'">
       <div class="flex items-center justify-between mb-3">
         <p class="text-xs text-gray-500">External messages routed back to the mesh network</p>
-        <a href="#/interfaces" class="px-3 py-1.5 rounded bg-teal-600 text-white text-xs font-medium hover:bg-teal-500">
+        <a href="#/interfaces" class="px-3 py-1.5 rounded bg-teal-600 text-white text-xs font-medium hover:bg-teal-700">
           Manage in Interfaces
         </a>
       </div>
@@ -483,7 +483,7 @@ onUnmounted(() => {
     <div v-if="activeTab === 'cross'">
       <div class="flex items-center justify-between mb-3">
         <p class="text-xs text-gray-500">Inter-channel bridging (e.g. Iridium &rarr; MQTT, Cellular &rarr; Webhook)</p>
-        <a href="#/interfaces" class="px-3 py-1.5 rounded bg-teal-600 text-white text-xs font-medium hover:bg-teal-500">
+        <a href="#/interfaces" class="px-3 py-1.5 rounded bg-teal-600 text-white text-xs font-medium hover:bg-teal-700">
           Manage in Interfaces
         </a>
       </div>
@@ -618,7 +618,7 @@ onUnmounted(() => {
             <option :value="2">Low</option>
           </select>
           <button @click="sendComposed" :disabled="!composeMsg.trim()"
-            class="px-4 py-1.5 rounded bg-teal-600 text-white text-sm hover:bg-teal-500 disabled:opacity-50">
+            class="px-4 py-1.5 rounded bg-teal-600 text-white text-sm hover:bg-teal-700 disabled:opacity-50">
             Enqueue
           </button>
           <span class="text-[10px] text-gray-600">{{ composeMsg.length }}/340</span>

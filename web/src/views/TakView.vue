@@ -425,7 +425,7 @@ Detail: {{ evt.detail || '(none)' }}
         </div>
         <div class="mt-3 flex items-center gap-3">
           <select v-model="nineLineForm.urgency" class="px-3 py-2 rounded bg-gray-900 border border-gray-700 text-sm text-gray-200"><option>Urgent</option><option>Urgent-Surgical</option><option>Priority</option><option>Routine</option></select>
-          <button @click="submitNineLine" :disabled="nineLineSubmitting" class="px-4 py-2 rounded text-xs bg-red-600 text-white hover:bg-red-500 disabled:opacity-40">{{ nineLineSubmitting ? 'Submitting...' : 'Submit 9-Line' }}</button>
+          <button @click="submitNineLine" :disabled="nineLineSubmitting" class="px-4 py-2 rounded text-xs bg-red-600 text-white hover:bg-red-700 disabled:opacity-40">{{ nineLineSubmitting ? 'Submitting...' : 'Submit 9-Line' }}</button>
         </div>
         <p class="text-xs text-gray-500 mt-3">Sends MEDEVAC as CoT SOS with 9-line remarks.</p>
       </div>
