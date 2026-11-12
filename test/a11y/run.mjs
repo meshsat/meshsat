@@ -22,6 +22,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url))
 const REPO = path.resolve(HERE, '../..')
 export const TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']
 const FIXED_NOW = '2026-11-01T10:00:00Z'
+const LIVE_NOW = new Date()
 const BOTTOM_NAV = 'nav[aria-label="Primary navigation"]'
 const QUIET_CSS = '*,*::before,*::after{animation:none!important;transition:none!important;caret-color:transparent!important}'
 
@@ -39,6 +40,7 @@ function args (argv) {
     else if (k === '--baseline') a.baseline = path.resolve(v())
     else if (k === '--no-screens') a.screens = false
     else if (k === '--jobs') a.jobs = Number(v())
+    else if (k === '--detail') a.detail = true
     else throw new Error(`unknown argument ${k}`)
   }
   a.baseline ||= path.join(HERE, 'baseline.json')
@@ -151,14 +153,16 @@ const FALLBACK = (targets) => {
   return { low: out, tally }
 }
 
-async function measure ({ ctx, base, variant, state, live, screensDir, key }) {
+async function measure ({ ctx, base, variant, state, live, screensDir, key, detail }) {
   const t0 = Date.now()
   const page = await ctx.newPage()
   const pageErrors = []
   page.on('pageerror', (e) => pageErrors.push(String(e.message || e).slice(0, 200)))
   page.on('dialog', (d) => d.dismiss().catch(() => {}))
   try {
-    if (!live) await page.clock.setFixedTime(new Date(FIXED_NOW))
+    // A fixed clock keeps time-drawn parts (pass charts, ages) still while measured;
+    // a live kit gets the moment the run started.
+    await page.clock.setFixedTime(live ? LIVE_NOW : new Date(FIXED_NOW))
     const sep = state.path.includes('?') ? '&' : '?'
     await page.goto(`${base}${state.path}${sep}${variant.query}`, { waitUntil: 'load', timeout: 30000 })
     await page.locator('main').first().waitFor({ state: 'attached', timeout: 10000 })
@@ -224,7 +228,7 @@ async function measure ({ ctx, base, variant, state, live, screensDir, key }) {
     if (screensDir) {
       await page.screenshot({ path: path.join(screensDir, `${key.replace(/[/:]/g, '_')}.jpg`), fullPage: true, type: 'jpeg', quality: 60 })
     }
-    return { status: 'ok', counts, incomplete, violations, unlabelled: live ? unlabelled.length : unlabelled, duplicates, lowContrast: live ? lowContrast.length : lowContrast, contrastReview: fb.tally, content, pageErrors, ms: Date.now() - t0 }
+    return { status: 'ok', counts, incomplete, violations, unlabelled: live ? unlabelled.length : unlabelled, duplicates, lowContrast: live && !detail ? lowContrast.length : lowContrast, contrastReview: fb.tally, contrastUnresolvedTargets: detail ? reviewTargets.filter((x) => typeof x !== 'string').map(String) : undefined, content, pageErrors, ms: Date.now() - t0 }
   } catch (e) {
     return { status: 'error', error: String(e.message || e).split('\n')[0].slice(0, 300), pageErrors, ms: Date.now() - t0 }
   } finally {
@@ -360,7 +364,7 @@ async function main () {
       for (const state of statesFor(variant, live ? 'rich' : profile)) {
         const key = stateKey(variant, profile, state)
         if (a.filter && !a.filter.test(key)) continue
-        const st = await measure({ ctx, base, variant, state, live, screensDir: profile === 'rich' ? screensDir : null, key })
+        const st = await measure({ ctx, base, variant, state, live, screensDir: profile === 'rich' ? screensDir : null, key, detail: a.detail })
         report.states[key] = st
         const n = st.counts ? Object.values(st.counts).reduce((x, y) => x + y, 0) : '-'
         console.log(`${st.status.padEnd(11)} ${String(n).padStart(4)}  ${key}${st.error ? `  (${st.error})` : ''}`)

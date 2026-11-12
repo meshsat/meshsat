@@ -75,7 +75,7 @@ export function statesFor (variant, profile) {
     add({ view: 'dashboard', sub: 'stats', path: '/', act: (p) => click(p, 'main h2.cursor-pointer'),
       expect: shows('[aria-label="Widget diagnostics"]') })
     add({ view: 'dashboard', sub: 'node', path: '/', rich: true,
-      act: (p) => click(p, p.locator('main div.cursor-pointer', { hasText: 'Sample Long 27' }).last()),
+      act: (p) => click(p, 'main div.cursor-pointer:has(> span.truncate)'),
       expect: shows('[aria-label="Raw node data"]') })
   }
 
@@ -95,7 +95,7 @@ export function statesFor (variant, profile) {
     act: async (p) => { await presets(p); await click(p, p.locator('main button', { hasText: '+ New Preset' })) },
     expect: shows('#msg-presetform-name') })
   add({ view: 'messages', sub: 'sms-thread', path: '/messages', rich: true,
-    act: async (p) => { await click(p, p.locator('main button', { hasText: 'SMS' })); await click(p, p.locator('main div.cursor-pointer', { hasText: '+447700900' })) },
+    act: async (p) => { await click(p, p.locator('main button', { hasText: 'SMS' })); await click(p, 'main div.cursor-pointer:has(> div.rounded-full)') },
     expect: shows('input[aria-label="Reply text"]') })
 
   add({ view: 'inbox', sub: 'main', path: '/inbox', expect: shows('main a[href="/compose"]') })
