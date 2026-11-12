@@ -108,7 +108,7 @@ const cellLabel = computed(() => cellBars.value >= 0
       <span class="hidden md:inline font-medium text-tactical-lora/70">MESH</span>
       <span class="w-1.5 h-1.5 rounded-full" :class="meshConnected ? 'bg-emerald-400' : 'bg-red-400'" />
       <span v-if="meshAvgSNR !== null" class="hidden md:inline font-mono"
-        :class="meshAvgSNR >= 0 ? 'text-emerald-400/70' : meshAvgSNR >= -10 ? 'text-amber-400/70' : 'text-red-400/70'">
+        :class="meshAvgSNR >= 0 ? 'text-emerald-400/70' : meshAvgSNR >= -10 ? 'text-amber-400/70' : 'text-red-400/90'">
         {{ meshAvgSNR.toFixed(0) }}dB
       </span>
       <span class="hidden md:inline font-mono text-gray-500">{{ deviceId }}</span>

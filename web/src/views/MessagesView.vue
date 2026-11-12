@@ -496,7 +496,7 @@ onUnmounted(() => {
             {{ item.status || 'queued' }}
           </span>
           <span class="text-[11px] text-gray-300 truncate flex-1">{{ item.text_preview || '(binary)' }}</span>
-          <span v-if="item.retries > 0" class="text-[9px] text-amber-400/60 font-mono shrink-0">{{ item.retries }}x</span>
+          <span v-if="item.retries > 0" class="text-[9px] text-amber-400/70 font-mono shrink-0">{{ item.retries }}x</span>
           <span class="text-[10px] text-gray-600 font-mono shrink-0">{{ formatRelativeTime(item.created_at) }}</span>
         </div>
       </div>
@@ -598,7 +598,7 @@ onUnmounted(() => {
                 <div class="flex items-center gap-2">
                   <span v-if="conv.contactName" class="text-xs text-gray-200">{{ conv.contactName }}</span>
                   <span class="text-xs font-mono" :class="conv.contactName ? 'text-gray-500 text-[10px]' : 'text-gray-200'">{{ conv.phone }}</span>
-                  <span v-if="smsConvKeys[conv.phone]" class="text-[9px] text-amber-400/60" title="Encryption key set">ENC</span>
+                  <span v-if="smsConvKeys[conv.phone]" class="text-[9px] text-amber-400/70" title="Encryption key set">ENC</span>
                 </div>
                 <div class="text-[11px] text-gray-400 mt-0.5 truncate">{{ conv.lastText }}</div>
               </div>
@@ -643,7 +643,7 @@ onUnmounted(() => {
             </button>
           </div>
           <div v-if="smsKeyErr" class="text-[10px] text-red-400 mt-1.5">{{ smsKeyErr }}</div>
-          <div v-if="smsConvKeys[smsActivePhone]" class="text-[10px] text-amber-400/60 mt-1.5">Key active — messages will be decrypted on the fly</div>
+          <div v-if="smsConvKeys[smsActivePhone]" class="text-[10px] text-amber-400/70 mt-1.5">Key active — messages will be decrypted on the fly</div>
         </div>
 
         <!-- Chat messages -->
@@ -769,7 +769,7 @@ onUnmounted(() => {
           </span>
           <span class="text-[10px] text-gray-500 font-mono shrink-0">{{ entry.method }}</span>
           <span class="text-[11px] text-gray-400 truncate flex-1" :title="entry.url">{{ entry.url }}</span>
-          <span v-if="entry.error" class="text-[10px] text-red-400/70 truncate max-w-[120px]" :title="entry.error">{{ entry.error }}</span>
+          <span v-if="entry.error" class="text-[10px] text-red-400/90 truncate max-w-[120px]" :title="entry.error">{{ entry.error }}</span>
           <span class="text-[10px] text-gray-600 font-mono shrink-0">{{ formatRelativeTime(entry.created_at) }}</span>
         </div>
       </div>
@@ -796,8 +796,8 @@ onUnmounted(() => {
         </div>
         <div class="flex items-center gap-1.5 mt-0.5">
           <span class="text-[10px] text-emerald-400/80">{{ store.messageStats?.by_transport?.radio || 0 }} radio</span>
-          <span v-if="store.messageStats?.by_transport?.iridium" class="text-[10px] text-blue-400/60">{{ store.messageStats.by_transport.iridium }} sat</span>
-          <span v-if="store.messageStats?.by_transport?.mqtt" class="text-[10px] text-purple-400/60">{{ store.messageStats.by_transport.mqtt }} mqtt</span>
+          <span v-if="store.messageStats?.by_transport?.iridium" class="text-[10px] text-blue-400/70">{{ store.messageStats.by_transport.iridium }} sat</span>
+          <span v-if="store.messageStats?.by_transport?.mqtt" class="text-[10px] text-purple-400/70">{{ store.messageStats.by_transport.mqtt }} mqtt</span>
         </div>
       </div>
       <div class="bg-gray-800/60 rounded-lg px-3 py-2 border border-gray-700/50">
@@ -809,7 +809,7 @@ onUnmounted(() => {
         </div>
         <div v-if="store.messageStats?.by_portnum" class="flex items-center gap-1.5 mt-0.5 flex-wrap">
           <span v-if="store.messageStats.by_portnum['TEXT_MESSAGE_APP']" class="text-[10px] text-emerald-400/80">{{ store.messageStats.by_portnum['TEXT_MESSAGE_APP'] }} text</span>
-          <span v-if="store.messageStats.by_portnum['TELEMETRY_APP']" class="text-[10px] text-amber-400/60">{{ store.messageStats.by_portnum['TELEMETRY_APP'] }} telem</span>
+          <span v-if="store.messageStats.by_portnum['TELEMETRY_APP']" class="text-[10px] text-amber-400/70">{{ store.messageStats.by_portnum['TELEMETRY_APP'] }} telem</span>
           <span v-if="store.messageStats.by_portnum['POSITION_APP']" class="text-[10px] text-cyan-400/80">{{ store.messageStats.by_portnum['POSITION_APP'] }} pos</span>
           <span v-if="store.messageStats.by_portnum['NODEINFO_APP']" class="text-[10px] text-gray-500">{{ store.messageStats.by_portnum['NODEINFO_APP'] }} node</span>
         </div>
@@ -1075,7 +1075,7 @@ onUnmounted(() => {
                   <span class="flex-1" />
                   <span class="text-gray-600 font-mono text-[10px]">{{ formatRelativeTime(del.created_at) }}</span>
                 </div>
-                <div v-if="del.last_error" class="text-[10px] text-red-400/70 mt-1">{{ del.last_error }}</div>
+                <div v-if="del.last_error" class="text-[10px] text-red-400/90 mt-1">{{ del.last_error }}</div>
                 <div class="flex items-center gap-3 text-[10px] text-gray-600 mt-1">
                   <span>Retries: {{ del.retries }}/{{ del.max_retries || '~' }}</span>
                   <button v-if="del.status === 'failed' || del.status === 'dead'"

@@ -1085,7 +1085,7 @@ onUnmounted(() => {
           <span class="text-[9px] font-mono text-gray-500">{{ zone.alert_on }}</span>
           <span class="text-[9px] text-gray-600">{{ zone.polygon?.length || 0 }} pts</span>
           <button @click="removeGeofence(zone.id)"
-            class="text-[9px] text-red-400/60 hover:text-red-400 transition-colors">
+            class="text-[9px] text-red-400/90 hover:text-red-400 transition-colors">
             Delete
           </button>
         </div>

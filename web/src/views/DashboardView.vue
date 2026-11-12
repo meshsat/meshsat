@@ -988,7 +988,7 @@ const opGPS = computed(() => {
       tint: 'text-amber-300', sub: 'text-amber-400/70' }
   }
   return { fix: false, label: 'NO FIX', sats: 0, coord: '', source: 'No location',
-    tint: 'text-red-300', sub: 'text-red-400/70' }
+    tint: 'text-red-300', sub: 'text-red-400/90' }
 })
 
 // X1202 UPS exposes /run/x1202.json from the host x1202-monitor
@@ -2217,7 +2217,7 @@ function widgetGridClass(id) {
             <span class="text-[9px] font-mono text-gray-600 shrink-0">{{ shortId(node.user_id) }}</span>
             <span v-if="node.other_mesh" class="text-[9px] text-gray-500 shrink-0" title="Heard on the same frequency, but on another channel key: this bridge cannot read its frames">other mesh</span>
             <span v-else-if="node.snr != null && Math.abs(node.snr) < 100" class="text-[9px] font-mono shrink-0"
-              :class="node.snr >= 0 ? 'text-emerald-400/80' : node.snr >= -10 ? 'text-amber-400/60' : 'text-red-400/60'">
+              :class="node.snr >= 0 ? 'text-emerald-400/80' : node.snr >= -10 ? 'text-amber-400/70' : 'text-red-400/90'">
               {{ Number(node.snr).toFixed(0) }}dB
             </span>
             <span class="text-[9px] text-gray-600 shrink-0">{{ formatLastHeard(node.last_heard) }}</span>
@@ -2245,7 +2245,7 @@ function widgetGridClass(id) {
             <router-link to="/nodes" class="text-[10px] text-tactical-lora/80 hover:text-tactical-lora transition-colors">
               View All Nodes
             </router-link>
-            <router-link v-if="staleCount > 0" to="/nodes" class="text-[10px] text-amber-400/60 hover:text-amber-400 transition-colors">
+            <router-link v-if="staleCount > 0" to="/nodes" class="text-[10px] text-amber-400/70 hover:text-amber-400 transition-colors">
               Manage Stale
             </router-link>
           </div>
@@ -2596,7 +2596,7 @@ function widgetGridClass(id) {
               {{ iridiumCentroid.lat.toFixed(4) }}, {{ iridiumCentroid.lon.toFixed(4) }}
               <span class="text-gray-600 ml-1">~{{ formatAccuracy(iridiumCentroid.accuracy_km) }}</span>
             </span>
-            <span v-else-if="iridiumPasses.length" class="text-orange-400/60 font-mono text-[10px]">
+            <span v-else-if="iridiumPasses.length" class="text-orange-400/80 font-mono text-[10px]">
               {{ iridiumPasses.length }} pass{{ iridiumPasses.length !== 1 ? 'es' : '' }} (need 3+)
             </span>
             <span v-else class="text-gray-600 font-mono text-[10px]">No passes</span>

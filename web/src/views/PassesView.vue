@@ -504,7 +504,7 @@ onMounted(async () => {
     <div v-if="nextPass" class="rounded-lg p-4 mb-4 bg-tactical-iridium/5 border border-tactical-iridium/20">
       <div class="flex items-center justify-between">
         <div>
-          <span class="text-[10px] uppercase text-tactical-iridium/60">Next Pass</span>
+          <span class="text-[10px] uppercase text-tactical-iridium/70">Next Pass</span>
           <div class="text-sm font-medium mt-0.5 text-tactical-iridium">{{ nextPass.satellite }}</div>
         </div>
         <div class="text-right">

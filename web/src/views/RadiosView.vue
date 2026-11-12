@@ -151,7 +151,7 @@ const meshAvgSNR = computed(() => {
               :style="{ height: `${3 + i * 2}px` }" />
           </div>
           <div v-else-if="row.family.id === 'mesh' && row.meshSnr !== null" class="text-[10px] font-mono"
-            :class="row.meshSnr >= 0 ? 'text-emerald-400/80' : row.meshSnr >= -10 ? 'text-amber-400/80' : 'text-red-400/80'">
+            :class="row.meshSnr >= 0 ? 'text-emerald-400/80' : row.meshSnr >= -10 ? 'text-amber-400/80' : 'text-red-400/90'">
             {{ row.meshSnr.toFixed(0) }} dB
           </div>
           <div v-else class="text-[10px] text-gray-600">—</div>

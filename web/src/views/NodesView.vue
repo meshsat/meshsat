@@ -326,7 +326,7 @@ onUnmounted(() => { if (nowTimer) clearInterval(nowTimer) })
       </div>
       <div class="flex items-center gap-2">
         <button v-if="staleCount > 0" @click="handleRemoveAllStale" :disabled="removingStale"
-          class="px-3 py-1.5 text-xs rounded bg-gray-800 text-red-400/70 hover:text-red-300 border border-red-900/30 hover:border-red-800/50 transition-colors disabled:opacity-50">
+          class="px-3 py-1.5 text-xs rounded bg-gray-800 text-red-400/90 hover:text-red-300 border border-red-900/30 hover:border-red-800/50 transition-colors disabled:opacity-50">
           {{ removingStale ? 'Removing...' : `Forget ${staleCount} stale` }}
         </button>
         <button @click="store.fetchNodes()"
@@ -387,11 +387,11 @@ onUnmounted(() => { if (nowTimer) clearInterval(nowTimer) })
             <span class="font-mono" :class="transportBadge(addr.type)">{{ addr.type }}</span>
             <span class="text-gray-400">{{ addr.address }}</span>
             <span v-if="addr.label" class="text-gray-600">({{ addr.label }})</span>
-            <span v-if="addr.encryption_key" class="text-amber-400/60" title="Encrypted">ENC</span>
+            <span v-if="addr.encryption_key" class="text-amber-400/70" title="Encrypted">ENC</span>
             <button @click="openEditAddress(addr)" class="text-gray-600 hover:text-gray-300 ml-1">Edit</button>
             <button @click="removeAddress(activeContact.id, addr.id)" class="text-gray-600 hover:text-red-400">x</button>
           </div>
-          <button @click="openAddAddress(activeContact.id)" class="px-2 py-1 text-[10px] rounded bg-gray-800/50 text-teal-400/70 hover:text-teal-400 border border-dashed border-gray-700/40 hover:border-teal-600/30 transition-colors">
+          <button @click="openAddAddress(activeContact.id)" class="px-2 py-1 text-[10px] rounded bg-gray-800/50 text-teal-400/90 hover:text-teal-400 border border-dashed border-gray-700/40 hover:border-teal-600/30 transition-colors">
             + Address
           </button>
         </div>
@@ -546,7 +546,7 @@ onUnmounted(() => { if (nowTimer) clearInterval(nowTimer) })
                   <span v-for="addr in c.addresses" :key="addr.id"
                     class="text-[9px] px-1.5 py-px rounded font-mono" :class="transportBadge(addr.type)">
                     {{ addr.type.toUpperCase() }}: {{ addr.address }}
-                    <span v-if="addr.encryption_key" class="text-amber-400/60 ml-0.5">ENC</span>
+                    <span v-if="addr.encryption_key" class="text-amber-400/70 ml-0.5">ENC</span>
                   </span>
                   <span v-if="!c.addresses?.length" class="text-[9px] text-gray-600 italic">no addresses</span>
                 </div>
@@ -775,7 +775,7 @@ onUnmounted(() => { if (nowTimer) clearInterval(nowTimer) })
             </div>
             <div class="flex items-center gap-3 mt-1 text-[11px]">
               <span v-if="node.hw_model_name" class="text-gray-500">{{ node.hw_model_name }}</span>
-              <span v-if="node.snr != null && Math.abs(node.snr) < 100" :class="node.snr >= 0 ? 'text-emerald-400/70' : node.snr >= -10 ? 'text-amber-400/70' : 'text-red-400/70'">
+              <span v-if="node.snr != null && Math.abs(node.snr) < 100" :class="node.snr >= 0 ? 'text-emerald-400/70' : node.snr >= -10 ? 'text-amber-400/70' : 'text-red-400/90'">
                 SNR {{ Number(node.snr).toFixed(1) }}
               </span>
               <span v-if="node.rssi" class="text-gray-500">{{ node.rssi }} dBm</span>

@@ -578,7 +578,7 @@ onUnmounted(() => {
           <div class="flex items-center gap-2 text-[10px]">
             <span class="text-gray-600">Retries: {{ del.retries }}/{{ del.max_retries || '~' }}</span>
             <span v-if="del.next_retry" class="text-gray-600">Next: {{ nextRetryCountdown(del.next_retry) }}</span>
-            <span v-if="del.last_error" class="text-red-400/70 truncate max-w-[200px]" :title="del.last_error">{{ del.last_error }}</span>
+            <span v-if="del.last_error" class="text-red-400/90 truncate max-w-[200px]" :title="del.last_error">{{ del.last_error }}</span>
             <span class="flex-1" />
             <button v-if="del.status === 'queued' || del.status === 'retry'"
               @click="store.cancelDelivery(del.id)" class="px-1.5 py-0.5 rounded bg-gray-700 text-gray-400 hover:text-red-400 text-[10px]">
@@ -671,7 +671,7 @@ onUnmounted(() => {
             <div class="flex justify-between"><span class="text-gray-600">Updated</span><span>{{ formatTimestamp(item.updated_at) }}</span></div>
             <div v-if="item.last_error" class="mt-1 pt-1 border-t border-gray-800">
               <div class="text-gray-600 mb-0.5">Last Error</div>
-              <div class="text-red-400/80 break-all">{{ item.last_error }}</div>
+              <div class="text-red-400/90 break-all">{{ item.last_error }}</div>
             </div>
           </div>
 
