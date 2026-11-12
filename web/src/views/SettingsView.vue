@@ -3989,7 +3989,7 @@ onUnmounted(() => {
             </button>
           </div>
           <div v-if="exportedConfig">
-            <pre class="text-[11px] font-mono text-gray-400 whitespace-pre-wrap break-all bg-gray-900 rounded p-3 max-h-[400px] overflow-y-auto select-all border border-gray-700">{{ exportedConfig }}</pre>
+            <pre tabindex="0" role="region" aria-label="Exported config" class="text-[11px] font-mono text-gray-400 whitespace-pre-wrap break-all bg-gray-900 rounded p-3 max-h-[400px] overflow-y-auto select-all border border-gray-700">{{ exportedConfig }}</pre>
           </div>
         </div>
 

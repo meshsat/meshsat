@@ -526,7 +526,7 @@ onUnmounted(() => {
               </div>
               <div>
                 <h4 class="text-[10px] text-gray-500 uppercase mb-1">Raw</h4>
-                <pre class="text-[10px] font-mono text-gray-400 whitespace-pre-wrap break-all bg-gray-800 rounded p-3 max-h-[200px] overflow-y-auto select-all">{{ JSON.stringify(sbdDetailItem, null, 2) }}</pre>
+                <pre tabindex="0" role="region" aria-label="Raw SBD item" class="text-[10px] font-mono text-gray-400 whitespace-pre-wrap break-all bg-gray-800 rounded p-3 max-h-[200px] overflow-y-auto select-all">{{ JSON.stringify(sbdDetailItem, null, 2) }}</pre>
               </div>
               <!-- Actions -->
               <div v-if="sbdDetailItem.status === 'pending' || !sbdDetailItem.status" class="flex items-center gap-2 pt-2 border-t border-gray-700">
@@ -647,7 +647,7 @@ onUnmounted(() => {
         </div>
 
         <!-- Chat messages -->
-        <div class="flex-1 overflow-y-auto min-h-0 space-y-1 mb-3">
+        <div class="flex-1 overflow-y-auto min-h-0 space-y-1 mb-3" tabindex="0" role="region" aria-label="SMS conversation">
           <div v-for="sms in smsActiveConversation" :key="sms.id"
             class="flex" :class="sms.direction === 'tx' ? 'justify-end' : 'justify-start'">
             <div class="max-w-[80%] py-1.5 px-3 rounded-lg text-[11px]"

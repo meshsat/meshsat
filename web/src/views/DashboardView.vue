@@ -2794,7 +2794,7 @@ fingerprint: ${store.aprsStatus.encryption.key_fingerprint || '(unresolved)'}`">
         <!-- Heard stations table -->
         <div v-if="(store.aprsHeard || []).length > 0">
           <div class="text-[9px] text-gray-600 mb-1">Heard stations</div>
-          <div class="space-y-0.5 max-h-48 overflow-y-auto">
+          <div class="space-y-0.5 max-h-48 overflow-y-auto" tabindex="0" role="region" aria-label="Heard APRS stations">
             <div v-for="st in store.aprsHeard.slice(0, 12)" :key="st.callsign"
               class="flex items-center justify-between px-2 py-1 rounded bg-gray-800/50 text-[10px]">
               <div class="flex items-center gap-2">
@@ -3110,7 +3110,7 @@ fingerprint: ${store.aprsStatus.encryption.key_fingerprint || '(unresolved)'}`">
           </div>
         </div>
 
-        <div class="tactical-scroll max-h-[220px] overflow-y-auto space-y-0.5">
+        <div class="tactical-scroll max-h-[220px] overflow-y-auto space-y-0.5" tabindex="0" role="region" aria-label="Activity log">
           <div v-for="(entry, idx) in activityLog" :key="idx"
             class="flex items-center gap-2 py-1 px-2 rounded hover:bg-white/[0.02] transition-colors">
             <span class="text-[9px] font-mono text-gray-600 shrink-0 w-14">{{ formatLogTime(entry.time) }}</span>
