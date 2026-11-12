@@ -1,0 +1,4496 @@
+{
+ "schema": 1,
+ "mode": "fixtures",
+ "axe": "4.13.0",
+ "tags": [
+  "wcag2a",
+  "wcag2aa",
+  "wcag21a",
+  "wcag21aa"
+ ],
+ "rules": [
+  "area-alt",
+  "aria-allowed-attr",
+  "aria-braille-equivalent",
+  "aria-command-name",
+  "aria-conditional-attr",
+  "aria-deprecated-role",
+  "aria-hidden-body",
+  "aria-hidden-focus",
+  "aria-input-field-name",
+  "aria-meter-name",
+  "aria-progressbar-name",
+  "aria-prohibited-attr",
+  "aria-required-attr",
+  "aria-required-children",
+  "aria-required-parent",
+  "aria-roledescription",
+  "aria-roles",
+  "aria-tab-name",
+  "aria-toggle-field-name",
+  "aria-tooltip-name",
+  "aria-valid-attr",
+  "aria-valid-attr-value",
+  "audio-caption",
+  "autocomplete-valid",
+  "avoid-inline-spacing",
+  "blink",
+  "button-name",
+  "bypass",
+  "color-contrast",
+  "css-orientation-lock",
+  "definition-list",
+  "dlitem",
+  "document-title",
+  "duplicate-id-aria",
+  "form-field-multiple-labels",
+  "frame-focusable-content",
+  "frame-title",
+  "frame-title-unique",
+  "html-has-lang",
+  "html-lang-valid",
+  "html-xml-lang-mismatch",
+  "image-alt",
+  "input-button-name",
+  "input-image-alt",
+  "label",
+  "label-content-name-mismatch",
+  "link-in-text-block",
+  "link-name",
+  "list",
+  "listitem",
+  "marquee",
+  "meta-refresh",
+  "meta-viewport",
+  "nested-interactive",
+  "no-autoplay-audio",
+  "object-alt",
+  "p-as-heading",
+  "role-img-alt",
+  "scrollable-region-focusable",
+  "select-name",
+  "server-side-image-map",
+  "summary-name",
+  "svg-img-alt",
+  "table-fake-caption",
+  "td-has-header",
+  "td-headers-attr",
+  "th-has-data-cells",
+  "valid-lang",
+  "video-caption"
+ ],
+ "browser": "chromium 147.0.7727.15",
+ "commit": "9805ee511db4509e3da4aab81b9bc3d75eee7935",
+ "date": "2026-11-12T14:29:22.088Z",
+ "bundle": "index-CALbt59D.js",
+ "partial": false,
+ "states": {
+  "desktop-engineer/empty/compose:main": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 4
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 4,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 17,
+   "pageErrors": [],
+   "ms": 4434
+  },
+  "desktop-engineer/empty/compose:picker": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 4
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 4,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 17,
+   "pageErrors": [],
+   "ms": 5347
+  },
+  "desktop-engineer/empty/dashboard:customize": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 2
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 2,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 127,
+   "pageErrors": [],
+   "ms": 8213
+  },
+  "desktop-engineer/empty/dashboard:main": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 2
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 2,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 101,
+   "pageErrors": [],
+   "ms": 6060
+  },
+  "desktop-engineer/empty/dashboard:stats": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 3
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 3,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 104,
+   "pageErrors": [],
+   "ms": 6690
+  },
+  "desktop-engineer/empty/inbox:main": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 2,
+   "pageErrors": [],
+   "ms": 4615
+  },
+  "desktop-engineer/empty/map:geofence": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 4
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 4,
+    "unresolved": 0
+   },
+   "content": 28,
+   "pageErrors": [],
+   "ms": 5154
+  },
+  "desktop-engineer/empty/map:main": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 4
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 4,
+    "unresolved": 0
+   },
+   "content": 27,
+   "pageErrors": [],
+   "ms": 4928
+  },
+  "desktop-engineer/empty/map:new-zone": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 4
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 4,
+    "unresolved": 0
+   },
+   "content": 29,
+   "pageErrors": [],
+   "ms": 5384
+  },
+  "desktop-engineer/empty/messages:broadcasts": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 9,
+   "pageErrors": [],
+   "ms": 5379
+  },
+  "desktop-engineer/empty/messages:compose": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 29,
+   "pageErrors": [],
+   "ms": 5368
+  },
+  "desktop-engineer/empty/messages:mesh": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 27,
+   "pageErrors": [],
+   "ms": 4680
+  },
+  "desktop-engineer/empty/messages:preset-edit": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 35,
+   "pageErrors": [],
+   "ms": 5648
+  },
+  "desktop-engineer/empty/messages:presets": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 29,
+   "pageErrors": [],
+   "ms": 5070
+  },
+  "desktop-engineer/empty/messages:sbd": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 6,
+   "pageErrors": [],
+   "ms": 5418
+  },
+  "desktop-engineer/empty/messages:sms": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 10,
+   "pageErrors": [],
+   "ms": 5183
+  },
+  "desktop-engineer/empty/messages:webhooks": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 10,
+   "pageErrors": [],
+   "ms": 5174
+  },
+  "desktop-engineer/empty/settings:about": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 40,
+   "pageErrors": [],
+   "ms": 4377
+  },
+  "desktop-engineer/empty/settings:aprs": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 40,
+   "pageErrors": [],
+   "ms": 4696
+  },
+  "desktop-engineer/empty/settings:canned": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 30,
+   "pageErrors": [],
+   "ms": 4461
+  },
+  "desktop-engineer/empty/settings:cell": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 54,
+   "pageErrors": [],
+   "ms": 5153
+  },
+  "desktop-engineer/empty/settings:cellular": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 71,
+   "pageErrors": [],
+   "ms": 5336
+  },
+  "desktop-engineer/empty/settings:cellular-contact": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 76,
+   "pageErrors": [],
+   "ms": 5988
+  },
+  "desktop-engineer/empty/settings:cellular-sim": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 79,
+   "pageErrors": [],
+   "ms": 6986
+  },
+  "desktop-engineer/empty/settings:channels": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 25,
+   "pageErrors": [],
+   "ms": 4274
+  },
+  "desktop-engineer/empty/settings:config_mgmt": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 31,
+   "pageErrors": [],
+   "ms": 4226
+  },
+  "desktop-engineer/empty/settings:credentials": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 29,
+   "pageErrors": [],
+   "ms": 4751
+  },
+  "desktop-engineer/empty/settings:deadman": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 35,
+   "pageErrors": [],
+   "ms": 4528
+  },
+  "desktop-engineer/empty/settings:device_mqtt": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 43,
+   "pageErrors": [],
+   "ms": 4684
+  },
+  "desktop-engineer/empty/settings:devices": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 31,
+   "pageErrors": [],
+   "ms": 5053
+  },
+  "desktop-engineer/empty/settings:iridium": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 57,
+   "pageErrors": [],
+   "ms": 5517
+  },
+  "desktop-engineer/empty/settings:media_hop": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 36,
+   "pageErrors": [],
+   "ms": 4589
+  },
+  "desktop-engineer/empty/settings:mqtt": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 33,
+   "pageErrors": [],
+   "ms": 4625
+  },
+  "desktop-engineer/empty/settings:network": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 1
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 1,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 57,
+   "pageErrors": [],
+   "ms": 4895
+  },
+  "desktop-engineer/empty/settings:position": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 35,
+   "pageErrors": [],
+   "ms": 4820
+  },
+  "desktop-engineer/empty/settings:radio": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 47,
+   "pageErrors": [],
+   "ms": 4599
+  },
+  "desktop-engineer/empty/settings:range_test": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 32,
+   "pageErrors": [],
+   "ms": 4510
+  },
+  "desktop-engineer/empty/settings:remote_mgmt": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 44,
+   "pageErrors": [],
+   "ms": 5243
+  },
+  "desktop-engineer/empty/settings:remote_mgmt-peer": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 54,
+   "pageErrors": [],
+   "ms": 5454
+  },
+  "desktop-engineer/empty/settings:routing": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 82,
+   "pageErrors": [],
+   "ms": 5519
+  },
+  "desktop-engineer/empty/settings:store_forward": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 31,
+   "pageErrors": [],
+   "ms": 4592
+  },
+  "desktop-engineer/empty/settings:tak": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 43,
+   "pageErrors": [],
+   "ms": 4898
+  },
+  "desktop-engineer/empty/settings:tetra": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 27,
+   "pageErrors": [],
+   "ms": 4462
+  },
+  "desktop-engineer/empty/settings:zigbee": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 46,
+   "pageErrors": [],
+   "ms": 4800
+  },
+  "desktop-engineer/empty/shell:header": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 6
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 6,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 38,
+   "pageErrors": [],
+   "ms": 6742
+  },
+  "desktop-engineer/empty/shell:power": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 7
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 7,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 50,
+   "pageErrors": [],
+   "ms": 6868
+  },
+  "desktop-engineer/rich/compose:main": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 4
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 4,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 17,
+   "pageErrors": [],
+   "ms": 5948
+  },
+  "desktop-engineer/rich/compose:picker": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 4
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 4,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 19,
+   "pageErrors": [],
+   "ms": 6942
+  },
+  "desktop-engineer/rich/dashboard:customize": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 31
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 31,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 334,
+   "pageErrors": [],
+   "ms": 11041
+  },
+  "desktop-engineer/rich/dashboard:main": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 30
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 30,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 314,
+   "pageErrors": [],
+   "ms": 9428
+  },
+  "desktop-engineer/rich/dashboard:node": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 30
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 30,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 394,
+   "pageErrors": [],
+   "ms": 12735
+  },
+  "desktop-engineer/rich/dashboard:stats": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 31
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 31,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 317,
+   "pageErrors": [],
+   "ms": 11291
+  },
+  "desktop-engineer/rich/inbox:main": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 24
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 24,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 68,
+   "pageErrors": [],
+   "ms": 8465
+  },
+  "desktop-engineer/rich/map:geofence": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 8
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 8,
+    "unresolved": 0
+   },
+   "content": 39,
+   "pageErrors": [],
+   "ms": 6761
+  },
+  "desktop-engineer/rich/map:main": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 8
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 8,
+    "unresolved": 0
+   },
+   "content": 38,
+   "pageErrors": [],
+   "ms": 6472
+  },
+  "desktop-engineer/rich/map:new-zone": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 8
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 8,
+    "unresolved": 0
+   },
+   "content": 40,
+   "pageErrors": [],
+   "ms": 7171
+  },
+  "desktop-engineer/rich/map:popup": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 8
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 8,
+    "unresolved": 0
+   },
+   "content": 42,
+   "pageErrors": [],
+   "ms": 6969
+  },
+  "desktop-engineer/rich/messages:broadcasts": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 9,
+   "pageErrors": [],
+   "ms": 5746
+  },
+  "desktop-engineer/rich/messages:compose": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 8
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 8,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 97,
+   "pageErrors": [],
+   "ms": 6770
+  },
+  "desktop-engineer/rich/messages:deliveries": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 8
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 8,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 105,
+   "pageErrors": [],
+   "ms": 7669
+  },
+  "desktop-engineer/rich/messages:mesh": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 8
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 8,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 95,
+   "pageErrors": [],
+   "ms": 6620
+  },
+  "desktop-engineer/rich/messages:preset-edit": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 16
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 16,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 110,
+   "pageErrors": [],
+   "ms": 7243
+  },
+  "desktop-engineer/rich/messages:presets": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 16
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 16,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 104,
+   "pageErrors": [],
+   "ms": 7278
+  },
+  "desktop-engineer/rich/messages:sbd": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 6,
+   "pageErrors": [],
+   "ms": 5824
+  },
+  "desktop-engineer/rich/messages:sms": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 26,
+   "pageErrors": [],
+   "ms": 6421
+  },
+  "desktop-engineer/rich/messages:sms-thread": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 20,
+   "pageErrors": [],
+   "ms": 5916
+  },
+  "desktop-engineer/rich/messages:webhooks": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 10,
+   "pageErrors": [],
+   "ms": 6201
+  },
+  "desktop-engineer/rich/settings:about": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 40,
+   "pageErrors": [],
+   "ms": 4693
+  },
+  "desktop-engineer/rich/settings:aprs": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 40,
+   "pageErrors": [],
+   "ms": 4837
+  },
+  "desktop-engineer/rich/settings:canned": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 30,
+   "pageErrors": [],
+   "ms": 5400
+  },
+  "desktop-engineer/rich/settings:cell": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 54,
+   "pageErrors": [],
+   "ms": 5477
+  },
+  "desktop-engineer/rich/settings:cellular": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 80,
+   "pageErrors": [],
+   "ms": 6275
+  },
+  "desktop-engineer/rich/settings:cellular-contact": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 86,
+   "pageErrors": [],
+   "ms": 6546
+  },
+  "desktop-engineer/rich/settings:cellular-sim": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 88,
+   "pageErrors": [],
+   "ms": 6735
+  },
+  "desktop-engineer/rich/settings:channels": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 25,
+   "pageErrors": [],
+   "ms": 4865
+  },
+  "desktop-engineer/rich/settings:config_mgmt": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 31,
+   "pageErrors": [],
+   "ms": 4989
+  },
+  "desktop-engineer/rich/settings:credentials": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 29,
+   "pageErrors": [],
+   "ms": 4846
+  },
+  "desktop-engineer/rich/settings:deadman": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 35,
+   "pageErrors": [],
+   "ms": 4859
+  },
+  "desktop-engineer/rich/settings:device_mqtt": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 43,
+   "pageErrors": [],
+   "ms": 4727
+  },
+  "desktop-engineer/rich/settings:devices": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 31,
+   "pageErrors": [],
+   "ms": 4814
+  },
+  "desktop-engineer/rich/settings:iridium": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 57,
+   "pageErrors": [],
+   "ms": 5725
+  },
+  "desktop-engineer/rich/settings:media_hop": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 36,
+   "pageErrors": [],
+   "ms": 4619
+  },
+  "desktop-engineer/rich/settings:mqtt": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 33,
+   "pageErrors": [],
+   "ms": 5099
+  },
+  "desktop-engineer/rich/settings:network": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 1
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 1,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 66,
+   "pageErrors": [],
+   "ms": 5565
+  },
+  "desktop-engineer/rich/settings:position": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 35,
+   "pageErrors": [],
+   "ms": 5365
+  },
+  "desktop-engineer/rich/settings:radio": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 47,
+   "pageErrors": [],
+   "ms": 6064
+  },
+  "desktop-engineer/rich/settings:range_test": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 32,
+   "pageErrors": [],
+   "ms": 4704
+  },
+  "desktop-engineer/rich/settings:remote_mgmt": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 5
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 5,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 114,
+   "pageErrors": [],
+   "ms": 6088
+  },
+  "desktop-engineer/rich/settings:remote_mgmt-peer": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 5
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 5,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 125,
+   "pageErrors": [],
+   "ms": 6771
+  },
+  "desktop-engineer/rich/settings:routing": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 173,
+   "pageErrors": [],
+   "ms": 7621
+  },
+  "desktop-engineer/rich/settings:store_forward": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 31,
+   "pageErrors": [],
+   "ms": 4854
+  },
+  "desktop-engineer/rich/settings:tak": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 44,
+   "pageErrors": [],
+   "ms": 5305
+  },
+  "desktop-engineer/rich/settings:tetra": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 27,
+   "pageErrors": [],
+   "ms": 4505
+  },
+  "desktop-engineer/rich/settings:zigbee": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 46,
+   "pageErrors": [],
+   "ms": 5644
+  },
+  "desktop-engineer/rich/shell:header": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 6
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 6,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 40,
+   "pageErrors": [],
+   "ms": 7307
+  },
+  "desktop-engineer/rich/shell:power": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 7
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 7,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 52,
+   "pageErrors": [],
+   "ms": 8280
+  },
+  "kiosk-engineer/empty/compose:main": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 4
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 4,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 17,
+   "pageErrors": [],
+   "ms": 5149
+  },
+  "kiosk-engineer/empty/compose:picker": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 4
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 4,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 17,
+   "pageErrors": [],
+   "ms": 6062
+  },
+  "kiosk-engineer/empty/dashboard:customize": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 2
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 2,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 127,
+   "pageErrors": [],
+   "ms": 7253
+  },
+  "kiosk-engineer/empty/dashboard:main": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 2
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 2,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 101,
+   "pageErrors": [],
+   "ms": 6501
+  },
+  "kiosk-engineer/empty/dashboard:stats": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 4
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 4,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 104,
+   "pageErrors": [],
+   "ms": 6632
+  },
+  "kiosk-engineer/empty/inbox:main": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 2,
+   "pageErrors": [],
+   "ms": 4582
+  },
+  "kiosk-engineer/empty/map:geofence": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 10
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 6,
+    "map": 4,
+    "unresolved": 0
+   },
+   "content": 28,
+   "pageErrors": [],
+   "ms": 5816
+  },
+  "kiosk-engineer/empty/map:main": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 5
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 1,
+    "map": 4,
+    "unresolved": 0
+   },
+   "content": 27,
+   "pageErrors": [],
+   "ms": 5057
+  },
+  "kiosk-engineer/empty/map:new-zone": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 10
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 6,
+    "map": 4,
+    "unresolved": 0
+   },
+   "content": 29,
+   "pageErrors": [],
+   "ms": 6128
+  },
+  "kiosk-engineer/empty/messages:broadcasts": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 9,
+   "pageErrors": [],
+   "ms": 5563
+  },
+  "kiosk-engineer/empty/messages:compose": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 29,
+   "pageErrors": [],
+   "ms": 6036
+  },
+  "kiosk-engineer/empty/messages:mesh": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 27,
+   "pageErrors": [],
+   "ms": 4996
+  },
+  "kiosk-engineer/empty/messages:preset-edit": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 35,
+   "pageErrors": [],
+   "ms": 6140
+  },
+  "kiosk-engineer/empty/messages:presets": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 29,
+   "pageErrors": [],
+   "ms": 5655
+  },
+  "kiosk-engineer/empty/messages:sbd": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 6,
+   "pageErrors": [],
+   "ms": 5296
+  },
+  "kiosk-engineer/empty/messages:sms": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 10,
+   "pageErrors": [],
+   "ms": 5765
+  },
+  "kiosk-engineer/empty/messages:webhooks": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 10,
+   "pageErrors": [],
+   "ms": 5676
+  },
+  "kiosk-engineer/empty/settings:about": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 40,
+   "pageErrors": [],
+   "ms": 5246
+  },
+  "kiosk-engineer/empty/settings:aprs": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 40,
+   "pageErrors": [],
+   "ms": 5361
+  },
+  "kiosk-engineer/empty/settings:canned": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 30,
+   "pageErrors": [],
+   "ms": 4762
+  },
+  "kiosk-engineer/empty/settings:cell": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 54,
+   "pageErrors": [],
+   "ms": 5643
+  },
+  "kiosk-engineer/empty/settings:cellular": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 71,
+   "pageErrors": [],
+   "ms": 5960
+  },
+  "kiosk-engineer/empty/settings:cellular-contact": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 76,
+   "pageErrors": [],
+   "ms": 6229
+  },
+  "kiosk-engineer/empty/settings:cellular-sim": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 79,
+   "pageErrors": [],
+   "ms": 6438
+  },
+  "kiosk-engineer/empty/settings:channels": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 25,
+   "pageErrors": [],
+   "ms": 5780
+  },
+  "kiosk-engineer/empty/settings:config_mgmt": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 31,
+   "pageErrors": [],
+   "ms": 4971
+  },
+  "kiosk-engineer/empty/settings:credentials": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 29,
+   "pageErrors": [],
+   "ms": 5577
+  },
+  "kiosk-engineer/empty/settings:deadman": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 35,
+   "pageErrors": [],
+   "ms": 5656
+  },
+  "kiosk-engineer/empty/settings:device_mqtt": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 43,
+   "pageErrors": [],
+   "ms": 6670
+  },
+  "kiosk-engineer/empty/settings:devices": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 31,
+   "pageErrors": [],
+   "ms": 4681
+  },
+  "kiosk-engineer/empty/settings:iridium": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 57,
+   "pageErrors": [],
+   "ms": 5875
+  },
+  "kiosk-engineer/empty/settings:media_hop": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 36,
+   "pageErrors": [],
+   "ms": 5328
+  },
+  "kiosk-engineer/empty/settings:mqtt": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 33,
+   "pageErrors": [],
+   "ms": 5165
+  },
+  "kiosk-engineer/empty/settings:network": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 1
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 1,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 57,
+   "pageErrors": [],
+   "ms": 5134
+  },
+  "kiosk-engineer/empty/settings:position": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 35,
+   "pageErrors": [],
+   "ms": 5115
+  },
+  "kiosk-engineer/empty/settings:radio": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 47,
+   "pageErrors": [],
+   "ms": 5257
+  },
+  "kiosk-engineer/empty/settings:range_test": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 32,
+   "pageErrors": [],
+   "ms": 6062
+  },
+  "kiosk-engineer/empty/settings:remote_mgmt": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 44,
+   "pageErrors": [],
+   "ms": 5181
+  },
+  "kiosk-engineer/empty/settings:remote_mgmt-peer": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 54,
+   "pageErrors": [],
+   "ms": 6062
+  },
+  "kiosk-engineer/empty/settings:routing": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 82,
+   "pageErrors": [],
+   "ms": 6011
+  },
+  "kiosk-engineer/empty/settings:store_forward": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 31,
+   "pageErrors": [],
+   "ms": 5864
+  },
+  "kiosk-engineer/empty/settings:tak": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 43,
+   "pageErrors": [],
+   "ms": 6086
+  },
+  "kiosk-engineer/empty/settings:tetra": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 27,
+   "pageErrors": [],
+   "ms": 5259
+  },
+  "kiosk-engineer/empty/settings:zigbee": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 46,
+   "pageErrors": [],
+   "ms": 6819
+  },
+  "kiosk-engineer/empty/shell:header": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 12
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 12,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 28,
+   "pageErrors": [],
+   "ms": 6363
+  },
+  "kiosk-engineer/empty/shell:power": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 13
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 13,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 40,
+   "pageErrors": [],
+   "ms": 6821
+  },
+  "kiosk-engineer/rich/compose:main": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 4
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 4,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 17,
+   "pageErrors": [],
+   "ms": 5388
+  },
+  "kiosk-engineer/rich/compose:picker": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 4
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 4,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 19,
+   "pageErrors": [],
+   "ms": 6406
+  },
+  "kiosk-engineer/rich/dashboard:customize": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 34
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 34,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 334,
+   "pageErrors": [],
+   "ms": 11296
+  },
+  "kiosk-engineer/rich/dashboard:main": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 34
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 34,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 314,
+   "pageErrors": [],
+   "ms": 9749
+  },
+  "kiosk-engineer/rich/dashboard:node": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 34
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 34,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 394,
+   "pageErrors": [],
+   "ms": 12417
+  },
+  "kiosk-engineer/rich/dashboard:stats": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 37
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 37,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 317,
+   "pageErrors": [],
+   "ms": 13226
+  },
+  "kiosk-engineer/rich/inbox:main": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 4
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 4,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 68,
+   "pageErrors": [],
+   "ms": 5453
+  },
+  "kiosk-engineer/rich/map:geofence": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 8
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 8,
+    "unresolved": 0
+   },
+   "content": 39,
+   "pageErrors": [],
+   "ms": 7096
+  },
+  "kiosk-engineer/rich/map:main": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 9
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 1,
+    "map": 8,
+    "unresolved": 0
+   },
+   "content": 38,
+   "pageErrors": [],
+   "ms": 6165
+  },
+  "kiosk-engineer/rich/map:new-zone": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 8
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 8,
+    "unresolved": 0
+   },
+   "content": 40,
+   "pageErrors": [],
+   "ms": 6812
+  },
+  "kiosk-engineer/rich/map:popup": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 9
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 1,
+    "map": 8,
+    "unresolved": 0
+   },
+   "content": 42,
+   "pageErrors": [],
+   "ms": 7082
+  },
+  "kiosk-engineer/rich/messages:broadcasts": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 9,
+   "pageErrors": [],
+   "ms": 7300
+  },
+  "kiosk-engineer/rich/messages:compose": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 40
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 40,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 97,
+   "pageErrors": [],
+   "ms": 9035
+  },
+  "kiosk-engineer/rich/messages:deliveries": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 18
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 18,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 105,
+   "pageErrors": [],
+   "ms": 8737
+  },
+  "kiosk-engineer/rich/messages:mesh": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 28
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 28,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 95,
+   "pageErrors": [],
+   "ms": 6998
+  },
+  "kiosk-engineer/rich/messages:preset-edit": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 48
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 48,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 110,
+   "pageErrors": [],
+   "ms": 7872
+  },
+  "kiosk-engineer/rich/messages:presets": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 48
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 48,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 104,
+   "pageErrors": [],
+   "ms": 8453
+  },
+  "kiosk-engineer/rich/messages:sbd": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 6,
+   "pageErrors": [],
+   "ms": 7359
+  },
+  "kiosk-engineer/rich/messages:sms": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 26,
+   "pageErrors": [],
+   "ms": 8217
+  },
+  "kiosk-engineer/rich/messages:sms-thread": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 20,
+   "pageErrors": [],
+   "ms": 6532
+  },
+  "kiosk-engineer/rich/messages:webhooks": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 10,
+   "pageErrors": [],
+   "ms": 7530
+  },
+  "kiosk-engineer/rich/settings:about": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 40,
+   "pageErrors": [],
+   "ms": 5985
+  },
+  "kiosk-engineer/rich/settings:aprs": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 40,
+   "pageErrors": [],
+   "ms": 5726
+  },
+  "kiosk-engineer/rich/settings:canned": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 30,
+   "pageErrors": [],
+   "ms": 5469
+  },
+  "kiosk-engineer/rich/settings:cell": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 54,
+   "pageErrors": [],
+   "ms": 6255
+  },
+  "kiosk-engineer/rich/settings:cellular": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 80,
+   "pageErrors": [],
+   "ms": 6736
+  },
+  "kiosk-engineer/rich/settings:cellular-contact": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 86,
+   "pageErrors": [],
+   "ms": 8761
+  },
+  "kiosk-engineer/rich/settings:cellular-sim": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 88,
+   "pageErrors": [],
+   "ms": 9121
+  },
+  "kiosk-engineer/rich/settings:channels": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 25,
+   "pageErrors": [],
+   "ms": 5665
+  },
+  "kiosk-engineer/rich/settings:config_mgmt": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 31,
+   "pageErrors": [],
+   "ms": 5583
+  },
+  "kiosk-engineer/rich/settings:credentials": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 29,
+   "pageErrors": [],
+   "ms": 5357
+  },
+  "kiosk-engineer/rich/settings:deadman": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 35,
+   "pageErrors": [],
+   "ms": 6523
+  },
+  "kiosk-engineer/rich/settings:device_mqtt": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 43,
+   "pageErrors": [],
+   "ms": 6108
+  },
+  "kiosk-engineer/rich/settings:devices": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 31,
+   "pageErrors": [],
+   "ms": 5113
+  },
+  "kiosk-engineer/rich/settings:iridium": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 57,
+   "pageErrors": [],
+   "ms": 5913
+  },
+  "kiosk-engineer/rich/settings:media_hop": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 36,
+   "pageErrors": [],
+   "ms": 5167
+  },
+  "kiosk-engineer/rich/settings:mqtt": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 33,
+   "pageErrors": [],
+   "ms": 5743
+  },
+  "kiosk-engineer/rich/settings:network": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 1
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 1,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 66,
+   "pageErrors": [],
+   "ms": 6196
+  },
+  "kiosk-engineer/rich/settings:position": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 35,
+   "pageErrors": [],
+   "ms": 5554
+  },
+  "kiosk-engineer/rich/settings:radio": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 47,
+   "pageErrors": [],
+   "ms": 6010
+  },
+  "kiosk-engineer/rich/settings:range_test": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 32,
+   "pageErrors": [],
+   "ms": 5613
+  },
+  "kiosk-engineer/rich/settings:remote_mgmt": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 5
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 5,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 114,
+   "pageErrors": [],
+   "ms": 7486
+  },
+  "kiosk-engineer/rich/settings:remote_mgmt-peer": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 5
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 5,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 125,
+   "pageErrors": [],
+   "ms": 8683
+  },
+  "kiosk-engineer/rich/settings:routing": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 173,
+   "pageErrors": [],
+   "ms": 8583
+  },
+  "kiosk-engineer/rich/settings:store_forward": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 31,
+   "pageErrors": [],
+   "ms": 5720
+  },
+  "kiosk-engineer/rich/settings:tak": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 44,
+   "pageErrors": [],
+   "ms": 6303
+  },
+  "kiosk-engineer/rich/settings:tetra": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 27,
+   "pageErrors": [],
+   "ms": 5406
+  },
+  "kiosk-engineer/rich/settings:zigbee": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 46,
+   "pageErrors": [],
+   "ms": 5753
+  },
+  "kiosk-engineer/rich/shell:header": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 12
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 12,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 28,
+   "pageErrors": [],
+   "ms": 9625
+  },
+  "kiosk-engineer/rich/shell:power": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 13
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 13,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 40,
+   "pageErrors": [],
+   "ms": 8694
+  },
+  "kiosk-operator/empty/compose:main": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 9,
+   "pageErrors": [],
+   "ms": 6244
+  },
+  "kiosk-operator/empty/compose:picker": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 9,
+   "pageErrors": [],
+   "ms": 7005
+  },
+  "kiosk-operator/empty/dashboard:main": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 37,
+   "pageErrors": [],
+   "ms": 5404
+  },
+  "kiosk-operator/empty/inbox:main": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 2,
+   "pageErrors": [],
+   "ms": 6663
+  },
+  "kiosk-operator/empty/map:geofence": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 10
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 6,
+    "map": 4,
+    "unresolved": 0
+   },
+   "content": 28,
+   "pageErrors": [],
+   "ms": 6961
+  },
+  "kiosk-operator/empty/map:main": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 5
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 1,
+    "map": 4,
+    "unresolved": 0
+   },
+   "content": 27,
+   "pageErrors": [],
+   "ms": 6206
+  },
+  "kiosk-operator/empty/map:new-zone": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 10
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 6,
+    "map": 4,
+    "unresolved": 0
+   },
+   "content": 29,
+   "pageErrors": [],
+   "ms": 7452
+  },
+  "kiosk-operator/empty/messages:broadcasts": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 9,
+   "pageErrors": [],
+   "ms": 6255
+  },
+  "kiosk-operator/empty/messages:compose": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 29,
+   "pageErrors": [],
+   "ms": 6490
+  },
+  "kiosk-operator/empty/messages:mesh": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 27,
+   "pageErrors": [],
+   "ms": 4805
+  },
+  "kiosk-operator/empty/messages:preset-edit": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 35,
+   "pageErrors": [],
+   "ms": 7727
+  },
+  "kiosk-operator/empty/messages:presets": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 29,
+   "pageErrors": [],
+   "ms": 5679
+  },
+  "kiosk-operator/empty/messages:sbd": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 6,
+   "pageErrors": [],
+   "ms": 5158
+  },
+  "kiosk-operator/empty/messages:sms": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 10,
+   "pageErrors": [],
+   "ms": 7038
+  },
+  "kiosk-operator/empty/messages:webhooks": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 10,
+   "pageErrors": [],
+   "ms": 5683
+  },
+  "kiosk-operator/empty/settings:cell": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 38,
+   "pageErrors": [],
+   "ms": 4747
+  },
+  "kiosk-operator/empty/settings:cellular": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 55,
+   "pageErrors": [],
+   "ms": 5518
+  },
+  "kiosk-operator/empty/settings:cellular-contact": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 60,
+   "pageErrors": [],
+   "ms": 6662
+  },
+  "kiosk-operator/empty/settings:cellular-sim": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 63,
+   "pageErrors": [],
+   "ms": 6877
+  },
+  "kiosk-operator/empty/settings:channels": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 9,
+   "pageErrors": [],
+   "ms": 6126
+  },
+  "kiosk-operator/empty/settings:iridium": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 41,
+   "pageErrors": [],
+   "ms": 5483
+  },
+  "kiosk-operator/empty/settings:position": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 19,
+   "pageErrors": [],
+   "ms": 5176
+  },
+  "kiosk-operator/empty/settings:radio": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 31,
+   "pageErrors": [],
+   "ms": 6552
+  },
+  "kiosk-operator/empty/settings:tetra": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 11,
+   "pageErrors": [],
+   "ms": 4886
+  },
+  "kiosk-operator/empty/shell:header": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 11,
+   "pageErrors": [],
+   "ms": 7861
+  },
+  "kiosk-operator/empty/shell:more": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 25,
+   "pageErrors": [],
+   "ms": 7055
+  },
+  "kiosk-operator/empty/shell:power": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 23,
+   "pageErrors": [],
+   "ms": 7784
+  },
+  "kiosk-operator/rich/compose:main": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 9,
+   "pageErrors": [],
+   "ms": 6422
+  },
+  "kiosk-operator/rich/compose:picker": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 11,
+   "pageErrors": [],
+   "ms": 7340
+  },
+  "kiosk-operator/rich/dashboard:main": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 43,
+   "pageErrors": [],
+   "ms": 5809
+  },
+  "kiosk-operator/rich/inbox:main": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 4
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 4,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 68,
+   "pageErrors": [],
+   "ms": 7257
+  },
+  "kiosk-operator/rich/map:geofence": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 14
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 6,
+    "map": 8,
+    "unresolved": 0
+   },
+   "content": 39,
+   "pageErrors": [],
+   "ms": 6804
+  },
+  "kiosk-operator/rich/map:main": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 9
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 1,
+    "map": 8,
+    "unresolved": 0
+   },
+   "content": 38,
+   "pageErrors": [],
+   "ms": 6721
+  },
+  "kiosk-operator/rich/map:new-zone": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 14
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 6,
+    "map": 8,
+    "unresolved": 0
+   },
+   "content": 40,
+   "pageErrors": [],
+   "ms": 6905
+  },
+  "kiosk-operator/rich/map:popup": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 9
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 1,
+    "map": 8,
+    "unresolved": 0
+   },
+   "content": 42,
+   "pageErrors": [],
+   "ms": 7038
+  },
+  "kiosk-operator/rich/messages:broadcasts": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 9,
+   "pageErrors": [],
+   "ms": 6493
+  },
+  "kiosk-operator/rich/messages:compose": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 36
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 36,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 97,
+   "pageErrors": [],
+   "ms": 9134
+  },
+  "kiosk-operator/rich/messages:deliveries": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 15
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 15,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 105,
+   "pageErrors": [],
+   "ms": 8302
+  },
+  "kiosk-operator/rich/messages:mesh": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 25
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 25,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 95,
+   "pageErrors": [],
+   "ms": 5833
+  },
+  "kiosk-operator/rich/messages:preset-edit": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 40
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 40,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 110,
+   "pageErrors": [],
+   "ms": 9779
+  },
+  "kiosk-operator/rich/messages:presets": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {
+    "color-contrast": 40
+   },
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 40,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 104,
+   "pageErrors": [],
+   "ms": 9406
+  },
+  "kiosk-operator/rich/messages:sbd": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 6,
+   "pageErrors": [],
+   "ms": 6788
+  },
+  "kiosk-operator/rich/messages:sms": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 26,
+   "pageErrors": [],
+   "ms": 8111
+  },
+  "kiosk-operator/rich/messages:sms-thread": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 20,
+   "pageErrors": [],
+   "ms": 7419
+  },
+  "kiosk-operator/rich/messages:webhooks": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 10,
+   "pageErrors": [],
+   "ms": 6081
+  },
+  "kiosk-operator/rich/settings:cell": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 38,
+   "pageErrors": [],
+   "ms": 6333
+  },
+  "kiosk-operator/rich/settings:cellular": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 64,
+   "pageErrors": [],
+   "ms": 6565
+  },
+  "kiosk-operator/rich/settings:cellular-contact": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 70,
+   "pageErrors": [],
+   "ms": 6923
+  },
+  "kiosk-operator/rich/settings:cellular-sim": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 72,
+   "pageErrors": [],
+   "ms": 7026
+  },
+  "kiosk-operator/rich/settings:channels": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 9,
+   "pageErrors": [],
+   "ms": 5052
+  },
+  "kiosk-operator/rich/settings:iridium": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 41,
+   "pageErrors": [],
+   "ms": 6877
+  },
+  "kiosk-operator/rich/settings:position": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 19,
+   "pageErrors": [],
+   "ms": 5592
+  },
+  "kiosk-operator/rich/settings:radio": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 31,
+   "pageErrors": [],
+   "ms": 5500
+  },
+  "kiosk-operator/rich/settings:tetra": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 11,
+   "pageErrors": [],
+   "ms": 5437
+  },
+  "kiosk-operator/rich/shell:header": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 11,
+   "pageErrors": [],
+   "ms": 8366
+  },
+  "kiosk-operator/rich/shell:more": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 25,
+   "pageErrors": [],
+   "ms": 6995
+  },
+  "kiosk-operator/rich/shell:power": {
+   "status": "ok",
+   "counts": {},
+   "incomplete": {},
+   "violations": [],
+   "unlabelled": [],
+   "duplicates": [],
+   "lowContrast": [],
+   "contrastReview": {
+    "measured": 0,
+    "map": 0,
+    "unresolved": 0
+   },
+   "content": 23,
+   "pageErrors": [],
+   "ms": 7685
+  }
+ },
+ "missingFixtures": [],
+ "canary": {
+  "ok": true,
+  "found": [
+   "aria-prohibited-attr",
+   "color-contrast"
+  ],
+  "unlabelled": 1,
+  "duplicateIds": 1,
+  "contrastFallback": 1,
+  "ratchetFailed": true
+ },
+ "total": 0,
+ "ratchet": {
+  "baseline": true,
+  "ok": true,
+  "failures": [],
+  "tighten": [],
+  "notes": []
+ }
+}
