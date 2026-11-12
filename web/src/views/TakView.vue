@@ -252,7 +252,7 @@ const chatInput = ref("")
 async function sendChat() {
   if (!chatInput.value.trim()) return
   try {
-    await api.post("/api/tak/chat", { text: chatInput.value })
+    await api.post("/tak/chat", { text: chatInput.value })
     chatInput.value = ""
   } catch (e) { alert(e.response?.data?.error || e.message) }
 }
@@ -274,7 +274,7 @@ async function submitNineLine() {
     "9. Terrain: " + nineLineForm.value.terrain
   ].join("\n")
   try {
-    await api.post("/api/tak/nineline", { text: lines, urgency: nineLineForm.value.urgency })
+    await api.post("/tak/nineline", { text: lines, urgency: nineLineForm.value.urgency })
     alert("9-Line MEDEVAC submitted")
   } catch (e) { alert(e.response?.data?.error || e.message) }
   nineLineSubmitting.value = false

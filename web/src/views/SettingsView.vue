@@ -223,7 +223,7 @@ async function doTAKEnroll() {
   takEnrolling.value = true
   takEnrollResult.value = null
   try {
-    const resp = await api.post('/api/tak/enroll', {
+    const resp = await api.post('/tak/enroll', {
       server_url: takEnrollUrl.value,
       username: takEnrollUser.value,
       password: takEnrollPass.value
@@ -237,7 +237,7 @@ async function doTAKEnroll() {
 
 async function loadTAKEnrollStatus() {
   try {
-    const resp = await api.get('/api/tak/enroll/status')
+    const resp = await api.get('/tak/enroll/status')
     if (resp.data?.success) takEnrollResult.value = resp.data
   } catch {}
 }
@@ -1622,14 +1622,14 @@ const spectrumStatus = ref(null)
 
 async function loadSigningKey() {
   try {
-    const res = await api.get('/api/keys/signing')
+    const res = await api.get('/keys/signing')
     if (res.fingerprint) signingKeyFingerprint.value = res.fingerprint
   } catch { /* key store may not be available */ }
 }
 
 async function loadSpectrumStatus() {
   try {
-    spectrumStatus.value = await api.get('/api/spectrum/status')
+    spectrumStatus.value = await api.get('/spectrum/status')
   } catch { /* spectrum monitor may not be available */ }
 }
 
