@@ -20,7 +20,7 @@ import (
 func TestShiftMovesEveryTimeAndLeavesTheRestAlone(t *testing.T) {
 	doc := []byte(`{"created_at":"2026-11-01T09:50:00Z","sent":"2026-11-01T09:40:00.5Z","zero":"0001-01-01T00:00:00Z",
 		"rx_time":1793526600,"last_heard":1793526000,"count":1793526600,"name":"2026-11-01T09:50:00Z is a date",
-		"list":[{"timestamp":1793526600,"snr":4.25}],"max_wait":1793526600000}`)
+		"list":[{"timestamp":1793526600,"snr":4.25}],"max_wait":1793526600000,"last_update":1793526600.0}`)
 	out, err := Shift(doc, 11*24*time.Hour)
 	if err != nil {
 		t.Fatal(err)
@@ -33,6 +33,7 @@ func TestShiftMovesEveryTimeAndLeavesTheRestAlone(t *testing.T) {
 		"created_at": "2026-11-12T09:50:00Z", "sent": "2026-11-12T09:40:00.5Z", "zero": "0001-01-01T00:00:00Z",
 		"rx_time": float64(1793526600 + 11*86400), "last_heard": float64(1793526000 + 11*86400),
 		"count": float64(1793526600), "name": "2026-11-01T09:50:00Z is a date", "max_wait": float64(1793526600000),
+		"last_update": float64(1793526600 + 11*86400),
 	}
 	for k, w := range want {
 		if v[k] != w {

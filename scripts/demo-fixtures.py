@@ -225,6 +225,9 @@ def main():
     out['ttc_flow'] = ttc_flow()
     out['zigbee_devices2'] = {'devices': []}
     out['sos_status'] = {'active': False}
+    # The kit's UPS: on shore power, nearly full.
+    out['system_battery'] = {'ac_present': True, 'charging': True, 'last_update': float(unix(1)), 'soc_percent': 86,
+                             'stale': False, 'voltage': 4.06}
     # The passes are made by the server for now (internal/demo Passes).
     out.pop('iridium_passes', None)
     for k, v in sorted(out.items()):

@@ -15,6 +15,7 @@ import (
 	"math"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -155,11 +156,19 @@ func shiftValue(v any, key string, d time.Duration) any {
 		if !isEpochKey(key) {
 			return x
 		}
-		n, err := x.Int64()
-		if err != nil || n < minEpoch || n > maxEpoch {
+		if n, err := x.Int64(); err == nil {
+			if n < minEpoch || n > maxEpoch {
+				return x
+			}
+			return json.Number(fmt.Sprint(n + int64(d/time.Second)))
+		}
+		// Seconds written as a float ("1793526600.0", the battery's
+		// last_update) move too, and stay a float.
+		f, err := x.Float64()
+		if err != nil || f < minEpoch || f > maxEpoch {
 			return x
 		}
-		return json.Number(fmt.Sprint(n + int64(d/time.Second)))
+		return json.Number(strconv.FormatFloat(f+d.Seconds(), 'f', 1, 64))
 	}
 	return v
 }

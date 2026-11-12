@@ -4,6 +4,12 @@
 // before the web app, which is the release bundle, unchanged.
 (function () {
   'use strict'
+  // The dark map's tiles (Carto) now answer a request without an API key
+  // with a watermark, so the demo opens the map on the OpenStreetMap layer
+  // (the app's own "Light" choice). A visitor's own choice is kept.
+  try {
+    if (!window.localStorage.getItem('meshsat-map-theme')) window.localStorage.setItem('meshsat-map-theme', 'light')
+  } catch (e) { /* no storage: the app's default applies */ }
   var timer = null
   function notice () {
     var el = document.getElementById('meshsat-demo-toast')
