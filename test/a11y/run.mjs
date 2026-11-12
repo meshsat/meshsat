@@ -16,7 +16,7 @@ import { AxeBuilder } from '@axe-core/playwright'
 import axeCore from 'axe-core'
 import { VARIANTS, PROFILES, statesFor, stateKey } from './states.mjs'
 import { ORIGIN, loadFixtures, routeFixtures, routeLive, keyShape } from './serve.mjs'
-import { compare, nextBaseline, total, UNLABELLED, DUPLICATE_ID } from './ratchet.mjs'
+import { compare, nextBaseline, total, UNLABELLED, DUPLICATE_ID, CONTRAST_FALLBACK } from './ratchet.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const REPO = path.resolve(HERE, '../..')
@@ -106,6 +106,51 @@ async function duplicateReferencedIds (page) {
   })
 }
 
+// axe leaves some contrast undecided ("needs review": text next to an icon,
+// partly under the sticky header, a single character). Each of those is
+// measured here directly: the text colour, faded by its own and its
+// ancestors' opacity, against the background composited from its ancestors
+// (images and gradients ignored). Below 4.5:1 (3:1 for large text) counts.
+const FALLBACK = (targets) => {
+  const parse = (c) => { const m = c.match(/rgba?\(([^)]+)\)/); if (!m) return null; const p = m[1].split(/[ ,/]+/).filter(Boolean).map(Number); return [p[0], p[1], p[2], p.length > 3 ? p[3] : 1] }
+  const over = (fg, bg) => [0, 1, 2].map((i) => fg[i] * fg[3] + bg[i] * (1 - fg[3])).concat(1)
+  const lum = (c) => { const [r, g, b] = c.slice(0, 3).map((v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4 }); return 0.2126 * r + 0.7152 * g + 0.0722 * b }
+  const ratio = (a, b) => { const [h, l] = [lum(a), lum(b)].sort((x, y) => y - x); return (h + 0.05) / (l + 0.05) }
+  const out = []
+  const tally = { measured: 0, map: 0, unresolved: 0 }
+  for (const t of targets) {
+    let el
+    try { el = document.querySelector(t) } catch { el = null }
+    if (!el || !el.textContent.trim()) { tally.unresolved++; continue }
+    // Text over map tiles is out of scope (its background is an image); marker
+    // labels carry a black halo for that reason.
+    if (el.closest('.leaflet-container')) { tally.map++; continue }
+    tally.measured++
+    const cs = getComputedStyle(el)
+    const isSvgText = el instanceof SVGElement
+    let fg = parse(isSvgText ? cs.fill : cs.color)
+    if (!fg) continue
+    const chain = []
+    for (let a = el; a && a.nodeType === 1; a = a.parentElement) chain.push(a)
+    let opacity = 1
+    for (const a of chain) opacity *= Number(getComputedStyle(a).opacity)
+    let bg = parse(getComputedStyle(document.documentElement).backgroundColor) || [0, 0, 0, 1]
+    if (bg[3] === 0) bg = parse(getComputedStyle(document.body).backgroundColor) || [4, 4, 6, 1]
+    if (bg[3] === 0) bg = [4, 4, 6, 1]
+    bg = bg.slice(0, 3).concat(1)
+    for (const a of chain.slice().reverse()) {
+      const c = parse(getComputedStyle(a).backgroundColor)
+      if (c && c[3] > 0) bg = over(c, bg)
+    }
+    fg = over([fg[0], fg[1], fg[2], fg[3] * opacity], bg)
+    const size = parseFloat(cs.fontSize)
+    const large = size >= 24 || (size >= 18.66 && Number(cs.fontWeight) >= 700)
+    const r = ratio(fg, bg)
+    if (r < (large ? 3 : 4.5) - 0.005) out.push(`${t} ${r.toFixed(2)}:1 "${el.textContent.trim().slice(0, 24)}"`)
+  }
+  return { low: out, tally }
+}
+
 async function measure ({ ctx, base, variant, state, live, screensDir, key }) {
   const t0 = Date.now()
   const page = await ctx.newPage()
@@ -135,11 +180,17 @@ async function measure ({ ctx, base, variant, state, live, screensDir, key }) {
     const r = await builder.analyze()
     const unlabelled = await unlabelledControls(page, state.scope)
     const duplicates = state.scope === 'shell' ? [] : await duplicateReferencedIds(page)
+    const review = r.incomplete.find((v) => v.id === 'color-contrast')
+    const reviewTargets = review ? review.nodes.map((n) => n.target[0]) : []
+    const fb = reviewTargets.length ? await page.evaluate(FALLBACK, reviewTargets.filter((x) => typeof x === 'string')) : { low: [], tally: { measured: 0, map: 0, unresolved: 0 } }
+    fb.tally.unresolved += reviewTargets.filter((x) => typeof x !== 'string').length
+    const lowContrast = fb.low
 
     const counts = {}
     for (const v of r.violations) counts[v.id] = v.nodes.length
     if (unlabelled.length) counts[UNLABELLED] = unlabelled.length
     if (duplicates.length) counts[DUPLICATE_ID] = duplicates.length
+    if (lowContrast.length) counts[CONTRAST_FALLBACK] = lowContrast.length
     const incomplete = {}
     for (const v of r.incomplete) incomplete[v.id] = v.nodes.length
     const violations = r.violations.map((v) => ({
@@ -151,7 +202,7 @@ async function measure ({ ctx, base, variant, state, live, screensDir, key }) {
     if (screensDir) {
       await page.screenshot({ path: path.join(screensDir, `${key.replace(/[/:]/g, '_')}.jpg`), fullPage: true, type: 'jpeg', quality: 60 })
     }
-    return { status: 'ok', counts, incomplete, violations, unlabelled: live ? unlabelled.length : unlabelled, duplicates, pageErrors, ms: Date.now() - t0 }
+    return { status: 'ok', counts, incomplete, violations, unlabelled: live ? unlabelled.length : unlabelled, duplicates, lowContrast: live ? lowContrast.length : lowContrast, contrastReview: fb.tally, pageErrors, ms: Date.now() - t0 }
   } catch (e) {
     return { status: 'error', error: String(e.message || e).split('\n')[0].slice(0, 300), pageErrors, ms: Date.now() - t0 }
   } finally {
@@ -172,21 +223,25 @@ async function canary (ctx, base, axeVersion) {
       d.style.background = '#15151B'
       d.innerHTML = '<p style="color:#5C5C68;background:#15151B;font-size:12px">low contrast canary text</p>' +
         '<input type="text" placeholder="canary"><div aria-label="canary strip"></div>' +
-        '<label for="a11y-canary-dup">canary field</label><input id="a11y-canary-dup"><input id="a11y-canary-dup" aria-label="canary twin">'
+        '<label for="a11y-canary-dup">canary field</label><input id="a11y-canary-dup"><input id="a11y-canary-dup" aria-label="canary twin">' +
+        '<span id="a11y-canary-short" style="color:#3A3A44;font-size:10px">5</span>'
       document.querySelector('main').prepend(d)
     })
     const r = await new AxeBuilder({ page }).withTags(TAGS).include('#a11y-canary').analyze()
     const found = r.violations.map((v) => v.id).sort()
     const unl = (await unlabelledControls(page, 'view')).filter((s) => s.includes('canary')).length
     const dup = (await duplicateReferencedIds(page)).filter((s) => s.includes('a11y-canary-dup')).length
+    const review = r.incomplete.find((v) => v.id === 'color-contrast')
+    const low = review ? (await page.evaluate(FALLBACK, review.nodes.map((n) => n.target[0]))).low.filter((s) => s.includes('a11y-canary-short')).length : 0
     const need = ['aria-prohibited-attr', 'color-contrast']
     const counts = Object.fromEntries(r.violations.map((v) => [v.id, v.nodes.length]))
     counts[UNLABELLED] = unl
     counts[DUPLICATE_ID] = dup
+    counts[CONTRAST_FALLBACK] = low
     const ratchet = compare({ axe: axeVersion, tags: TAGS, states: { canary: {} } },
       { axe: axeVersion, tags: TAGS, states: { canary: { status: 'ok', counts } } })
-    const ok = need.every((id) => found.includes(id)) && unl === 1 && dup === 1 && !ratchet.ok
-    return { ok, found, unlabelled: unl, duplicateIds: dup, ratchetFailed: !ratchet.ok }
+    const ok = need.every((id) => found.includes(id)) && unl === 1 && dup === 1 && low === 1 && !ratchet.ok
+    return { ok, found, unlabelled: unl, duplicateIds: dup, contrastFallback: low, ratchetFailed: !ratchet.ok }
   } catch (e) {
     return { ok: false, error: String(e.message || e).split('\n')[0] }
   } finally {
@@ -215,7 +270,8 @@ function writeReports (out, report) {
     `- axe-core ${report.axe}, tags ${report.tags.join(', ')}, ${report.rules.length} rules; ${report.browser}`,
     `- States: ${Object.keys(report.states).length}; findings ${report.total} (axe violations plus unlabelled controls)`,
     report.canary ? `- Canary: ${report.canary.ok ? 'PASS' : 'FAIL'} (${JSON.stringify(report.canary)})` : '',
-    report.ratchet ? `- Ratchet: ${report.ratchet.ok ? 'PASS' : 'FAIL'}${report.ratchet.baseline ? '' : ' (no baseline yet: measure mode)'}` : '', '',
+    report.ratchet ? `- Ratchet: ${report.ratchet.ok ? 'PASS' : 'FAIL'}${report.ratchet.baseline ? '' : ' (no baseline yet: measure mode)'}` : '',
+    (() => { const t = { measured: 0, map: 0, unresolved: 0 }; for (const st of Object.values(report.states)) for (const k of Object.keys(t)) t[k] += st.contrastReview?.[k] || 0; return `- Contrast axe left for review: ${t.measured} measured directly by this run, ${t.map} over map tiles (out of scope), ${t.unresolved} not resolvable` })(), '',
     '| Screen | ' + cols.join(' | ') + ' |', '|---|' + cols.map(() => '---').join('|') + '|',
     ...Object.keys(views).sort().map((v) => `| ${v} | ` + cols.map((c) => {
       const x = views[v][c]

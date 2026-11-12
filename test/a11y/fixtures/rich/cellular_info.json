@@ -1,6 +1,6 @@
 {
  "latest": {
-  "cell_id": "EC730B",
+  "cell_id": "000001",
   "created_at": "2026-11-01T09:50:00Z",
   "id": 71180,
   "lac": "",
@@ -12,7 +12,7 @@
   "timestamp": 1793526600
  },
  "live": {
-  "cell_id": "EC730B",
+  "cell_id": "000001",
   "lac": "",
   "mcc": "Check in at the north gate",
   "mnc": "Check in at the north gate",

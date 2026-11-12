@@ -42,11 +42,22 @@ test('no real-looking personal data or infrastructure names', () => {
     [/@(?!example\.)[a-z0-9-]+\.[a-z]/i, 'mail address'],
     [/\b(10\.\d+|192\.168|172\.(1[6-9]|2\d|3[01]))\.\d+\.\d+/, 'private IPv4 address'],
     [/nllei|tesseract|parallax|nuclearlighters|papadopoulos|meshsat\.net/i, 'host or person name of ours'],
-    [/msat-ttc|MSPRLX|MSTSRT/, 'kit channel or callsign']
+    [/msat-ttc|MSPRLX|MSTSRT/, 'kit channel or callsign'],
+    [/"(TESS|PRLX|MSP[A-Z])"|flaneur|E2E-\d/, 'real node short name or crew callsign']
   ]
   for (const f of files) {
     const text = fs.readFileSync(path.join(DIR, f), 'utf8')
     for (const [re, what] of rules) assert.doesNotMatch(text, re, `${f}: ${what}`)
+  }
+})
+
+test('names and ids that identify real nodes, crews or cells are synthetic', () => {
+  for (const f of files) {
+    for (const [k, v] of leaves(JSON.parse(fs.readFileSync(path.join(DIR, f), 'utf8')))) {
+      if (k === 'short_name' && v) assert.match(v, /^NOD[A-Z]$/, `${f}: short_name ${v}`)
+      if (k === 'cell_id' && v) assert.match(v, /^0+1?$/, `${f}: cell_id ${v}`)
+      if (k === 'node_id' && typeof v === 'string' && v && !/^[0-9a-f]+$/.test(v)) assert.match(v, /^(!a11ce[0-9a-f]{3}|TAK-CREW-\d+)$/, `${f}: node_id ${v}`)
+    }
   }
 })
 

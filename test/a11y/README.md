@@ -5,12 +5,21 @@ SIDN deliverable D5 (MESHSAT-1843): contrast and programmatic labels at WCAG 2.1
 ## What it measures
 
 - **Engine:** axe-core 4.13.0 (through @axe-core/playwright 4.13.0) in Chromium from Playwright 1.59.1. Tags `wcag2a`, `wcag2aa`, `wcag21a`, `wcag21aa`. The executed rule ids are listed in every report.
-- **Unlabelled controls:** a second counter, `meshsat-unlabelled-control`. It counts visible form controls with no programmatic label (no `<label>`, `aria-label`, `aria-labelledby` or `title`). axe accepts placeholder text as a name; WCAG 2.1 AA wants a label.
+- **Three counters of its own**, ratcheted like axe's rules:
+  - `meshsat-unlabelled-control`: visible form controls with no programmatic label (no `<label>`, `aria-label`, `aria-labelledby` or `title`). axe accepts placeholder text as a name; WCAG 2.1 AA wants a label.
+  - `meshsat-duplicate-id`: ids used twice where a `<label for>` or an ARIA reference points at them, so only the first element gets the name. axe 4.x no longer reports duplicate ids.
+  - `meshsat-contrast-fallback`: contrast that axe leaves for review (text beside an icon, partly under the sticky header, a single character). Each case is measured directly: the text colour with its own and its ancestors' opacity against the background composited from its ancestors; below 4.5:1 (3:1 for large text) counts. Text over map tiles is skipped (its background is an image). The report gives the tally.
 - **Three shells** (`states.mjs`):
   - `kiosk-operator`: the field kits' 853x480 panel;
   - `kiosk-engineer`: the same panel after someone taps ENG;
   - `desktop-engineer`: 1440x900.
-- **States:** every state a person reaches on the six screens: the header with its Power dialog and More menu, the dashboard and its Customize tray, the five Messages tabs, Inbox, Compose and its contact picker, the map with a marker popup and the geofence form, and every Settings tab of the shell.
+- **States:** every state a person reaches on the six screens:
+  - the header with its Power dialog and More menu;
+  - the dashboard with its Customize tray, widget diagnostics and node detail;
+  - the five Messages tabs, the compose panel, presets and the preset editor, an SMS conversation and the delivery detail;
+  - Inbox, and Compose with its contact picker;
+  - the map with a marker popup, the geofence list and the new-zone form;
+  - every Settings tab of the shell, plus the SIM, SMS contact and OOB peer forms.
 - **Scope of each state:**
   - The header and the bottom navigation are measured once per shell (`shell:*`).
   - Every other state is measured without them.
@@ -41,7 +50,7 @@ SIDN deliverable D5 (MESHSAT-1843): contrast and programmatic labels at WCAG 2.1
 
 When counts fall, the run passes and writes `baseline.next.json`; commit that to lower the baseline. `--update-baseline` refuses to raise a count unless given `--allow-increase "<reason>"`, and keeps the reason in the file.
 
-The canary proves the run can fail. Known defects are injected into the real app: low-contrast text, an input with only a placeholder, and an `aria-label` on a plain `div`. They must be found, and a zero baseline must then fail. `ratchet.test.mjs` covers each rule above.
+The canary proves the run can fail. Known defects are injected into the real app: low-contrast text, an input with only a placeholder, an `aria-label` on a plain `div`, a label whose id is used twice, and a one-character low-contrast count that axe cannot judge. They must be found, and a zero baseline must then fail. `ratchet.test.mjs` covers each rule above.
 
 ## Running it
 

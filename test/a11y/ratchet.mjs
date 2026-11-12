@@ -9,6 +9,8 @@
 export const UNLABELLED = 'meshsat-unlabelled-control'
 // Ids used twice where a label or ARIA reference points at them.
 export const DUPLICATE_ID = 'meshsat-duplicate-id'
+// Contrast axe left undecided, measured directly (run.mjs FALLBACK).
+export const CONTRAST_FALLBACK = 'meshsat-contrast-fallback'
 
 const sum = (counts) => Object.values(counts || {}).reduce((n, c) => n + c, 0)
 
