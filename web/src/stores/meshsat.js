@@ -1406,6 +1406,15 @@ export const useMeshsatStore = defineStore('meshsat', () => {
   function deviceHealthFor(name) {
     return (deviceHealth.value.targets || []).find(t => t.name === name) || null
   }
+  // Device reliability log (MESHSAT-1842): a hands-on fix, and a device
+  // taken out of the kit or put back. Both land in the signed audit log.
+  async function noteDeviceFix(target, action, caseOpened, note = '') {
+    await api.post(`/devices/health/${encodeURIComponent(target)}/note`, { action, case_opened: caseOpened, note })
+  }
+  async function setDeviceFitted(target, fitted, note = '') {
+    await api.post(`/devices/health/${encodeURIComponent(target)}/fitted`, { fitted, note })
+    await fetchDeviceHealth()
+  }
 
   // Access Rules (v0.3.0)
   async function fetchAccessRules() {
@@ -2008,7 +2017,7 @@ export const useMeshsatStore = defineStore('meshsat', () => {
     iridiumGeolocation, triggerIridiumGeolocation,
     interfaces, fetchInterfaces, createInterface, updateInterface, deleteInterface, bindDevice, unbindDevice, generateEncryptionKey,
     devices, devicesLoaded, fetchDevices, usbDevices, fetchUSBDevices,
-    deviceHealth, fetchDeviceHealth, deviceHealthFor,
+    deviceHealth, fetchDeviceHealth, deviceHealthFor, noteDeviceFix, setDeviceFitted,
     accessRules, fetchAccessRules, createAccessRule, updateAccessRule, deleteAccessRule,
     objectGroups, fetchObjectGroups, createObjectGroup, updateObjectGroup, deleteObjectGroup,
     failoverGroups, fetchFailoverGroups, createFailoverGroup, deleteFailoverGroup,

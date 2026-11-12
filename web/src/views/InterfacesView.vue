@@ -505,6 +505,56 @@ function deviceHealthClass(row) {
   return 'text-gray-500'
 }
 
+// Device reliability log (MESHSAT-1842, SIDN D4): the watchdog records
+// every wedge by itself; an operator adds what it cannot see, a fix done by
+// hand (and whether the case had to be opened) or a device taken out of the
+// kit. Both go to the signed audit log through the bridge.
+const deviceLabels = {
+  mesh: 'Mesh radio', cellular: 'Cellular modem', zigbee: 'ZigBee coordinator', rtl_sdr: 'RTL-SDR receiver',
+  gps: 'GPS receiver', imt: 'Iridium 9704 (IMT)', iridium: 'Iridium 9602/9603 (SBD)', aprs: 'APRS radio',
+  display: 'Touch display', kit: 'The whole kit',
+}
+function deviceLabel(name) { return deviceLabels[name] || name }
+const fixActions = [
+  { id: 're-seat', label: 'Re-seated it' }, { id: 'button', label: 'Pressed a button on it' },
+  { id: 'power-cycle', label: 'Power-cycled it' }, { id: 'swap', label: 'Swapped it for another unit' },
+  { id: 'reflash', label: 'Reflashed it' }, { id: 'other', label: 'Something else (say what in the note)' },
+]
+const logTargets = computed(() => {
+  const watched = (store.deviceHealth?.targets || []).filter(t => t.name !== 'sms_credit')
+  return [...watched, { name: 'display', noteOnly: true }, { name: 'kit', noteOnly: true }]
+})
+const logForm = ref(null) // { kind: 'fix' | 'removed' | 'fitted', target, action, caseOpened, note }
+const logStatus = ref('')
+const logFormTitle = computed(() => {
+  const f = logForm.value
+  if (!f) return ''
+  if (f.kind === 'removed') return `${deviceLabel(f.target)}: taken out of the kit`
+  if (f.kind === 'fitted') return `${deviceLabel(f.target)}: fitted again`
+  return `${deviceLabel(f.target)}: a fix done by hand`
+})
+function openLogForm(kind, target) {
+  logStatus.value = ''
+  logForm.value = { kind, target, action: 're-seat', caseOpened: null, note: '' }
+}
+async function saveLogForm() {
+  const f = logForm.value
+  if (!f) return
+  try {
+    if (f.kind === 'fix') {
+      if (f.caseOpened === null) { logStatus.value = 'Say whether the case had to be opened, then save.'; return }
+      await store.noteDeviceFix(f.target, f.action, f.caseOpened, f.note)
+      logStatus.value = `Saved to the signed log: ${deviceLabel(f.target)}.`
+    } else {
+      await store.setDeviceFitted(f.target, f.kind === 'fitted', f.note)
+      logStatus.value = f.kind === 'fitted' ? `${deviceLabel(f.target)} is watched again.` : `${deviceLabel(f.target)} is marked as removed and no longer watched.`
+    }
+    logForm.value = null
+  } catch (e) {
+    logStatus.value = `Not saved: ${e?.message || e}`
+  }
+}
+
 // Known mesh nodes for the node picker
 const knownNodes = computed(() => {
   return (store.nodes || []).map(n => ({
@@ -1082,6 +1132,63 @@ onUnmounted(() => {
         <div v-if="deviceHealthText(dev)" class="text-xs mt-1" :class="deviceHealthClass(dev)"
           data-testid="device-health">{{ deviceHealthText(dev) }}</div>
       </div>
+
+      <!-- Device reliability log (MESHSAT-1842, SIDN D4) -->
+      <section class="mt-8" aria-labelledby="device-log-heading" data-testid="device-log">
+        <h3 id="device-log-heading" class="text-sm font-semibold text-gray-200">Device reliability log</h3>
+        <p class="text-xs text-gray-400 mt-1 mb-3">The watchdog records every wedge by itself. Add what it cannot see: a fix done by hand, whether the case had to be opened, and a device taken out of the kit.</p>
+        <div v-for="t in logTargets" :key="t.name"
+          class="flex items-center justify-between gap-2 flex-wrap bg-gray-800 rounded-lg px-4 py-2 border border-gray-700 mb-2">
+          <div class="flex items-center gap-2">
+            <span class="text-sm text-gray-200">{{ deviceLabel(t.name) }}</span>
+            <span v-if="t.removed" class="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-gray-700 text-gray-200">removed</span>
+            <span v-else-if="!t.noteOnly && t.state" class="text-xs text-gray-400">{{ t.state }}</span>
+          </div>
+          <div class="flex items-center gap-3">
+            <button type="button" class="text-xs text-teal-300 hover:text-teal-200" @click="openLogForm('fix', t.name)">Log a hands-on fix</button>
+            <button v-if="!t.noteOnly && !t.external && !t.removed" type="button" class="text-xs text-gray-300 hover:text-gray-100"
+              @click="openLogForm('removed', t.name)">Mark removed</button>
+            <button v-if="t.removed" type="button" class="text-xs text-gray-300 hover:text-gray-100"
+              @click="openLogForm('fitted', t.name)">Mark fitted again</button>
+          </div>
+        </div>
+        <form v-if="logForm" class="bg-gray-800 rounded-lg p-4 border border-teal-700 mt-3 space-y-3"
+          aria-labelledby="device-log-form-heading" @submit.prevent="saveLogForm">
+          <h4 id="device-log-form-heading" class="text-sm font-medium text-gray-200">{{ logFormTitle }}</h4>
+          <template v-if="logForm.kind === 'fix'">
+            <div>
+              <label for="device-log-action" class="block text-xs text-gray-300 mb-1">What was done</label>
+              <select id="device-log-action" v-model="logForm.action"
+                class="block w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-sm text-gray-200">
+                <option v-for="a in fixActions" :key="a.id" :value="a.id">{{ a.label }}</option>
+              </select>
+            </div>
+            <fieldset>
+              <legend class="text-xs text-gray-300 mb-1">Did the case have to be opened?</legend>
+              <div class="flex gap-4">
+                <span class="inline-flex items-center gap-1">
+                  <input id="device-log-case-yes" v-model="logForm.caseOpened" type="radio" name="device-log-case" :value="true">
+                  <label for="device-log-case-yes" class="text-sm text-gray-200">Yes</label>
+                </span>
+                <span class="inline-flex items-center gap-1">
+                  <input id="device-log-case-no" v-model="logForm.caseOpened" type="radio" name="device-log-case" :value="false">
+                  <label for="device-log-case-no" class="text-sm text-gray-200">No</label>
+                </span>
+              </div>
+            </fieldset>
+          </template>
+          <div>
+            <label for="device-log-note" class="block text-xs text-gray-300 mb-1">Note (optional)</label>
+            <input id="device-log-note" v-model="logForm.note" type="text" maxlength="200"
+              class="block w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-sm text-gray-200">
+          </div>
+          <div class="flex gap-2">
+            <button type="submit" class="px-3 py-1.5 rounded bg-teal-700 hover:bg-teal-800 text-white text-xs font-medium">Save to the log</button>
+            <button type="button" class="px-3 py-1.5 rounded bg-gray-700 text-gray-200 text-xs" @click="logForm = null">Cancel</button>
+          </div>
+        </form>
+        <p v-if="logStatus" class="text-xs text-gray-300 mt-2" role="status">{{ logStatus }}</p>
+      </section>
 
       <!-- WiFi adapters (non-serial, but devices in the same sense).
            Listed here so the Devices tab is the one place an operator
