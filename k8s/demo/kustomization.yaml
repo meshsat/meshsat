@@ -26,4 +26,4 @@ resources:
 
 images:
   - name: ghcr.io/meshsat/meshsat
-    digest: sha256:31880cafab67669fdd0080893c8e0140054db69ad8d10abfa8245a0e78ae9164  # demo-b154f4bf (2026-11-13)
+    digest: sha256:7ea3182cb9883133980fd62343802976bbafd569c1caa0e8d0e9215f3aed0e08  # demo-4c98e447 (2026-11-13)
