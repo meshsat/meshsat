@@ -14,10 +14,18 @@
 # -------------------------------------------------------------------- rules
 
 [rules]
-# The owner, 13 November 2026: the PicoAPRS sits inside the sealed case and
-# switches on again only with its PTT button, so a silent TNC that ended was
-# cleared by hand with the case opened.
-picoaprs_silence_cleared_by_ptt = true
+# Off since 13 November 2026 (afternoon). The first export read every
+# PicoAPRS silence whose end the kit did not log as cleared by a PTT press
+# with the case opened. The owner pressed the PTT button 2 or 3 times between
+# September and 13 November, so that reading over-counted: those silences now
+# show "end not logged". A press is still the case opened.
+picoaprs_silence_cleared_by_ptt = false
+
+# Corrections to an export already published, printed at the top of every
+# later export.
+[[correction]]
+date = "2026-11-13"
+text = "The first export of 13 November 2026 counted 65 PicoAPRS receive silences as cleared by hand with a press of the radio's PTT button, the case opened. The kits logged when each silence began, not how it ended, and the PTT button was pressed 2 or 3 times in that period. Those silences now show \"end not logged\"; the totals for \"cleared by hand\" and \"case opened\" went down by the same number."
 
 # ---------------------------------------------------------------- inventory
 # Confirmed by the owner on 13 November 2026; the kits also carry a signed

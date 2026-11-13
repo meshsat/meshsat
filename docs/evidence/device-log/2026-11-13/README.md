@@ -2,6 +2,8 @@
 
 SIDN fonds project 261042, deliverable D4: every time a radio or modem on the two MeshSat field kits locked up, which device it was, when, what cleared it and whether the case had to be opened, published with the kits' powered hours. A wedge is a device that stops answering until something resets it.
 
+**Correction, 13 November 2026:** The first export of 13 November 2026 counted 65 PicoAPRS receive silences as cleared by hand with a press of the radio's PTT button, the case opened. The kits logged when each silence began, not how it ended, and the PTT button was pressed 2 or 3 times in that period. Those silences now show "end not logged"; the totals for "cleared by hand" and "case opened" went down by the same number.
+
 ## Result
 
 |  | tesseract | parallax |
@@ -9,14 +11,14 @@ SIDN fonds project 261042, deliverable D4: every time a radio or modem on the tw
 | Wedges recorded automatically | 294 | 286 |
 | ... the watchdog's own software step | 174 | 180 |
 | ... came back by itself | 47 | 36 |
-| ... cleared by hand | 35 | 36 |
+| ... cleared by hand | 2 | 4 |
 | ... came back with no software step that acted (a hand, a restart or the device itself) | 4 | 6 |
 | ... never recovered; the device was taken out of the kit | 2 | 2 |
-| ... end not logged | 31 | 25 |
+| ... end not logged | 64 | 57 |
 | ... still open when the log was read | 1 | 1 |
-| Case opened | 35 | 37 |
+| Case opened | 2 | 5 |
 | Case not opened | 221 | 215 |
-| Case opened or not: not recorded | 35 | 31 |
+| Case opened or not: not recorded | 68 | 63 |
 | Reboots the mesh radio reported (logged since 13 November 2026) | 0 | 0 |
 | Powered hours since 13 September 2026 | 818 | 819 |
 | Automatic log starts | 2026-09-05T21:38:20Z | 2026-09-05T21:38:20Z |
@@ -27,7 +29,7 @@ Read from the kits on 2026-11-13T08:05:36Z. Every wedge, with its steps and the 
 
 | Device | Wedges | Software step | By itself | By hand | No step acted | Restart | Taken out | End not logged | Still open | Longest (hours) |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| APRS radio | 219 | 106 | 11 | 65 | 0 | 0 | 0 | 35 | 2 | 50.5 |
+| APRS radio | 219 | 106 | 11 | 0 | 0 | 0 | 0 | 100 | 2 | 50.5 |
 | ZigBee coordinator | 148 | 66 | 70 | 0 | 10 | 0 | 0 | 2 | 0 | 3.9 |
 | RTL-SDR receiver | 120 | 101 | 1 | 5 | 0 | 0 | 2 | 11 | 0 | 47.9 |
 | mesh radio | 69 | 67 | 1 | 0 | 0 | 0 | 0 | 1 | 0 | 2.8 |
@@ -52,7 +54,7 @@ Read from the kits on 2026-11-13T08:05:36Z. Every wedge, with its steps and the 
 - A wedge starts when the watchdog calls a device unhealthy and ends when it answers again. The hourly restarts of a ladder that ran out, and a silent radio reported again after each restart, belong to the same wedge.
 - **What cleared it.** A software step is credited only when the device answered within that step's grace window, about three minutes at most. A step whose own error says the thing it acts on was missing (no switchable hub port, no such device) is never credited.
 - **By itself.** A device that answered again within 5 minutes with no step that acted, or an APRS receiver that decoded a frame again with no reset in between, is put down as having come back by itself, case not opened. This is an inference and is marked as one.
-- **Case opened.** A software step never needs the case opened. A PicoAPRS that went silent switches on again only with its PTT button, inside the sealed case, so such a silence that ended counts as cleared by hand with the case opened. Anything else is "not recorded" until a note from the kit or an answer in `history.toml` says otherwise.
+- **Case opened.** A software step never needs the case opened. A press of the PicoAPRS's PTT button does, since the radio sits inside the sealed case; it counts only where a note from the kit or an answer in `history.toml` records it. Anything else is "not recorded".
 - **Taken out.** A device taken out of the kit is not wedged: its rows after the removal are left out, and a wedge open at the removal is closed by it.
 - **Older rows.** Before 13 November 2026 the watchdog did not log a device that left the USB bus while wedged, the end of a PicoAPRS silence, or its own restarts. For those rows the reading is an inference, marked in the `inferred` column.
 

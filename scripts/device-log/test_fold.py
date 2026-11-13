@@ -265,6 +265,23 @@ class Fold(unittest.TestCase):
         fold.apply_rules(res.wedges, {"picoaprs_silence_cleared_by_ptt": True})
         self.assertEqual([(w.cleared_by, w.case_opened) for w in res.wedges], [("by_hand", "yes"), ("open", "n/a")])
 
+    def test_with_the_ptt_rule_off_an_unlogged_end_stays_not_recorded(self):
+        # The owner pressed the PTT button 2 or 3 times from September to
+        # 13 November 2026, so the rule is off: a silence whose end the kit
+        # did not log is not a press. [MESHSAT-1842]
+        t = Tape()
+        t.at(0).aprs("APRS TNC silent: no bytes from the TNC for 30m2s since the link opened; a PicoAPRS that is off needs a 3 s PTT press")
+        t.at(8 * 60).aprs("APRS TNC silent: no bytes from the TNC for 30m1s since the link opened; a PicoAPRS that is off needs a 3 s PTT press")
+        res = fold.fold("tesseract", t.rows, current={"aprs": "degraded"})
+        fold.apply_rules(res.wedges, {"picoaprs_silence_cleared_by_ptt": False})
+        self.assertEqual([(w.cleared_by, w.case_opened) for w in res.wedges], [("not_recorded", "not recorded"), ("open", "n/a")])
+
+    def test_the_history_file_keeps_the_ptt_rule_off(self):
+        import tomllib
+        hist = tomllib.loads((Path(__file__).resolve().parents[2] / "docs/evidence/device-log/history.toml").read_text())
+        self.assertFalse(hist["rules"]["picoaprs_silence_cleared_by_ptt"])
+        self.assertTrue(any("2 or 3 times" in c["text"] for c in hist.get("correction", [])))
+
 
 class Helpers(unittest.TestCase):
     def test_redaction(self):
