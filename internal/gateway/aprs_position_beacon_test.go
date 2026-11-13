@@ -135,7 +135,13 @@ func TestPositionBeaconLine(t *testing.T) {
 	g.SetSelfPosition(func() (selfpos.Fix, bool) { return selfpos.Fix{Latitude: 52.3676, Longitude: 4.9041}, true })
 	startGateway(t, g)
 	f.waitLine(t, "N0CALL-10>APMSHT,TCPIP*:!5222.06N/00454.25E-MeshSat", 5*time.Second)
+	// The fake reads the line before the worker counts it: the count follows
+	// the write's return, so give it a moment on a loaded runner.
 	st := g.GetAPRSStatus()
+	for deadline := time.Now().Add(2 * time.Second); st["position_beacons"] != int64(1) && time.Now().Before(deadline); {
+		time.Sleep(10 * time.Millisecond)
+		st = g.GetAPRSStatus()
+	}
 	if st["position_beacons"] != int64(1) || st["last_beacon_at"] == "" {
 		t.Fatalf("status after one beacon: position_beacons %v last_beacon_at %v", st["position_beacons"], st["last_beacon_at"])
 	}
