@@ -210,6 +210,15 @@ class Fold(unittest.TestCase):
         w = one(fold.fold("parallax", t2.rows), "cellular")
         self.assertEqual((w.cleared_detail, w.case_opened), ("ended with a kit power cycle", "not recorded"))
 
+    def test_a_restart_does_not_claim_a_wedge_that_went_quiet_long_before(self):
+        t = Tape()
+        t.at(0).add("gps: gps unhealthy: port open, no NMEA sentence yet (3 consecutive misses)")
+        t.at(1).add('gps: gps: level 3 rung "USB reset" needs operator confirm (POST /api/devices/health/gps/heal {"level":3,"confirm":true})')
+        t.at(5000).add("watchdog: watchdog started (boot aaaaaaaa)")
+        w = one(fold.fold("parallax", t.rows), "gps")
+        self.assertEqual(w.cleared_by, "not_recorded")
+        self.assertIsNone(w.ended)
+
     def test_a_wedge_reported_again_right_after_a_restart_carries_on(self):
         t = Tape()
         t.at(0).add("mesh: mesh unhealthy: radio silent (3 consecutive misses)")
@@ -245,6 +254,16 @@ class Fold(unittest.TestCase):
         self.assertEqual(left, [])
         self.assertEqual([w.case_opened for w in res.wedges], ["not recorded", "yes"])
         self.assertEqual(res.wedges[1].cleared_by, "by_hand")
+
+
+    def test_the_ptt_rule_answers_every_ended_picoaprs_silence(self):
+        t = Tape()
+        t.at(0).aprs("APRS TNC silent: no bytes from the TNC for 30m2s since the link opened; a PicoAPRS that is off needs a 3 s PTT press")
+        t.at(60).aprs("APRS TNC talking again after its silence (no step ran: the radio was switched on)")
+        t.at(2000).aprs("APRS TNC silent: no bytes from the TNC for 30m1s since the link opened; a PicoAPRS that is off needs a 3 s PTT press")
+        res = fold.fold("tesseract", t.rows, current={"aprs": "degraded"})
+        fold.apply_rules(res.wedges, {"picoaprs_silence_cleared_by_ptt": True})
+        self.assertEqual([(w.cleared_by, w.case_opened) for w in res.wedges], [("by_hand", "yes"), ("open", "n/a")])
 
 
 class Helpers(unittest.TestCase):

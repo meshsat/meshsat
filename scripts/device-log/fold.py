@@ -317,7 +317,7 @@ def _close(w: Wedge, at: datetime, how: str, detail: str, case: str, source: str
 
 
 def fold(kit: str, raw_rows: list[dict], inventory: list[Inventory] | None = None,
-         current: dict[str, str] | None = None) -> FoldResult:
+         current: dict[str, str] | None = None, read_at: datetime | None = None) -> FoldResult:
     """Fold one kit's audit rows (any order, any event types) into wedges.
 
     inventory holds removals known from the project's notes, for the time
@@ -394,8 +394,14 @@ def fold(kit: str, raw_rows: list[dict], inventory: list[Inventory] | None = Non
             starts.append(r)
             kind = "kit power cycle" if last_boot is not None and r.boot not in (last_boot, "unknown") else "bridge restart"
             last_boot = r.boot
-            for w in open_w.values():
-                w.restart_at, w.restart_kind = r.ts, kind
+            for dev in list(open_w):
+                close_open_before_removal(dev, r.ts)
+            for w in list(open_w.values()):
+                window = TNC_CARRY if "TNC silent" in w.symptom else CARRY_OVER
+                if w.last_seen and r.ts - w.last_seen > window:
+                    end_unseen(w)  # long quiet before the restart: it ended unseen earlier
+                else:
+                    w.restart_at, w.restart_kind = r.ts, kind
             continue
         if r.kind in ("removed", "fitted", "other"):
             if r.kind == "removed":
@@ -502,6 +508,11 @@ def fold(kit: str, raw_rows: list[dict], inventory: list[Inventory] | None = Non
         rem = removed_at(dev, last or w.started)
         if rem and rem.at >= w.started:
             close_open_before_removal(dev, last or w.started)
+        elif w.restart_at and read_at is not None and read_at - w.restart_at < (TNC_CARRY if "TNC silent" in w.symptom else CARRY_OVER):
+            # The kit restarted moments before the read: the watchdog has
+            # not had the time to report the device again.
+            w.cleared_by, w.cleared_detail, w.case_opened = "open", "still open when the log was read (the kit had just restarted)", "n/a"
+            finish(dev)
         elif w.restart_at or (current is not None and current.get(dev, "") not in ("degraded", "healing", "failed", "silent", "deaf")):
             end_unseen(w)
         else:
@@ -582,6 +593,21 @@ def apply_answers(wedges: list[Wedge], answers: list[dict]) -> list[dict]:
         if a.get("note"):
             hit.notes.append(a["note"])
     return unmatched
+
+
+def apply_rules(wedges: list[Wedge], rules: dict) -> None:
+    """Standing answers from history.toml's [rules] table.
+
+    picoaprs_silence_cleared_by_ptt: a PicoAPRS sits inside the sealed case
+    and switches on again only with its PTT button, so a silent TNC that
+    ended was cleared by hand with the case opened."""
+    if rules.get("picoaprs_silence_cleared_by_ptt"):
+        for w in wedges:
+            if w.device == "aprs" and "TNC silent" in w.symptom and w.cleared_by in ("came_back", "not_recorded") \
+                    and w.case_source not in ("note", "answer"):
+                w.cleared_by = "by_hand"
+                w.cleared_detail = "PTT held on the PicoAPRS, the only way to switch it on" + ("" if w.ended else " (when, the log does not say)")
+                w.case_opened, w.case_source = "yes", "rule"
 
 
 # ------------------------------------------------------------ powered time

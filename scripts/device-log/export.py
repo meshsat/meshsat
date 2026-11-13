@@ -169,9 +169,10 @@ def main() -> int:
     results = {}
     for kit in KITS:
         current = {t["name"]: t.get("state", "") for t in raw[kit]["health"].get("targets", [])}
-        res = fold.fold(kit, raw[kit]["rows"], inv, current)
+        res = fold.fold(kit, raw[kit]["rows"], inv, current, fold.parse_ts(raw[kit]["fetched_at"]))
         answers = [a for a in hist.get("answer", []) if a["kit"] == kit]
         res_unmatched = fold.apply_answers(res.wedges, answers)
+        fold.apply_rules(res.wedges, hist.get("rules", {}))
         bridge_rows = [{"boot_id": b["boot"], "first_seen": b["first_seen"], "last_seen": b["last_seen"]} for b in raw[kit]["power"].get("boots", [])]
         power = fold.powered_hours(raw[kit]["journal_boots"], bridge_rows)
         results[kit] = {"fold": res, "unmatched_answers": res_unmatched, "power": power, "raw": raw[kit]}
