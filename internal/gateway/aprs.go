@@ -224,6 +224,14 @@ func (g *APRSGateway) ReopenTNC(ctx context.Context) error {
 // radio side to drop as well. [MESHSAT-1896]
 const TNCResetHold = 5 * time.Second
 
+// TNCBootWait is how long ResetTNC waits after the release for the radio to
+// boot before it reports done, so whatever goes out next (an OOB reply over
+// APRS) finds a radio that can transmit. On 13 Nov 2026 the reply to RESET
+// aprs 2 went out 2 s and 6 s after the release and was lost; frames sent
+// 15 s after a release were heard. A package var so tests need not wait.
+// [MESHSAT-1896]
+var TNCBootWait = 15 * time.Second
+
 // ResetTNC resets the hardware TNC through its USB chip's control lines
 // (KISSConn.ResetTNC) without closing the link: the receive watchdog's step
 // for a TNC that has sent no byte since its link opened, POST
@@ -239,6 +247,13 @@ func (g *APRSGateway) ResetTNC(ctx context.Context) error {
 		return err
 	}
 	log.Info().Str("kiss", g.kiss.Target()).Dur("hold", TNCResetHold).Msg("aprs: TNC reset over its USB lines")
+	t := time.NewTimer(TNCBootWait)
+	defer t.Stop()
+	select {
+	case <-t.C:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 	return nil
 }
 

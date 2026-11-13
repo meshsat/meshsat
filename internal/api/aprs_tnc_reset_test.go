@@ -29,7 +29,7 @@ func TestAPRSTNCReset(t *testing.T) {
 		t.Fatalf("reset: %d by %q, want 200 by API", rec.Code, by)
 	}
 	var body map[string]any
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || body["ok"] != true || body["held_ms"] != float64(5000) {
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || body["ok"] != true || body["held_ms"] != float64(5000) || body["boot_wait_ms"] != float64(15000) {
 		t.Fatalf("body %s", rec.Body.String())
 	}
 

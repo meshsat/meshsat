@@ -144,8 +144,9 @@ The APRS target has two agent roles: `aioc` on a sound-card kit, resolved by its
 and `aprs` on a hardware-TNC kit, resolved only from the tty. `RESET aprs 3` on a TNC kit cuts
 the TNC's hub port and lets the executor restart `aprs_0` ten seconds later, falling back to a
 link reopen plus gateway restart when the port is not switchable. `RESET aprs 2` on a TNC kit
-resets the TNC's processor over its USB chip's control lines (DTR off, RTS on for 5 s, RTS off),
-with the link left open: on the PicoAPRS V4 that is the only remote reset that reaches the radio,
+resets the TNC's processor over its USB chip's control lines (DTR off, RTS on for 5 s, RTS off)
+and waits 15 s for the radio to boot before it replies, with the link left open (a reply sent
+sooner went out while the radio was still booting and was lost): on the PicoAPRS V4 that is the only remote reset that reaches the radio,
 which runs on its own cell, and it cleared both kits' units on 13 November 2026 after they had
 stopped transmitting and reporting frames. The receive watchdog runs the same reset by itself
 for a TNC that has sent no byte since its link opened, and `POST /api/aprs/tnc/reset` asks for it
