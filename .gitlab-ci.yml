@@ -228,6 +228,10 @@ test:
   script:
     - cd ${CI_PROJECT_DIR}
     - go mod download
+    # The four safety-chain tests by name first, so the log shows each one
+    # passed or failed (SIDN fonds project 261042, deliverable D2). [MESHSAT-1136]
+    - go test -count=1 -v -run '^TestSafetyChain' ./internal/api/ ./cmd/meshsat/ > safety-chain.log 2>&1 || { cat safety-chain.log; exit 1; }
+    - grep -E '^ *--- |^ok' safety-chain.log
     # Per-package timeout. 900s headroom lets internal/api and
     # internal/engine finish under runner contention (three concurrent
     # pipelines can double their wall time). Historical green runs sit
