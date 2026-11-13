@@ -125,6 +125,13 @@ type APRSConfig struct {
 	// value from TXRepeatGapMs rather than sharing it. [MESHSAT-1021]
 	BeaconRepeatGapMs int `json:"beacon_repeat_gap_ms"`
 
+	// BeaconCopies sets how many copies of each BEACON go out, apart from
+	// TXRepeat, which keeps covering messages. 0 = the same as TXRepeat (as
+	// before). The kits beacon every 3 min with one copy since 13 Nov 2026
+	// (owner): 20 transmissions an hour on 144.800 instead of the booth's
+	// 240, while messages keep their second copy. [MESHSAT-1896]
+	BeaconCopies int `json:"beacon_copies"`
+
 	// Per-message acknowledgement for encrypted frames, which only a MeshSat
 	// peer can read. The sender appends an APRS message id and waits for the
 	// peer's standard APRS ack; a frame that is not acked within AckTimeoutMs

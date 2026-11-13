@@ -1013,6 +1013,11 @@ func (g *APRSGateway) beaconWorker(ctx context.Context) {
 		// a message: copies are the cheapest insurance against a false
 		// "deaf" verdict on the far kit. [MESHSAT-857]
 		copies := g.config.TXRepeat
+		if g.config.BeaconCopies > 0 {
+			// Its own count since MESHSAT-1896: a slow beacon sent once,
+			// messages still sent twice.
+			copies = g.config.BeaconCopies
+		}
 		if copies < 1 {
 			copies = 1
 		}

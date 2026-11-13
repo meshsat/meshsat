@@ -733,3 +733,42 @@ func TestAPRSIntegration_BeaconRepeat(t *testing.T) {
 		t.Fatalf("beacon frames sent: %d, want 2 (one beacon, two copies)", beacons)
 	}
 }
+
+// BeaconCopies sends a beacon once while messages keep TXRepeat's second
+// copy: the kits' setting since 13 Nov 2026 (every 3 min, once). [MESHSAT-1896]
+func TestAPRSIntegration_BeaconCopiesApartFromMessages(t *testing.T) {
+	tnc := newMockKISSTNC(t)
+	defer tnc.close()
+	host, port := splitHostPort(t, tnc.addr())
+	gw := NewAPRSGateway(APRSConfig{KISSHost: host, KISSPort: port, Callsign: "TEST", SSID: 10, FrequencyMHz: 144.800, ExternalDirewolf: true,
+		BeaconSecs: 60, BeaconCopies: 1, TXRepeat: 2, TXRepeatGapMs: 100}, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := gw.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer gw.Stop()
+	time.Sleep(2 * time.Second)
+	if err := gw.Forward(ctx, &transport.MeshMessage{From: 0xAABBCCDD, PortNum: 1, DecodedText: "keepalive", MsgRef: "k1"}); err != nil {
+		t.Fatalf("forward: %v", err)
+	}
+	time.Sleep(5 * time.Second)
+	beacons, others := 0, 0
+	for _, f := range tnc.frames() {
+		ax, err := DecodeAX25Frame(f)
+		if err != nil || len(ax.Info) == 0 {
+			continue
+		}
+		if ax.Info[0] == '>' {
+			beacons++
+		} else {
+			others++
+		}
+	}
+	if beacons != 1 {
+		t.Fatalf("beacon frames sent: %d, want 1", beacons)
+	}
+	if others != 2 {
+		t.Fatalf("message frames sent: %d, want 2 (one message, two copies)", others)
+	}
+}
