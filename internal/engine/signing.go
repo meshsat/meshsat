@@ -234,6 +234,8 @@ func (ss *SigningService) AuditEvent(eventType string, interfaceID, direction *s
 	defer ss.mu.Unlock()
 
 	now := time.Now().UTC().Format("2006-01-02T15:04:05Z")
+	// No message text, number, address or IP in a new row. [MESHSAT-1137]
+	detail = MinimizeAuditDetail(eventType, detail)
 
 	// Compute hash: SHA-256(prev_hash + timestamp + event_type + detail)
 	h := sha256.New()
@@ -285,7 +287,9 @@ func (ss *SigningService) VerifyChain(limit int) (valid int, brokenAt int) {
 		h.Write([]byte(entry.Detail))
 		expected := hex.EncodeToString(h.Sum(nil))
 
-		if entry.Hash != expected {
+		// A row redacted after the retention period keeps its stored hash
+		// and its link; its hash no longer recomputes. [MESHSAT-1137]
+		if entry.RedactedAt == nil && entry.Hash != expected {
 			return i, i
 		}
 		// Each row must also point at the row before it: a row deleted

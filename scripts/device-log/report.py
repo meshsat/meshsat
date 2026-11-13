@@ -198,12 +198,17 @@ def readme(results: dict, hist: dict, wedges: list, power: dict, generated: str)
                 f"{len(c['bad_link'])} broken links, {len(c['bad_hash'])} hashes that do not recompute.")
         sv = c.get("server_verify") or {}
         # The check runs a moment after the rows are read; a few new rows may land in between.
-        whole = sv.get("verified") is True and sv.get("checked", 0) >= c["rows"] - 50
+        chain = sv.get("chain") or {}
+        whole = (chain.get("broken_at") == -1 and chain.get("rows", 0) >= c["rows"] - 50) or \
+            (sv.get("verified") is True and sv.get("checked", 0) >= c["rows"] - 50)
+        if c.get("redacted"):
+            line += (f" {c['redacted']:,} rows older than the retention period had their personal fields redacted; "
+                     "their links are checked, their hashes no longer recompute, and a checkpoint row signed by the kit records that the chain verified before each redaction.")
         if und:
             line += (f" {len(und)} rows (ids {', '.join(map(str, und))}) hold bytes that are not text, from a relayed binary frame; "
                      "the API shows them with replacement characters, so their hashes can only be recomputed on the kit.")
         if whole:
-            line += f" The kit's own check of the whole chain ({sv['checked']:,} rows, hashes and links) passes."
+            line += f" The kit's own check of the whole chain ({chain.get('rows', sv.get('checked', 0)):,} rows, hashes and links) passes."
         L.append(line)
     L.append("")
     L.append("The published `events.jsonl` holds the device rows only, with their hashes; the other rows of the audit log record messages and stay on the kits.")

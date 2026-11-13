@@ -2358,7 +2358,7 @@ func main() {
 	}()
 
 	// Start retention worker
-	go engine.StartRetentionWorker(ctx, db, cfg.RetentionDays)
+	go engine.StartRetentionWorker(ctx, db, cfg.RetentionDays, signingService)
 
 	// Periodic announce broadcasting — send on all online Reticulum interfaces.
 	// The RNS node runs its own announcer with timestamped random hashes, so

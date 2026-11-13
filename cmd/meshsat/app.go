@@ -608,7 +608,7 @@ func (a *App) Start(ctx context.Context) {
 		}
 	}()
 
-	go engine.StartRetentionWorker(ctx, a.DB, a.Config.RetentionDays)
+	go engine.StartRetentionWorker(ctx, a.DB, a.Config.RetentionDays, nil)
 
 	// Periodic announce broadcasting
 	if a.RoutingIdentity != nil && a.Config.AnnounceIntervalSec > 0 {

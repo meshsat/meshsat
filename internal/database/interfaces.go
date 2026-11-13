@@ -86,6 +86,9 @@ type AuditLogEntry struct {
 	Detail      string  `db:"detail" json:"detail"`
 	PrevHash    string  `db:"prev_hash" json:"prev_hash"`
 	Hash        string  `db:"hash" json:"hash"`
+	// RedactedAt: when the retention redacted this row's personal fields;
+	// its hash then no longer recomputes from its detail. [MESHSAT-1137]
+	RedactedAt *string `db:"redacted_at" json:"redacted_at,omitempty"`
 }
 
 // ---- Interface CRUD ----

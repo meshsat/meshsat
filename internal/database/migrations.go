@@ -2024,6 +2024,14 @@ var migrations = []string{
 		first_seen TEXT NOT NULL,
 		last_seen  TEXT NOT NULL
 	);`,
+
+	// v91: the audit trail is the retention exception, redacted at field
+	// level after the retention period; redacted_at marks a row whose
+	// detail was redacted, so its hash is no longer recomputed and only its
+	// link to the row before is checked. A signed audit_checkpoint row,
+	// written before each redaction, records that the rows verified intact.
+	// [MESHSAT-1137]
+	`ALTER TABLE audit_log ADD COLUMN redacted_at TEXT;`,
 }
 
 // postMigration is what a migration needs to know that its SQL cannot see:

@@ -9,8 +9,11 @@ import (
 	"meshsat/internal/database"
 )
 
-// StartRetentionWorker runs a daily pruning job that deletes records older than retentionDays.
-func StartRetentionWorker(ctx context.Context, db *database.DB, retentionDays int) {
+// StartRetentionWorker runs every retention rule once at start and then
+// daily: the database's rules (database.RetentionRules) and, with signing,
+// the audit trail's field-level redaction. One failing rule does not stop
+// the others. [MESHSAT-1137]
+func StartRetentionWorker(ctx context.Context, db *database.DB, retentionDays int, signing *SigningService) {
 	if retentionDays <= 0 {
 		log.Info().Msg("retention worker disabled (days <= 0)")
 		return
@@ -20,7 +23,7 @@ func StartRetentionWorker(ctx context.Context, db *database.DB, retentionDays in
 	defer ticker.Stop()
 
 	// Run once at startup
-	prune(db, retentionDays)
+	prune(db, retentionDays, signing)
 
 	for {
 		select {
@@ -28,54 +31,26 @@ func StartRetentionWorker(ctx context.Context, db *database.DB, retentionDays in
 			log.Info().Msg("retention worker stopped")
 			return
 		case <-ticker.C:
-			prune(db, retentionDays)
+			prune(db, retentionDays, signing)
 		}
 	}
 }
 
-func prune(db *database.DB, days int) {
-	deleted, err := db.PruneOlderThan(days)
-	if err != nil {
-		log.Error().Err(err).Msg("retention prune failed")
-		return
+func prune(db *database.DB, days int, signing *SigningService) {
+	now := time.Now()
+	for _, r := range db.RunRetention(now, days) {
+		switch {
+		case r.Err != nil:
+			log.Error().Err(r.Err).Str("rule", r.Rule).Msg("retention rule failed")
+		case r.N > 0:
+			log.Info().Str("rule", r.Rule).Int64("rows", r.N).Int("retention_days", days).Msg("retention rule applied")
+		}
 	}
-	if deleted > 0 {
-		log.Info().Int64("deleted", deleted).Int("retention_days", days).Msg("retention prune complete")
-	}
-
-	// Closed delivery intents with their transmissions and evidence, and
-	// the submissions left without one (r3 D2). [MESHSAT-1581]
-	if n, err := db.PruneClosedIntents(days); err != nil {
-		log.Error().Err(err).Msg("delivery intent prune failed")
-	} else if n > 0 {
-		log.Info().Int64("deleted", n).Msg("delivery intents pruned")
-	}
-
-	// The delivery ledger's personal data: rows that ended past the
-	// retention keep time, channel and status and lose payload, text,
-	// destination and error text. The rows stay, so the stats, the SOS
-	// legs and the audit chain still resolve them. After the intent prune,
-	// which archives an intent's facts from its rows first. [MESHSAT-1814]
-	if n, err := db.ScrubEndedDeliveries(days); err != nil {
-		log.Error().Err(err).Msg("delivery ledger scrub failed")
-	} else if n > 0 {
-		log.Info().Int64("scrubbed", n).Int("retention_days", days).Msg("delivery ledger rows scrubbed")
-	}
-
-	// LXMF message ids past their own horizon, whatever the retention days. [MESHSAT-1641]
-	if n, err := db.PruneLXMFMids(time.Now()); err != nil {
-		log.Error().Err(err).Msg("lxmf mid prune failed")
-	} else if n > 0 {
-		log.Info().Int64("deleted", n).Msg("lxmf mids pruned")
-	}
-
-	// Prune sent/expired dead letters (same retention window)
-	dlqDeleted, err := db.PruneDeadLetters(days)
-	if err != nil {
-		log.Error().Err(err).Msg("dlq prune failed")
-		return
-	}
-	if dlqDeleted > 0 {
-		log.Info().Int64("deleted", dlqDeleted).Msg("dlq prune complete")
+	if signing != nil {
+		if n, err := signing.RedactOlderThan(now.AddDate(0, 0, -days), now); err != nil {
+			log.Error().Err(err).Msg("audit trail redaction failed")
+		} else if n > 0 {
+			log.Info().Int64("rows", n).Int("retention_days", days).Msg("audit trail: personal fields redacted after a signed checkpoint")
+		}
 	}
 }

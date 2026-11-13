@@ -56,13 +56,16 @@ while True:
     if len(page) < 1000:
         break
 rows.sort(key=lambda r: r["id"])
-bad_hash, bad_link, undecodable = [], [], []
+bad_hash, bad_link, undecodable, redacted = [], [], [], 0
 for i, r in enumerate(rows):
-    if "�" in r["detail"]:
+    if r.get("redacted_at"):
+        redacted += 1  # redacted after the retention period: its link counts, not its hash
+    elif "�" in r["detail"]:
         undecodable.append(r["id"])
-    h = hashlib.sha256((r["prev_hash"] + r["timestamp"] + r["event_type"] + r["detail"]).encode()).hexdigest()
-    if h != r["hash"] and "�" not in r["detail"]:
-        bad_hash.append(r["id"])
+    else:
+        h = hashlib.sha256((r["prev_hash"] + r["timestamp"] + r["event_type"] + r["detail"]).encode()).hexdigest()
+        if h != r["hash"]:
+            bad_hash.append(r["id"])
     if i and r["prev_hash"] != rows[i - 1]["hash"]:
         bad_link.append(r["id"])
 try:
@@ -78,7 +81,7 @@ out = {
     "chain": {"rows": len(rows), "first_id": rows[0]["id"] if rows else None, "last_id": rows[-1]["id"] if rows else None,
               "first_ts": rows[0]["timestamp"] if rows else None, "last_ts": rows[-1]["timestamp"] if rows else None,
               "id_gaps": (rows[-1]["id"] - rows[0]["id"] + 1 - len(rows)) if rows else 0,
-              "bad_hash": bad_hash, "bad_link": bad_link, "undecodable": undecodable, "server_verify": server},
+              "bad_hash": bad_hash, "bad_link": bad_link, "undecodable": undecodable, "redacted": redacted, "server_verify": server},
     "health": get("/devices/health"),
     "power": power,
 }

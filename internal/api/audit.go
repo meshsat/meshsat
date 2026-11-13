@@ -100,6 +100,11 @@ func (s *Server) handleVerifyAuditChain(w http.ResponseWriter, r *http.Request) 
 		"checked":   limit,
 		"broken_at": brokenAt,
 	}
+	// The whole chain, with the rows redacted after the retention period
+	// counted apart: their links are checked, their hashes not. [MESHSAT-1137]
+	if all, err := s.signing.VerifyAll(); err == nil {
+		result["chain"] = all
+	}
 
 	writeJSON(w, http.StatusOK, result)
 }

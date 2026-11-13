@@ -272,6 +272,8 @@ func TestUpgradeV63DatabaseIsRepaired(t *testing.T) {
 		`ALTER TABLE tak_chat_threads DROP COLUMN reply_here`,
 		`ALTER TABLE message_deliveries DROP COLUMN scrubbed_at`,
 		`ALTER TABLE post_board DROP COLUMN remove_hash`,
+		`DROP TABLE kit_power`,
+		`ALTER TABLE audit_log DROP COLUMN redacted_at`,
 	} {
 		if _, err := db.Exec(q); err != nil {
 			t.Fatal(err)
