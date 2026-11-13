@@ -116,6 +116,9 @@ type RxWatchdog struct {
 	bridgeRestartAt time.Time
 	persistedAt     time.Time
 	silentLinkAt    time.Time // link open time already reported as silent
+	// tncSilent: a silent TNC was reported and has not talked since, so its
+	// first byte is logged as the end of that silence. [MESHSAT-1842]
+	tncSilent bool
 }
 
 // NewRxWatchdog applies defaults to zero fields.
@@ -200,6 +203,13 @@ func (w *RxWatchdog) tick(ctx context.Context) {
 
 	// Anything decoded since the last tick means the receiver works.
 	heard := h.RxFrames > w.lastFrames || (!h.LastDecodeAt.IsZero() && h.LastDecodeAt.After(w.lastHeardAt))
+	if w.tncSilent && (heard || h.BytesIn > 0) {
+		// The radio talks again: someone switched it on (a PicoAPRS needs
+		// a 3 s PTT press). Nothing logged this before, so the reliability
+		// log never saw a silent TNC end. [MESHSAT-1842]
+		w.tncSilent = false
+		w.notify("aprs_rx_recovered", "APRS TNC talking again after its silence (no step ran: the radio was switched on)")
+	}
 	if heard {
 		w.lastFrames = h.RxFrames
 		w.lastHeardAt = now
@@ -243,6 +253,7 @@ func (w *RxWatchdog) tick(ctx context.Context) {
 		}
 		if !w.silentLinkAt.Equal(h.LinkOpenedAt) {
 			w.silentLinkAt = h.LinkOpenedAt
+			w.tncSilent = true
 			w.notify("aprs_rx_silent", fmt.Sprintf("APRS TNC silent: no bytes from the TNC for %s since the link opened; a PicoAPRS that is off needs a 3 s PTT press", now.Sub(h.LinkOpenedAt).Truncate(time.Second)))
 		}
 		w.setState(ReceiveStateSilent)

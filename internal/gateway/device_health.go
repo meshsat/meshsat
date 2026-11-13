@@ -853,25 +853,27 @@ func (d *DeviceHealth) applyProbeLocked(ctx context.Context, ts *healthTargetSta
 }
 
 // recoveryTextLocked words a recovery from an open ladder. The last rung is
-// credited only when it ran without an error and the device answered
-// within its grace window (plus two ticks); otherwise the text says the
-// device came back without a software step that worked, so a re-seat is
-// never booked as a hub-port cut that could not act. [MESHSAT-1842]
+// credited when the device answered within its grace window (plus two
+// ticks); a rung that returned an error is still named, with "though the
+// step reported an error", and the step's own error row says whether it
+// could act at all (a missing hub port cannot). A device that answers only
+// after the grace, or after the ladder gave up, came back without a
+// software step that worked, so a re-seat is never booked as a hub-port
+// cut. [MESHSAT-1842]
 func (d *DeviceHealth) recoveryTextLocked(ts *healthTargetState, now time.Time) string {
 	name := ts.t.Name
 	if ts.step == 0 || ts.stepName == "" || ts.away {
 		return fmt.Sprintf("%s came back without a software step (by hand, by itself or a restart)", name)
 	}
 	late := !ts.graceUntil.IsZero() && now.After(ts.graceUntil.Add(2*d.cfg.Tick))
-	if !ts.stepFailed && ts.state != HealthStateFailed && !late {
-		return fmt.Sprintf("%s recovered after step %d (%s)", name, ts.step, ts.stepName)
+	if ts.state == HealthStateFailed || late {
+		return fmt.Sprintf("%s came back without a software step that worked (by hand, by itself or a restart); the last, step %d (%s), ran %s earlier",
+			name, ts.step, ts.stepName, now.Sub(ts.stepAt).Round(time.Minute))
 	}
-	why := "could not act"
-	if !ts.stepFailed {
-		why = "ran " + now.Sub(ts.stepAt).Round(time.Minute).String() + " earlier"
+	if ts.stepFailed {
+		return fmt.Sprintf("%s recovered after step %d (%s), though the step reported an error", name, ts.step, ts.stepName)
 	}
-	return fmt.Sprintf("%s came back without a software step that worked (by hand, by itself or a restart); the last, step %d (%s), %s",
-		name, ts.step, ts.stepName, why)
+	return fmt.Sprintf("%s recovered after step %d (%s)", name, ts.step, ts.stepName)
 }
 
 // nextStepLocked runs the next rung of the ladder or declares the target failed.

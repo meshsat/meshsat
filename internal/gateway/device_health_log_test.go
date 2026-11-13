@@ -143,7 +143,7 @@ func TestDeviceHealthLog_BackButStillUnhealthyIsTheSameWedge(t *testing.T) {
 	}
 }
 
-func TestDeviceHealthLog_AFailedRungIsNotCredited(t *testing.T) {
+func TestDeviceHealthLog_AFailedRungIsNamedWithItsError(t *testing.T) {
 	h := newDHHarness(DeviceHealthConfig{Misses: 3, Tick: 30 * time.Second})
 	tape := withTape(h)
 	h.dh.Register(h.target("rtl_sdr", nil, failingStep(HealLevelHard, "hub-port power cycle", 90*time.Second)))
@@ -152,7 +152,7 @@ func TestDeviceHealthLog_AFailedRungIsNotCredited(t *testing.T) {
 	h.advance(30 * time.Second)
 	h.ok("rtl_sdr")
 	h.tick(t)
-	tape.wait(t, "rtl_sdr came back without a software step that worked (by hand, by itself or a restart); the last, step 1 (hub-port power cycle), could not act")
+	tape.wait(t, "rtl_sdr recovered after step 1 (hub-port power cycle), though the step reported an error")
 }
 
 func TestDeviceHealthLog_ARecoveryLongAfterTheLadderGaveUpIsNotCredited(t *testing.T) {

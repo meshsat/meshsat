@@ -490,6 +490,22 @@ func TestRxWatchdog_SerialTNCSilentSinceOpen(t *testing.T) {
 	if h.wd.State() != ReceiveStateOK {
 		t.Fatalf("after the first frame: state %q, want ok", h.wd.State())
 	}
+	// The end of the silence is logged once, for the reliability log. [MESHSAT-1842]
+	h.mu.Lock()
+	events = append([]string(nil), h.events...)
+	h.mu.Unlock()
+	if n := len(events); n < 1 || events[n-1] != "aprs_rx_recovered" {
+		t.Fatalf("the silent TNC's return was not logged: %v", events)
+	}
+	h.advance(time.Minute)
+	h.frame()
+	h.wd.tick(ctx)
+	h.mu.Lock()
+	again := len(h.events)
+	h.mu.Unlock()
+	if again != len(events) {
+		t.Fatalf("the return was logged twice: %v", h.events)
+	}
 }
 
 // Bytes without frames (noise, a stray byte) mean the radio is on: not
