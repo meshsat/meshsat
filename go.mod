@@ -1,6 +1,8 @@
 module meshsat
 
-go 1.24.0
+go 1.26.0
+
+toolchain go1.26.11
 
 require (
 	buf.build/gen/go/meshtastic/protobufs/protocolbuffers/go v1.36.11-20260322113505-561ff4e23fef.1
@@ -11,7 +13,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/jmoiron/sqlx v1.4.0
-	github.com/klauspost/compress v1.18.4
+	github.com/klauspost/compress v1.20.2
 	github.com/klauspost/reedsolomon v1.13.3
 	github.com/lib-x/smaz2 v0.1.0
 	github.com/prometheus/client_golang v1.22.0
@@ -19,10 +21,10 @@ require (
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/warthog618/go-gpiocdev v0.9.1
 	go.bug.st/serial v1.6.4
-	golang.org/x/crypto v0.42.0
-	golang.org/x/net v0.44.0
-	golang.org/x/sys v0.36.0
-	google.golang.org/grpc v1.73.0-dev
+	golang.org/x/crypto v0.57.0
+	golang.org/x/net v0.60.0
+	golang.org/x/sys v0.48.0
+	google.golang.org/grpc v1.83.1
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.36.1
@@ -44,9 +46,9 @@ require (
 	github.com/prometheus/procfs v0.16.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	golang.org/x/exp v0.0.0-20230315142452-642cacee5cc0 // indirect
-	golang.org/x/sync v0.17.0 // indirect
-	golang.org/x/text v0.29.0 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20251202230838-ff82c1b0f217 // indirect
+	golang.org/x/sync v0.23.0 // indirect
+	golang.org/x/text v0.42.0 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	modernc.org/libc v1.61.13 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.8.2 // indirect

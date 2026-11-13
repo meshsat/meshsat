@@ -1,0 +1,26 @@
+# gitleaks configuration: the CI secret gate (job `security:gitleaks`,
+# MESHSAT-1137). Extends the default ruleset. Every entry below was reviewed
+# on 13 Nov 2026 and holds no credential; a hit anywhere else fails the
+# pipeline. Add to this list only with a reason on the line.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "reviewed fixtures and names, not credentials"
+paths = [
+  # The import paths the demo build must never link ("meshsat/internal/api").
+  '''(^|/)cmd/meshsat-demo/deps_test\.go$''',
+  # Fixed test keys of the chat-key and warning-digest tests.
+  '''(^|/)internal/api/chatkeys_test\.go$''',
+  '''(^|/)internal/warnings/digest_test\.go$''',
+  # A Swagger example: a placeholder key of 64 hex characters.
+  '''(^|/)internal/api/keyexchange\.go$''',
+  # The names of the key kinds (X25519_LT_PRIV ...), constants, not keys.
+  '''(^|/)internal/directory/store\.go$''',
+  # A recorded Hub transcript: public keys of throwaway test identities.
+  '''(^|/)internal/hubreporter/testdata/.*\.json$''',
+  # The Reticulum interop generator: its import line names key classes.
+  '''(^|/)internal/reticulum/testdata/.*\.py$''',
+]
+# A test key in the API-key tests of 2026 (file since removed), history only.
+commits = ["54230dc7d7b099d98cd5ed98635eb43bc6470cbf"]

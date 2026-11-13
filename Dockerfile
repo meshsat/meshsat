@@ -203,7 +203,7 @@ RUN mkdir /src/direwolf/build && cd /src/direwolf/build && \
     fi && \
     make -j"$(nproc)" && make install DESTDIR=/out
 
-FROM --platform=$BUILDPLATFORM golang:1.24-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
 
 ARG TARGETARCH
 ARG TARGETOS=linux

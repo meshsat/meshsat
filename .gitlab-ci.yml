@@ -220,7 +220,11 @@ test:a11y:
 test:
   stage: validate
   tags: [multiarch]
-  image: ${BUILDER_IMAGE}
+  # The Go of go.mod's toolchain line, named here rather than left to the
+  # builder image: govulncheck judges the standard library of the Go that
+  # builds, and Go 1.24 had been out of security support since February
+  # 2026 when it was found on 13 Nov 2026. [MESHSAT-1137]
+  image: golang:1.26-bookworm
   script:
     - cd ${CI_PROJECT_DIR}
     - go mod download
@@ -234,6 +238,63 @@ test:
     - if: $CI_COMMIT_BRANCH == "main"
 
 # -----------------------------------------------------------------------------
+# SECURITY: secret and dependency scanning on every pipeline, every branch
+# (SIDN fonds project 261042, deliverable D6; MESHSAT-1137). The owner's rule
+# of 13 Nov 2026: a leaked secret or a Go vulnerability the code reaches stops
+# the deploy; findings in the web app's packages and in the kit image show red
+# and do not block.
+# -----------------------------------------------------------------------------
+security:gitleaks:
+  stage: validate
+  tags: [multiarch]
+  image:
+    name: zricethezav/gitleaks:v8.24.0
+    entrypoint: [""]
+  variables:
+    GIT_DEPTH: "50"
+  script:
+    # The working tree, then the last 25 commits. `.gitleaks.toml` allows only
+    # the reviewed fixture files, each with its reason.
+    - gitleaks dir . --no-banner --redact --exit-code 1
+    - gitleaks git . --no-banner --redact --exit-code 1 --log-opts="-n 25"
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
+    - when: on_success
+
+security:govulncheck:
+  stage: validate
+  tags: [multiarch]
+  # The same Go as the build (go.mod toolchain): govulncheck reports the
+  # standard library of the Go it runs on.
+  image: golang:1.26-alpine
+  before_script:
+    # Pinned, bumped together with the Go image, deliberately (the Hub's
+    # @latest broke every merge the day v1.8.0 came out, MESHSAT-712).
+    - go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
+  script:
+    # Exits non-zero only for a vulnerability the code actually calls.
+    - govulncheck ./...
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
+    - when: on_success
+
+security:osv-web:
+  stage: validate
+  tags: [multiarch]
+  image:
+    name: ghcr.io/google/osv-scanner:v2.7.0
+    entrypoint: [""]
+  script:
+    - /osv-scanner scan source --lockfile web/package-lock.json --lockfile test/a11y/package-lock.json
+  allow_failure: true
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
+    - when: on_success
+
+# -----------------------------------------------------------------------------
 # TEST:INTEROP — Reticulum wire compatibility against upstream Python RNS/LXMF
 # (pinned in internal/interop/rnsenv). The venv is cached between pipelines.
 # A required gate since 27 Oct 2026, after 82 green runs from 17 to 26 Oct.
@@ -242,7 +303,7 @@ test:
 test:interop:
   stage: validate
   tags: [multiarch]
-  image: golang:1.24-bookworm
+  image: golang:1.26-bookworm
   variables:
     MESHSAT_INTEROP: "1"
     MESHSAT_RNS_VENV: "${CI_PROJECT_DIR}/.cache/rns-venv"
@@ -265,7 +326,7 @@ test:interop:
 build:
   stage: build
   tags: [multiarch]
-  image: ${BUILDER_IMAGE}
+  image: golang:1.26-bookworm
   script:
     - cd ${CI_PROJECT_DIR}
     - go mod download
@@ -347,6 +408,37 @@ package:
       dotenv: package.env
   after_script:
     - docker buildx rm meshsatbuilder-${CI_JOB_ID} || true
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+
+# -----------------------------------------------------------------------------
+# SECURITY:TRIVY — known CVEs in the kit image just pushed (MESHSAT-1137).
+# Reports and shows red; does not block the deploy (owner, 13 Nov 2026): the
+# Debian base and the bundled tools carry CVEs we cannot fix ourselves.
+# -----------------------------------------------------------------------------
+security:trivy:
+  stage: package
+  tags: [multiarch]
+  image:
+    name: aquasec/trivy:0.58.2
+    entrypoint: [""]
+  needs:
+    - job: package
+      artifacts: false
+  timeout: 30m
+  variables:
+    TRIVY_USERNAME: $GHCR_USER
+    TRIVY_PASSWORD: $GHCR_TOKEN
+    TRIVY_CACHE_DIR: .trivycache
+  cache:
+    key: trivy-db
+    paths:
+      - .trivycache/
+  script:
+    - IMAGE="${MESHSAT_IMAGE}:${CI_COMMIT_SHORT_SHA}"
+    - trivy image --scanners vuln --quiet --format table --severity CRITICAL,HIGH "$IMAGE" || true
+    - trivy image --scanners vuln --quiet --ignore-unfixed --severity CRITICAL,HIGH --exit-code 1 "$IMAGE"
+  allow_failure: true
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
 
