@@ -1,15 +1,47 @@
 package api
 
 import (
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 
 	"crypto/sha256"
 
 	"meshsat/internal/gateway"
 )
+
+// SetAPRSTNCReset wires the APRS TNC reset (the receive watchdog's
+// ResetTNCNow, or the gateway's ResetTNC when the watchdog is off).
+// [MESHSAT-1896]
+func (s *Server) SetAPRSTNCReset(fn func(ctx context.Context, by string) error) {
+	s.aprsTNCReset = fn
+}
+
+// handleResetAPRSTNC resets the APRS hardware TNC through its USB control lines.
+// @Summary Reset the APRS hardware TNC
+// @Description Resets the processor of a hardware KISS TNC on a serial port (PicoAPRS V4) through its USB chip's control lines: DTR off, RTS on for 5 s, RTS off, then the radio boots again on its own. The link stays open. This clears a PicoAPRS that is switched on but has stopped transmitting and reporting frames; one that is switched off still needs its PTT button. The reset is written to the audit log (event aprs_rx_watchdog) and, during a silence the receive watchdog reported, counts as that silence's next step. The same reset is OOB RESET aprs level 2 and the watchdog's own step for a silent TNC. Answers once the reset is done, about 5 s.
+// @Tags aprs
+// @Produce json
+// @Success 200 {object} map[string]interface{} "reset done: ok true, held_ms"
+// @Failure 409 {object} map[string]string "no hardware TNC on a serial port, or the APRS gateway is not running"
+// @Failure 503 {object} map[string]string "the reset is not wired on this Bridge"
+// @Router /api/aprs/tnc/reset [post]
+func (s *Server) handleResetAPRSTNC(w http.ResponseWriter, r *http.Request) {
+	if s.aprsTNCReset == nil {
+		writeError(w, http.StatusServiceUnavailable, "the APRS TNC reset is not wired on this Bridge")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	if err := s.aprsTNCReset(ctx, "API"); err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"ok": true, "held_ms": gateway.TNCResetHold.Milliseconds()})
+}
 
 // handleGetAPRSStatus returns aggregated APRS gateway status.
 // @Summary Get APRS gateway status

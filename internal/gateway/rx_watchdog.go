@@ -85,10 +85,14 @@ type RxWatchdogActions struct {
 	RestartGateway func(ctx context.Context) error
 	PowerCycle     func(ctx context.Context) error
 	Reopen         func(ctx context.Context) error
-	RestartBridge  func()
-	SetState       func(state string)
-	Emit           EventEmitFunc
-	Audit          func(detail string)
+	// ResetTNC resets a serial TNC's processor through its USB control
+	// lines (APRSGateway.ResetTNC): the step for a TNC that has sent no byte
+	// since its link opened. [MESHSAT-1896]
+	ResetTNC      func(ctx context.Context) error
+	RestartBridge func()
+	SetState      func(state string)
+	Emit          EventEmitFunc
+	Audit         func(detail string)
 	// Persist stores the last-heard and last-bridge-restart times for the
 	// next process to seed LastHeard and LastBridgeRestart from. Called at
 	// most once a minute while frames arrive, and once, synchronously,
@@ -119,7 +123,21 @@ type RxWatchdog struct {
 	// tncSilent: a silent TNC was reported and has not talked since, so its
 	// first byte is logged as the end of that silence. [MESHSAT-1842]
 	tncSilent bool
+	// tncResets counts the TNC resets run during the current silence, and
+	// tncResetAt is the last one: a radio that talks within one silence
+	// window of a reset is credited to it. [MESHSAT-1896]
+	tncResets  int
+	tncResetAt time.Time
 }
+
+// tncResetMax bounds the automatic TNC resets per silence: one when the
+// silence is reported, then one per silence window while it lasts.
+// [MESHSAT-1896]
+const tncResetMax = 3
+
+// tncResetRung is the step's name in the log; scripts/device-log/fold.py
+// reads it (MESHSAT-1842).
+const tncResetRung = "reset the TNC over its USB lines"
 
 // NewRxWatchdog applies defaults to zero fields.
 func NewRxWatchdog(cfg RxWatchdogConfig, act RxWatchdogActions) *RxWatchdog {
@@ -208,7 +226,12 @@ func (w *RxWatchdog) tick(ctx context.Context) {
 		// a 3 s PTT press). Nothing logged this before, so the reliability
 		// log never saw a silent TNC end. [MESHSAT-1842]
 		w.tncSilent = false
-		w.notify("aprs_rx_recovered", "APRS TNC talking again after its silence (no step ran: the radio was switched on)")
+		if !w.tncResetAt.IsZero() && now.Sub(w.tncResetAt) <= w.cfg.Silence {
+			w.notify("aprs_rx_recovered", fmt.Sprintf("APRS TNC recovered after step %d (%s)", w.tncResets, tncResetRung))
+		} else {
+			w.notify("aprs_rx_recovered", "APRS TNC talking again after its silence (no step ran: the radio was switched on)")
+		}
+		w.tncResets, w.tncResetAt = 0, time.Time{}
 	}
 	if heard {
 		w.lastFrames = h.RxFrames
@@ -234,9 +257,12 @@ func (w *RxWatchdog) tick(ctx context.Context) {
 	// A serial TNC that has delivered no byte at all since its link opened
 	// is not a quiet channel: the radio is off (a PicoAPRS after a night
 	// without USB power turns on only with a 3 s PTT press) or the link is
-	// dead. Report it as silent so the panel says so; no rung runs, since a
-	// gateway restart or a port reopen cannot switch a radio on. Frames
-	// arriving clear it through the heard branch above. [MESHSAT-1028]
+	// dead. Report it as silent so the panel says so. A gateway restart or a
+	// port reopen cannot reach a radio that runs on its own cell, so the only
+	// step is a reset of its processor over the USB control lines, which
+	// cleared PicoAPRS units that were on but stuck (13 Nov 2026); one that is
+	// off still needs its PTT button. Frames arriving clear it through the
+	// heard branch above. [MESHSAT-1028, MESHSAT-1896]
 	if h.Serial && h.BytesIn == 0 && !h.LinkOpenedAt.IsZero() {
 		w.deaf = false
 		w.step = 0
@@ -254,9 +280,16 @@ func (w *RxWatchdog) tick(ctx context.Context) {
 		if !w.silentLinkAt.Equal(h.LinkOpenedAt) {
 			w.silentLinkAt = h.LinkOpenedAt
 			w.tncSilent = true
+			w.tncResets, w.tncResetAt = 0, time.Time{}
 			w.notify("aprs_rx_silent", fmt.Sprintf("APRS TNC silent: no bytes from the TNC for %s since the link opened; a PicoAPRS that is off needs a 3 s PTT press", now.Sub(h.LinkOpenedAt).Truncate(time.Second)))
 		}
 		w.setState(ReceiveStateSilent)
+		if w.act.ResetTNC != nil && w.tncResets < tncResetMax && (w.tncResetAt.IsZero() || now.Sub(w.tncResetAt) >= w.cfg.Silence) {
+			w.tncResets++
+			w.tncResetAt = now
+			w.notify("aprs_rx_watchdog", fmt.Sprintf("APRS TNC silent: step %d, %s", w.tncResets, tncResetRung))
+			w.runAction(ctx, w.tncResets, w.act.ResetTNC)
+		}
 		return
 	}
 
@@ -375,10 +408,41 @@ func (w *RxWatchdog) restartBridgeStep(now time.Time, hung bool, step int) {
 	}
 }
 
+// ResetTNCNow resets the TNC on request (POST /api/aprs/tnc/reset, OOB
+// RESET aprs level 2), outside the automatic steps, and logs who asked.
+// During a reported silence it counts as that silence's next step, so a
+// radio that talks again within one silence window is credited to it.
+// It waits for the reset to finish. [MESHSAT-1896]
+func (w *RxWatchdog) ResetTNCNow(ctx context.Context, by string) error {
+	if w.act.ResetTNC == nil {
+		return fmt.Errorf("aprs: no TNC reset on this kit")
+	}
+	w.mu.Lock()
+	if w.tncSilent {
+		w.tncResets++
+		w.tncResetAt = w.now()
+		w.notify("aprs_rx_watchdog", fmt.Sprintf("APRS TNC silent: step %d, %s (manual, %s)", w.tncResets, tncResetRung, by))
+	} else {
+		w.notify("aprs_rx_watchdog", fmt.Sprintf("APRS TNC reset over its USB lines on request (%s)", by))
+	}
+	w.mu.Unlock()
+	err := w.act.ResetTNC(ctx)
+	if err != nil && w.act.Audit != nil {
+		w.act.Audit(fmt.Sprintf("TNC reset on request (%s) failed: %v", by, err))
+	}
+	return err
+}
+
 func (w *RxWatchdog) runStep(ctx context.Context, step int, what string, fn func(context.Context) error) {
 	w.step = step
 	w.stepAt = w.now()
 	w.notify("aprs_rx_watchdog", fmt.Sprintf("APRS receive silent: step %d, %s", step, what))
+	w.runAction(ctx, step, fn)
+}
+
+// runAction runs a recovery step's action in the background with a 90 s
+// limit and logs a failure as "step N failed: ...". [MESHSAT-1896]
+func (w *RxWatchdog) runAction(ctx context.Context, step int, fn func(context.Context) error) {
 	if fn == nil {
 		return
 	}

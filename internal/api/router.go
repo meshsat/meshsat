@@ -33,10 +33,13 @@ import (
 
 // Server holds the API dependencies.
 type Server struct {
-	db            *database.DB
-	mesh          transport.MeshTransport
-	processor     *engine.Processor
-	post          *cpost.Service // the Community Post's operator side; nil = not configured [MESHSAT-1733]
+	db        *database.DB
+	mesh      transport.MeshTransport
+	processor *engine.Processor
+	post      *cpost.Service // the Community Post's operator side; nil = not configured [MESHSAT-1733]
+	// aprsTNCReset resets the APRS hardware TNC over its USB control lines,
+	// logged as asked by `by`; nil = not wired. [MESHSAT-1896]
+	aprsTNCReset  func(ctx context.Context, by string) error
 	gwManager     *gateway.Manager
 	accessEval    *rules.AccessEvaluator
 	tleMgr        *engine.TLEManager
@@ -817,6 +820,7 @@ func (s *Server) Router() http.Handler {
 		r.Get("/hf/status", s.handleGetHFStatus) // 10 m HF gateway [MESHSAT-1353]
 		r.Get("/aprs/heard", s.handleGetAPRSHeard)
 		r.Get("/aprs/activity", s.handleGetAPRSActivity)
+		r.Post("/aprs/tnc/reset", s.handleResetAPRSTNC) // [MESHSAT-1896]
 
 		// Crypto utilities (v0.3.0)
 		r.Post("/crypto/generate-key", s.handleGenerateEncryptionKey)

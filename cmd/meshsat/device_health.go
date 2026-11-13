@@ -732,6 +732,23 @@ func usbDeviceRole(target string) transport.DeviceRole {
 // for a hardware-TNC kit, or nil when the running gateway drives Direwolf
 // (then the AIOC hub-port cut applies). Resolved per call so a gateway
 // recreated by a config change is always the one acted on. [MESHSAT-821]
+// aprsTNCReset resets the hardware TNC's processor over its USB control
+// lines (APRSGateway.ResetTNC), resolving the gateway at call time so a
+// gateway started or restarted later is still reached. Nil without a
+// manager. [MESHSAT-1896]
+func aprsTNCReset(gwMgr *gateway.Manager) func(ctx context.Context) error {
+	if gwMgr == nil {
+		return nil
+	}
+	return func(ctx context.Context) error {
+		ag := gwMgr.APRSGateway()
+		if ag == nil {
+			return errors.New("aprs gateway not running")
+		}
+		return ag.ResetTNC(ctx)
+	}
+}
+
 func aprsTNCReopen(gwMgr *gateway.Manager) func(ctx context.Context) error {
 	if gwMgr == nil {
 		return nil

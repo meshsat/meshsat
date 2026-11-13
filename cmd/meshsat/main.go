@@ -3423,7 +3423,8 @@ func main() {
 				}
 				return fmt.Errorf("%s not on a switchable hub port", role)
 			},
-			Reopen: aprsTNCReopen(gwMgr),
+			Reopen:   aprsTNCReopen(gwMgr),
+			ResetTNC: aprsTNCReset(gwMgr),
 			RestartBridge: func() {
 				log.Warn().Msg("aprs receive watchdog: restarting the bridge")
 				sigCh <- syscall.SIGTERM
@@ -3449,6 +3450,29 @@ func main() {
 		log.Info().Int("silence_min", cfg.APRSRxWatchdogMin).Msg("aprs receive watchdog enabled")
 	}
 
+	// The TNC reset on request: POST /api/aprs/tnc/reset and OOB RESET aprs
+	// level 2. Through the watchdog when it runs, so the step is logged and a
+	// radio that talks again is credited to it; straight to the gateway
+	// otherwise. [MESHSAT-1896]
+	tncResetOnRequest := func(ctx context.Context, by string) error {
+		if rxWatchdog != nil {
+			return rxWatchdog.ResetTNCNow(ctx, by)
+		}
+		reset := aprsTNCReset(gwMgr)
+		if reset == nil {
+			return errors.New("aprs: no gateway manager")
+		}
+		if err := reset(ctx); err != nil {
+			return err
+		}
+		if signingService != nil {
+			iface := "aprs_0"
+			signingService.AuditEvent("aprs_rx_watchdog", &iface, nil, nil, nil, fmt.Sprintf("APRS TNC reset over its USB lines on request (%s)", by))
+		}
+		return nil
+	}
+	srv.SetAPRSTNCReset(tncResetOnRequest)
+
 	// OOB RESET aprs level 3 on a hardware-TNC kit: cut the TNC's hub port,
 	// which is the only rung that clears a TNC wedged below the serial layer
 	// (the executor restarts aprs_0 itself 10 s later). A kit whose TNC is
@@ -3457,6 +3481,9 @@ func main() {
 	// the gateway. [MESHSAT-821]
 	if reopen := aprsTNCReopen(gwMgr); reopen != nil {
 		oobActions["aprs"] = map[byte]oob.Action{
+			// Level 2, a reset the device itself understands: the TNC's
+			// processor reset over its USB control lines. [MESHSAT-1896]
+			oob.LevelDevice: func(ctx context.Context) error { return tncResetOnRequest(ctx, "OOB") },
 			oob.LevelHard: func(ctx context.Context) error {
 				if role, tty := aprsUSBDevice(cfg, db, gwMgr); tty != "" && usbPowerCycle(ctx, role, tty) {
 					return nil

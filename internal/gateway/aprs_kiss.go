@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -142,6 +143,53 @@ func (k *KISSConn) Dial() error {
 		_ = old.Close()
 	}
 	return nil
+}
+
+// tncModemLines is the control-line side of a serial port (go.bug.st/serial
+// Port): what a TNC reset drives.
+type tncModemLines interface {
+	SetDTR(bool) error
+	SetRTS(bool) error
+}
+
+// ResetTNC resets a serial TNC's processor through its USB chip's control
+// lines: DTR off, RTS on for hold, RTS off. On the PicoAPRS V4 the CP2102N's
+// DTR and RTS drive the ESP32's IO0 and EN through the usual auto-reset pair,
+// so RTS on with DTR off holds EN low (the processor in reset) and releasing
+// RTS boots it normally; DTR is never switched on, so the boot can never land
+// in the ROM download mode. This is what cleared both kits' radios on
+// 13 Nov 2026 after they had stopped transmitting and reporting frames for
+// weeks while running on their own cells, where kit power cycles and USB
+// re-plugs never reach them. RTS is released even when ctx ends during the
+// hold. [MESHSAT-1896]
+func (k *KISSConn) ResetTNC(ctx context.Context, hold time.Duration) error {
+	if k.device == "" {
+		return fmt.Errorf("kiss: no serial TNC to reset")
+	}
+	rw := k.stream()
+	if rw == nil {
+		return fmt.Errorf("kiss: %w", transport.ErrNotConnected)
+	}
+	lines, ok := rw.(tncModemLines)
+	if !ok {
+		return fmt.Errorf("kiss: %s has no modem control lines", k.device)
+	}
+	if err := lines.SetDTR(false); err != nil {
+		return fmt.Errorf("kiss: reset %s: DTR off: %w", k.device, err)
+	}
+	if err := lines.SetRTS(true); err != nil {
+		return fmt.Errorf("kiss: reset %s: RTS on: %w", k.device, err)
+	}
+	t := time.NewTimer(hold)
+	select {
+	case <-t.C:
+	case <-ctx.Done():
+		t.Stop()
+	}
+	if err := lines.SetRTS(false); err != nil {
+		return fmt.Errorf("kiss: reset %s: RTS off: %w", k.device, err)
+	}
+	return ctx.Err()
 }
 
 // OpenedAt is when the link last opened; zero before the first Dial.

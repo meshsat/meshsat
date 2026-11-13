@@ -73,6 +73,12 @@ class Classify(unittest.TestCase):
             "step 2 failed: AIOC not on a switchable hub port": "step_error",
             "APRS TNC silent: no bytes from the TNC for 30m2s since the link opened; a PicoAPRS that is off needs a 3 s PTT press": "open",
             "APRS TNC talking again after its silence (no step ran: the radio was switched on)": "came_back",
+            # The TNC reset over the USB lines [MESHSAT-1896]
+            "APRS TNC silent: step 1, reset the TNC over its USB lines": "step",
+            "APRS TNC silent: step 2, reset the TNC over its USB lines (manual, API)": "step",
+            "APRS TNC recovered after step 1 (reset the TNC over its USB lines)": "recovered",
+            "APRS TNC reset over its USB lines on request (OOB)": "other",
+            "TNC reset on request (API) failed: aprs gateway not running": "other",
         }
         for detail, kind in aprs.items():
             self.assertEqual(fold.classify({"id": 1, "timestamp": "2026-09-10T10:00:00Z", "event_type": "aprs_rx_watchdog", "detail": detail}).kind, kind, detail)
@@ -171,6 +177,28 @@ class Fold(unittest.TestCase):
         self.assertEqual((w.rows, w.cleared_by), (6, "came_back"))
         self.assertIn("PTT", w.cleared_detail)
         self.assertEqual(w.case_opened, "not recorded")
+
+    def test_a_silent_tnc_cleared_by_its_usb_reset_is_the_software_step(self):
+        # The watchdog's step since MESHSAT-1896: reset over the USB lines,
+        # then the radio talks again within the silence window.
+        t = Tape()
+        t.at(0).aprs("APRS TNC silent: no bytes from the TNC for 30m2s since the link opened; a PicoAPRS that is off needs a 3 s PTT press")
+        t.at(0).aprs("APRS TNC silent: step 1, reset the TNC over its USB lines")
+        t.at(2).aprs("APRS TNC recovered after step 1 (reset the TNC over its USB lines)")
+        w = one(fold.fold("tesseract", t.rows), "aprs")
+        self.assertEqual((w.cleared_by, w.case_opened), ("software", "no"))
+        self.assertEqual(w.cleared_detail, "reset the TNC over its USB lines")
+        self.assertEqual(w.steps, ["reset the TNC over its USB lines"])
+
+    def test_a_tnc_reset_asked_for_by_hand_is_a_manual_step(self):
+        t = Tape()
+        t.at(0).aprs("APRS TNC silent: no bytes from the TNC for 30m2s since the link opened; a PicoAPRS that is off needs a 3 s PTT press")
+        t.at(0).aprs("APRS TNC silent: step 1, reset the TNC over its USB lines")
+        t.at(31).aprs("APRS TNC silent: step 2, reset the TNC over its USB lines (manual, API)")
+        t.at(32).aprs("APRS TNC recovered after step 2 (reset the TNC over its USB lines)")
+        w = one(fold.fold("tesseract", t.rows), "aprs")
+        self.assertEqual(w.cleared_by, "software")
+        self.assertEqual(w.steps, ["reset the TNC over its USB lines", "reset the TNC over its USB lines (run by hand from the web app or API)"])
 
     def test_a_device_taken_out_is_not_wedged(self):
         t = Tape()

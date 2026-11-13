@@ -143,7 +143,13 @@ reported a switchable port as not switchable, which is not a hardware limit but 
 The APRS target has two agent roles: `aioc` on a sound-card kit, resolved by its own VID:PID,
 and `aprs` on a hardware-TNC kit, resolved only from the tty. `RESET aprs 3` on a TNC kit cuts
 the TNC's hub port and lets the executor restart `aprs_0` ten seconds later, falling back to a
-link reopen plus gateway restart when the port is not switchable.
+link reopen plus gateway restart when the port is not switchable. `RESET aprs 2` on a TNC kit
+resets the TNC's processor over its USB chip's control lines (DTR off, RTS on for 5 s, RTS off),
+with the link left open: on the PicoAPRS V4 that is the only remote reset that reaches the radio,
+which runs on its own cell, and it cleared both kits' units on 13 November 2026 after they had
+stopped transmitting and reporting frames. The receive watchdog runs the same reset by itself
+for a TNC that has sent no byte since its link opened, and `POST /api/aprs/tnc/reset` asks for it
+by hand (MESHSAT-1896).
 
 **Cellular level 3 is a modem power toggle with a one-minute blackout (MESHSAT-812, MESHSAT-817).**
 The T-Call's ESP32 boots after the VBUS cut and its firmware pulses PWRKEY once, which turns the

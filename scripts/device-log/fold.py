@@ -137,6 +137,7 @@ _START = re.compile(r"^watchdog started \(boot (?P<boot>[^)]*)\)$")
 _NOTE = re.compile(r"^(?P<dev>[a-z_]+) hands-on fix: (?P<action>[a-z-]+); case opened: (?P<case>yes|no)(?:; (?P<note>.*))?$")
 _INV = re.compile(r"^(?P<dev>[a-z_]+) (?P<what>removed from the kit|fitted again)(?:: (?P<note>.*))?$")
 _APRS_STEP = re.compile(r"step (?P<n>\d+), (?P<rung>.+)$")
+_APRS_MANUAL = re.compile(r" \(manual, [^)]*\)$")
 _APRS_FOR = re.compile(r" for (?P<d>(?:\d+h)?(?:\d+m)?(?:\d+(?:\.\d+)?s)?)\b")
 
 # A failed rung whose error says the thing it acts on was not there: such a
@@ -223,7 +224,13 @@ def _classify_aprs(rid: int, ts: datetime, detail: str) -> Row:
         return Row(rid, ts, et, "aprs", "step", d, step_name="restart of the bridge", origin="auto")
     m = _APRS_STEP.search(d)
     if m:
-        return Row(rid, ts, et, "aprs", "step", d, step_name=m["rung"], step_no=int(m["n"]), origin="auto")
+        rung, origin = m["rung"], "auto"
+        # A TNC reset asked for by API or OOB during a silence is that
+        # silence's next step, worded "(manual, API)". [MESHSAT-1896]
+        mm = _APRS_MANUAL.search(rung)
+        if mm:
+            rung, origin = rung[: mm.start()], "manual"
+        return Row(rid, ts, et, "aprs", "step", d, step_name=rung, step_no=int(m["n"]), origin=origin)
     if "silent" in d or "deaf" in d:
         m = _APRS_FOR.search(d)
         return Row(rid, ts, et, "aprs", "open", d, silence=parse_go_duration(m["d"]) if m else None)

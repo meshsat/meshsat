@@ -218,6 +218,30 @@ func (g *APRSGateway) ReopenTNC(ctx context.Context) error {
 	return nil
 }
 
+// TNCResetHold is how long a TNC reset holds the radio's processor in
+// reset. The reset that cleared both kits' PicoAPRS units on 13 Nov 2026
+// held it about 30 s; an ESP32 needs far less, and 5 s leaves room for the
+// radio side to drop as well. [MESHSAT-1896]
+const TNCResetHold = 5 * time.Second
+
+// ResetTNC resets the hardware TNC through its USB chip's control lines
+// (KISSConn.ResetTNC) without closing the link: the receive watchdog's step
+// for a TNC that has sent no byte since its link opened, POST
+// /api/aprs/tnc/reset and OOB RESET aprs level 2. [MESHSAT-1896]
+func (g *APRSGateway) ResetTNC(ctx context.Context) error {
+	if g.is != nil {
+		return fmt.Errorf("aprs: no TNC in mode is")
+	}
+	if !g.kiss.Serial() {
+		return fmt.Errorf("aprs: the TNC is not on a serial port")
+	}
+	if err := g.kiss.ResetTNC(ctx, TNCResetHold); err != nil {
+		return err
+	}
+	log.Info().Str("kiss", g.kiss.Target()).Dur("hold", TNCResetHold).Msg("aprs: TNC reset over its USB lines")
+	return nil
+}
+
 // ReceiveHealth exposes the bundled supervisor's receive-side signals. The
 // second value is false for an external Direwolf, where nothing is known,
 // and in mode is, which has no receiver: the receive watchdog then never
