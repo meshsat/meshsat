@@ -121,6 +121,10 @@ func (d *DeadManSwitch) LastActivity() int64 {
 	return d.lastActive.Load()
 }
 
+// CheckNow runs the check the ticker runs every minute, once, now: the
+// switch fires if it is enabled and the timeout has passed. [MESHSAT-1136]
+func (d *DeadManSwitch) CheckNow() { d.check() }
+
 func (d *DeadManSwitch) check() {
 	if !d.enabled.Load() {
 		return

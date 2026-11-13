@@ -167,13 +167,19 @@ type sosLeg struct {
 
 // sosRun is an SOS as the Bridge keeps it (sosRunKey).
 type sosRun struct {
-	ID          int64    `json:"id"` // the start in Unix milliseconds; the legs' msg_ref is "sos-<id>-<route>"
-	StartedAt   string   `json:"started_at"`
-	Text        string   `json:"text"`
-	Trigger     string   `json:"trigger"`
-	Lat         float64  `json:"lat,omitempty"`
-	Lon         float64  `json:"lon,omitempty"`
-	HasPosition bool     `json:"has_position,omitempty"`
+	ID          int64   `json:"id"` // the start in Unix milliseconds; the legs' msg_ref is "sos-<id>-<route>"
+	StartedAt   string  `json:"started_at"`
+	Text        string  `json:"text"`
+	Trigger     string  `json:"trigger"`
+	Lat         float64 `json:"lat,omitempty"`
+	Lon         float64 `json:"lon,omitempty"`
+	HasPosition bool    `json:"has_position,omitempty"`
+	// Fallback is a position to use only when there is neither the
+	// caller's nor this Bridge's GPS fix: the dead man's switch hands the
+	// newest position row, which may be a neighbour's. [MESHSAT-1136]
+	FallbackLat float64  `json:"fallback_lat,omitempty"`
+	FallbackLon float64  `json:"fallback_lon,omitempty"`
+	HasFallback bool     `json:"has_fallback,omitempty"`
 	Named       bool     `json:"named,omitempty"`  // the caller named its routes
 	Routes      []string `json:"routes,omitempty"` // the routes it named
 	Planned     bool     `json:"planned,omitempty"`
@@ -732,7 +738,8 @@ func (s *Server) sosQueueMesh(id int64) {
 }
 
 // sosFramePosition is where the SOS frame says the person is: the caller's
-// position, else this Bridge's GPS fix; ok false without either (the frame
+// position, else this Bridge's GPS fix, else the run's fallback (the dead
+// man's switch's last known position); ok false without any (the frame
 // then carries 0, 0 and its words say the position is unknown).
 func (s *Server) sosFramePosition(run sosRun) (lat, lon float64, ok bool) {
 	if run.HasPosition {
@@ -742,6 +749,9 @@ func (s *Server) sosFramePosition(run sosRun) (lat, lon float64, ok bool) {
 		if st := s.gpsReader.GetStatus(); st.Fix && (st.Lat != 0 || st.Lon != 0) {
 			return st.Lat, st.Lon, true
 		}
+	}
+	if run.HasFallback {
+		return run.FallbackLat, run.FallbackLon, true
 	}
 	return 0, 0, false
 }

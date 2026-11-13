@@ -162,6 +162,18 @@ func (s *Server) TriggerSOS(trigger string) bool {
 	return s.TriggerSOSAt(trigger, sosDefaultText, nil, nil)
 }
 
+// TriggerSOSWithFallback is TriggerSOS for the dead man's switch: lat/lon
+// is the last position it knows of, used only when there is no GPS fix of
+// this Bridge's own (it can be a neighbour's row). Until MESHSAT-1136 the
+// switch's position was dropped and its SOS went out without one whenever
+// the Bridge had no GPS. A zero position is no position.
+func (s *Server) TriggerSOSWithFallback(trigger string, lat, lon float64) bool {
+	if lat == 0 && lon == 0 {
+		return s.TriggerSOS(trigger)
+	}
+	return s.triggerSOS(trigger, sosDefaultText, nil, nil, &sosPosition{Lat: lat, Lon: lon})
+}
+
 // sosTextOf is the text an SOS goes out with: the caller's, trimmed and capped
 // at what one mesh packet carries, or the fixed sentence. [MESHSAT-1397]
 func sosTextOf(message string) string {
@@ -190,6 +202,10 @@ func (s *Server) TriggerSOSWithText(trigger, text string) bool {
 // manager's lock, which a gateway being stopped can hold for a whole modem
 // session, and the start of an SOS waits for nothing. [MESHSAT-1446]
 func (s *Server) TriggerSOSAt(trigger, text string, pos *sosPosition, routes []string) bool {
+	return s.triggerSOS(trigger, text, pos, routes, nil)
+}
+
+func (s *Server) triggerSOS(trigger, text string, pos *sosPosition, routes []string, fallback *sosPosition) bool {
 	if text == "" {
 		text = sosDefaultText
 	}
@@ -206,6 +222,9 @@ func (s *Server) TriggerSOSAt(trigger, text string, pos *sosPosition, routes []s
 	}
 	if pos != nil {
 		run.Lat, run.Lon, run.HasPosition = pos.Lat, pos.Lon, true
+	}
+	if fallback != nil {
+		run.FallbackLat, run.FallbackLon, run.HasFallback = fallback.Lat, fallback.Lon, true
 	}
 
 	s.sos.mu.Lock()

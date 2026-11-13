@@ -3234,25 +3234,12 @@ func main() {
 	// service and the Hub uplink, and srv already holds all five. TriggerSOS
 	// carries the already-active guard and the signed audit entry, so a
 	// deadman-fired SOS cannot start on top of a manual one.
-	deadman := engine.NewDeadManSwitch(db, 4*time.Hour)
-	deadman.SetSOSCallback(func(lat, lon float64, lastSeen time.Time) {
-		log.Warn().
-			Time("last_activity", lastSeen).
-			Float64("lat", lat).Float64("lon", lon).
-			Msg("dead man's switch fired, raising SOS")
-		// The alarm on TAK, as MeshSat Android's sendDeadman, in the
-		// background so it never holds the SOS up. [MESHSAT-1421]
+	deadman := wireDeadMan(ctx, db, srv, func() deadManTAK {
 		if tg := gwMgr.GetTAKGateway(); tg != nil {
-			go func() {
-				if err := tg.SendOwnDeadman(lat, lon, lastSeen); err != nil {
-					log.Warn().Err(err).Msg("dead man's switch: the CoT alarm did not reach every TAK output")
-				}
-			}()
+			return tg
 		}
-		srv.TriggerSOS("deadman")
-	})
-	deadman.Start(ctx)
-	srv.SetDeadManSwitch(deadman)
+		return nil // a nil *TAKGateway must not become a non-nil interface
+	}, 4*time.Hour)
 	defer deadman.Stop()
 
 	// An SOS that was on when the Bridge stopped is on again: its legs
