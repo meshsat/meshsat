@@ -1,0 +1,316 @@
+# What the field kits could not record about their own devices, from the
+# project's notes (SIDN fonds project 261042, deliverable D4).
+#
+# scripts/device-log/export.py reads this file next to the kits' signed
+# audit logs. Times are UTC. Kits: tesseract, parallax or both.
+#
+# [[inventory]]  a device taken out of a kit, or put back, before the kit
+#                could record it itself (13 November 2026).
+# [[answer]]     what cleared one of the automatic wedges, and whether the
+#                case had to be opened, where the notes say so.
+# [[incident]]   a wedge before automatic logging began (5 September 2026),
+#                or on a device the watchdog does not watch.
+
+# -------------------------------------------------------------------- rules
+
+[rules]
+# The owner, 13 November 2026: the PicoAPRS sits inside the sealed case and
+# switches on again only with its PTT button, so a silent TNC that ended was
+# cleared by hand with the case opened.
+picoaprs_silence_cleared_by_ptt = true
+
+# ---------------------------------------------------------------- inventory
+# Confirmed by the owner on 13 November 2026; the kits also carry a signed
+# device_inventory row for each, written that day.
+
+[[inventory]]
+kit = "both"
+device = "zigbee"
+change = "removed"
+at = "2026-09-20T12:00:00Z"
+note = "taken out when the kits were rebuilt"
+source = "kit notes, 20 Sep 2026"
+
+[[inventory]]
+kit = "both"
+device = "gps"
+change = "removed"
+at = "2026-09-20T12:00:00Z"
+note = "taken out when the kits were rebuilt"
+source = "kit notes, 20 Sep 2026"
+
+[[inventory]]
+kit = "both"
+device = "rtl_sdr"
+change = "removed"
+at = "2026-10-17T19:45:00Z"
+note = "no RTL-SDR on either kit since"
+source = "MESHSAT-1590"
+
+[[inventory]]
+kit = "tesseract"
+device = "imt"
+change = "removed"
+at = "2026-10-17T00:00:00Z"
+note = "Iridium 9704 moved to the compact kit"
+source = "MESHSAT-1620"
+
+[[inventory]]
+kit = "parallax"
+device = "imt"
+change = "removed"
+at = "2026-10-23T15:14:00Z"
+note = "Iridium 9704 replaced by a RockBLOCK Mk2 (9602)"
+source = "MESHSAT-1383"
+
+[[inventory]]
+kit = "both"
+device = "iridium"
+change = "fitted"
+at = "2026-10-23T15:14:00Z"
+note = "RockBLOCK Mk2 (9602, SBD) fitted"
+source = "MESHSAT-1383"
+
+[[inventory]]
+kit = "both"
+device = "mesh"
+change = "fitted"
+at = "2026-09-18T12:00:00Z"
+note = "XIAO ESP32-S3 replaced by a LILYGO T-Echo"
+source = "MESHSAT-1112"
+
+# ------------------------------------------------------------------ answers
+
+[[answer]]
+kit = "parallax"
+device = "rtl_sdr"
+at = "2026-09-10T12:49:00Z"
+cleared_by = "re-seated by hand (a contact fault)"
+case_opened = "yes"
+note = "from the notes, MESHSAT-1001"
+
+[[answer]]
+kit = "tesseract"
+device = "rtl_sdr"
+at = "2026-09-11T23:09:00Z"
+cleared_by = "warm reboot of the kit"
+case_opened = "no"
+note = "from the notes"
+
+[[answer]]
+kit = "tesseract"
+device = "rtl_sdr"
+at = "2026-09-13T11:33:00Z"
+cleared_by = "cold power cycle of the kit"
+case_opened = "yes (inferred: the kit had no outside power button)"
+note = "from the notes, MESHSAT-855"
+
+[[answer]]
+kit = "parallax"
+device = "rtl_sdr"
+at = "2026-09-14T00:36:00Z"
+cleared_by = "re-seated by hand (inferred from the notes)"
+case_opened = "yes (inferred)"
+note = "from the notes"
+
+[[answer]]
+kit = "tesseract"
+device = "rtl_sdr"
+at = "2026-09-14T00:36:00Z"
+cleared_by = "re-seated by hand (inferred from the notes)"
+case_opened = "yes (inferred)"
+note = "from the notes"
+
+[[answer]]
+kit = "parallax"
+device = "rtl_sdr"
+at = "2026-09-14T09:27:00Z"
+cleared_by = "cold boot of the kit with its power button"
+case_opened = "yes (inferred: the kit had no outside power button)"
+note = "from the notes"
+
+[[answer]]
+kit = "parallax"
+device = "rtl_sdr"
+at = "2026-09-15T15:51:00Z"
+cleared_by = "plugged in again when the second USB hub was fitted"
+case_opened = "yes"
+note = "from the notes"
+
+[[answer]]
+kit = "parallax"
+device = "rtl_sdr"
+at = "2026-09-18T13:46:00Z"
+cleared_by = "re-seated by hand"
+case_opened = "yes"
+note = "from the notes, MESHSAT-1222"
+
+[[answer]]
+kit = "parallax"
+device = "cellular"
+at = "2026-09-08T17:45:00Z"
+cleared_by = "the bridge container recreated by hand (its probe had hung)"
+case_opened = "no"
+note = "from the notes, MESHSAT-986"
+
+# ---------------------------------------------------------------- incidents
+
+[[incident]]
+date = "2026-04-18"
+kit = "parallax"
+device = "cellular modem (A7670E)"
+symptom = "power dips on every transmission, modem stopped answering"
+cleared_by = "Pi bootloader power limit raised, then a reboot"
+case_opened = "not recorded"
+kind = "wedge"
+source = "MESHSAT-523"
+
+[[incident]]
+date = "2026-04-21"
+kit = "both"
+device = "USB WiFi adapter (MT7921U)"
+symptom = "dropped off USB under load"
+cleared_by = "replaced with an MT7612U"
+case_opened = "yes (inferred: a swap)"
+kind = "bench"
+source = "kit notes"
+
+[[incident]]
+date = "2026-04-21"
+kit = "both"
+device = "touch display"
+symptom = "black after a kernel update"
+cleared_by = "kernel rolled back and pinned"
+case_opened = "no"
+kind = "setup"
+source = "kit notes"
+
+[[incident]]
+date = "2026-04-22"
+kit = "parallax"
+device = "RTL-SDR receiver"
+symptom = "USB busy after scans were killed"
+cleared_by = "not cleared that day; the kits were switched off"
+case_opened = "not recorded"
+kind = "bench"
+source = "MESHSAT-656"
+
+[[incident]]
+date = "2026-04-24"
+kit = "both"
+device = "touch display"
+symptom = "black"
+cleared_by = "UPS board power button, 30 s off"
+case_opened = "not recorded"
+kind = "wedge"
+source = "kit notes"
+
+[[incident]]
+date = "2026-04-24"
+kit = "both"
+device = "mesh radio (XIAO ESP32-S3)"
+symptom = "serial port silent"
+cleared_by = "power cycle of the kit"
+case_opened = "not recorded"
+kind = "wedge"
+source = "MESHSAT-685"
+
+[[incident]]
+date = "2026-09-02"
+kit = "parallax"
+device = "cellular modem (A7670E)"
+symptom = "command channel blocked by a network query we sent"
+cleared_by = "not recorded; answering again by 3 Sep evening"
+case_opened = "not recorded"
+kind = "self-inflicted"
+source = "kit notes"
+
+[[incident]]
+date = "2026-09-02"
+kit = "both"
+device = "APRS radio (UV-K5)"
+symptom = "receiver deaf, four times between 2 and 5 Sep (39 and 28 minutes on 5 Sep)"
+cleared_by = "came back by itself"
+case_opened = "no"
+kind = "wedge"
+source = "MESHSAT-814"
+
+[[incident]]
+date = "2026-09-03"
+kit = "parallax"
+device = "mesh radio (XIAO ESP32-S3)"
+symptom = "wedged through a warm reboot and three restarts of the bridge"
+cleared_by = "power cycle of the kit by hand, 4 Sep"
+case_opened = "yes (inferred: the kit had no outside power button)"
+kind = "wedge"
+source = "MESHSAT-781"
+
+[[incident]]
+date = "2026-09-04"
+kit = "both"
+device = "UPS board (X1202) and audio interface (AIOC)"
+symptom = "202 power-loss events, a reboot on parallax, the AIOC off USB on tesseract, both packs running empty"
+cleared_by = "cells taken out, load reduced, charger wired to the board"
+case_opened = "yes"
+kind = "wiring"
+source = "MESHSAT-793"
+
+[[incident]]
+date = "2026-09-05"
+kit = "parallax"
+device = "mesh radio (XIAO ESP32-S3)"
+symptom = "wedged"
+cleared_by = "the watchdog's hub-port cut, 3.5 minutes, before its rows went to the audit log"
+case_opened = "no"
+kind = "wedge"
+source = "MESHSAT-817"
+
+[[incident]]
+date = "2026-09-06"
+kit = "both"
+device = "touch display"
+symptom = "black while the kiosk ran"
+cleared_by = "UPS board power cycle"
+case_opened = "yes (inferred: the kit had no outside power button)"
+kind = "wedge (not watched)"
+source = "MESHSAT-824"
+
+[[incident]]
+date = "2026-09-11"
+kit = "both"
+device = "APRS radio (PicoAPRS)"
+symptom = "switched off after 12 hours without USB power (empty cell)"
+cleared_by = "PTT held for 3 s"
+case_opened = "yes (inferred: the radio sits inside the case)"
+kind = "wedge (not watched then)"
+source = "MESHSAT-1028"
+
+[[incident]]
+date = "2026-09-13"
+kit = "both"
+device = "touch display"
+symptom = "dead after a warm reboot"
+cleared_by = "cold power cycle, then the display overlay pinned"
+case_opened = "yes (inferred: the kit had no outside power button)"
+kind = "setup"
+source = "MESHSAT-1091"
+
+[[incident]]
+date = "2026-09-15"
+kit = "parallax"
+device = "touch display"
+symptom = "display controller hung after a warm reboot"
+cleared_by = "power off and on with the button"
+case_opened = "yes (inferred: the kit had no outside power button)"
+kind = "wedge (not watched)"
+source = "kit notes"
+
+[[incident]]
+date = "2026-09-21"
+kit = "both"
+device = "touch display"
+symptom = "panels dim with everything set to full"
+cleared_by = "the panel's 5 V lead moved to its own header pin"
+case_opened = "yes"
+kind = "wiring"
+source = "kit notes"
