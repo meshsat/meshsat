@@ -189,8 +189,8 @@ func TestDeviceHealthLog_ARemovedDeviceWritesNothing(t *testing.T) {
 	if after := tape.count("device_health|rtl_sdr"); after != before {
 		t.Fatalf("a removed device wrote %d rows", after-before)
 	}
-	if st := h.dh.Status()[0]; !st.Removed || !st.Paused || st.State != HealthStatePaused {
-		t.Fatalf("status %+v, want removed, paused", st)
+	if st := h.dh.Status()[0]; !st.Removed || !st.Paused || st.State != HealthStateRemoved {
+		t.Fatalf("status %+v, want removed, paused, state removed", st)
 	}
 	if p := h.persist["rtl_sdr"]; !p.Removed || !p.Paused {
 		t.Fatalf("persisted %+v, want removed", p)
@@ -209,8 +209,8 @@ func TestDeviceHealthLog_ARemovedDeviceWritesNothing(t *testing.T) {
 	// A restart keeps the removal.
 	h2 := newDHHarness(DeviceHealthConfig{Seed: map[string]PersistedTarget{"rtl_sdr": {Removed: true}}})
 	h2.dh.Register(h2.target("rtl_sdr", nil))
-	if st := h2.dh.Status()[0]; !st.Removed || !st.Paused {
-		t.Fatalf("seeded status %+v, want removed and paused", st)
+	if st := h2.dh.Status()[0]; !st.Removed || !st.Paused || st.State != HealthStateRemoved {
+		t.Fatalf("seeded status %+v, want removed and paused, state removed", st)
 	}
 }
 

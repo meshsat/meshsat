@@ -34,6 +34,10 @@ const (
 	HealthStateHealing  = "healing"  // a rung ran, waiting for its grace to show a result
 	HealthStateFailed   = "failed"   // ladder exhausted or hard-reset budget spent; re-arms after the cooldown
 	HealthStatePaused   = "paused"   // operator pause: probes continue, no rung runs
+	// HealthStateRemoved is what the status reports for a device the
+	// operator marked as taken out of the kit; internally it is paused.
+	// The word an acceptance check reads (SIDN D8, MESHSAT-1138).
+	HealthStateRemoved = "removed"
 )
 
 // Reset levels, numerically identical to the OOB executor's (oob.LevelSoft,
@@ -426,6 +430,9 @@ func (d *DeviceHealth) statusLocked(ts *healthTargetState, now time.Time) Target
 		Paused:     ts.paused,
 		Removed:    ts.removed,
 		Levels:     []int{},
+	}
+	if ts.removed && ts.external == nil {
+		st.State = HealthStateRemoved
 	}
 	if ts.external != nil {
 		st.External = true
